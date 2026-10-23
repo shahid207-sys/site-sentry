@@ -103,6 +103,10 @@ export async function trackFinding(auditId: string, ruleCode: string, deps: Deps
   return deps.store.update((d) => {
     const audit = d.audits[auditId];
     if (!audit) throw new WorkflowError("NOT_FOUND", "Audit not found. Run the audit again.");
+    if (audit.truncated) {
+      // Re-scans of a truncated page are always inconclusive, so a task could never be resolved.
+      throw new WorkflowError("INVALID", "This page is larger than 2 MB, so a fix could never be verified. Not tracking it.");
+    }
     const rule = audit.rules.find((r) => r.findings.some((f) => f.ruleCode === ruleCode));
     const finding = rule?.findings.find((f) => f.ruleCode === ruleCode);
     if (!rule || !finding) throw new WorkflowError("NOT_FOUND", `No ${ruleCode} finding in this audit.`);

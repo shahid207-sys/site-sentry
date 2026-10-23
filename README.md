@@ -72,3 +72,4 @@ To add a rule: write a `RuleDef` in `src/lib/audit/rules/` (observe → facts, c
 - JSON-file store: fine for one local process; use a database for multi-instance or serverless deploys.
 - Indexability reads robots meta and X-Robots-Tag, not robots.txt; any user-agent prefix in X-Robots-Tag is treated as applying.
 - Canonical reads the HTML link only, not the `Link:` HTTP header.
+- Findings on pages over 2 MB (truncated) cannot be tracked, because a re-scan of a truncated page is always inconclusive.

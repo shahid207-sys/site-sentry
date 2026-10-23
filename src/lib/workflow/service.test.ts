@@ -220,6 +220,13 @@ describe("errors", () => {
     await expect(trackFinding("nope", "title/too-long", h.deps)).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
+  it("refuses to track findings from a truncated page, since they could never be verified", async () => {
+    const h = harness();
+    h.serve(() => page(html(LONG), { truncated: true }));
+    const audit = await runAudit({ url: PAGE_URL }, h.deps);
+    await expect(trackFinding(audit.id, "title/too-long", h.deps)).rejects.toMatchObject({ code: "INVALID" });
+  });
+
   it("rejects invalid expectations", async () => {
     const h = harness();
     await expect(setExpectations(PAGE_URL, { canonicalUrl: "/relative" }, h.deps)).rejects.toMatchObject({ code: "INVALID" });
