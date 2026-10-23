@@ -1,7 +1,9 @@
 import type { AuditResult } from "@/lib/audit/types";
 
-export function AuditSummary({ audit }: { audit: AuditResult }) {
-  const failed = audit.rules.filter((r) => !r.passed).length;
+export function AuditSummary({ audit, onEditExpectations }: { audit: AuditResult; onEditExpectations: () => void }) {
+  const failed = audit.rules.filter((r) => r.status === "fail").length;
+  const needsConfig = audit.rules.filter((r) => r.status === "needs_config").length;
+  const exp = audit.expectations;
 
   return (
     <section className="rounded-lg border border-line bg-surface p-4">
@@ -47,7 +49,15 @@ export function AuditSummary({ audit }: { audit: AuditResult }) {
         <dd>{new Date(audit.fetchedAt).toLocaleString()}</dd>
         <dt className="text-muted">Checks</dt>
         <dd>
-          {audit.rules.length} run, {failed} with findings
+          {audit.rules.length} run, {failed} with findings{needsConfig > 0 && `, ${needsConfig} need configuration`}
+        </dd>
+        <dt className="text-muted">Expectations</dt>
+        <dd>
+          canonical {exp.canonicalUrl ? <code className="break-all text-xs">{exp.canonicalUrl}</code> : <em>not set</em>}, indexability{" "}
+          {exp.indexability ? <code className="text-xs">{exp.indexability}</code> : <em>not set</em>}{" "}
+          <button type="button" onClick={onEditExpectations} className="ml-1 text-xs font-medium text-accent underline">
+            Edit
+          </button>
         </dd>
       </dl>
     </section>

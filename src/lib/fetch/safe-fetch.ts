@@ -121,6 +121,8 @@ export interface SafeFetchResult {
   html: string;
   bytes: number;
   truncated: boolean;
+  /** Lower-cased response headers that rules use. */
+  headers: Record<string, string>;
 }
 
 function findSafeFetchError(e: unknown): SafeFetchError | null {
@@ -179,6 +181,7 @@ export async function safeFetchHtml(input: string): Promise<SafeFetchResult> {
         html: decode(buffer, contentType),
         bytes,
         truncated,
+        headers: pickHeaders(res.headers),
       };
     }
   } catch (e) {
@@ -189,6 +192,17 @@ export async function safeFetchHtml(input: string): Promise<SafeFetchResult> {
     }
     throw new SafeFetchError("NETWORK", `Could not fetch the page: ${(e as Error)?.message ?? "network error"}.`);
   }
+}
+
+const RULE_HEADERS = ["x-robots-tag", "link", "content-type"];
+
+function pickHeaders(h: { get(name: string): string | null }): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const name of RULE_HEADERS) {
+    const v = h.get(name);
+    if (v !== null) out[name] = v;
+  }
+  return out;
 }
 
 async function readCapped(body: ReadableStream<Uint8Array> | null) {

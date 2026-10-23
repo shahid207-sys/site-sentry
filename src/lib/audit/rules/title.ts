@@ -1,5 +1,5 @@
-import { excerpt, type Doc } from "../parse";
-import type { Finding, RuleResult } from "../types";
+import { excerpt } from "../parse";
+import type { CriterionEvaluator, RuleDef } from "../rule";
 
 export const TITLE_RULE_ID = "title";
 
@@ -8,96 +8,150 @@ export const TITLE_RULE_ID = "title";
 export const TITLE_MIN_CHARS = 30;
 export const TITLE_MAX_CHARS = 60;
 
-/** Collapse whitespace the way browsers do when rendering a document title. */
-function normaliseTitle(raw: string): string {
-  return raw.replace(/\s+/g, " ").trim();
-}
+export type TitleFacts = {
+  /** Number of document <title> elements (SVG/MathML titles excluded). */
+  titleCount: number;
+  /** Whitespace-collapsed text of the first title, or null if none. */
+  titleText: string | null;
+  titleLength: number | null;
+};
 
-export function checkTitle($: Doc): RuleResult {
-  // <title> inside inline SVG/MathML is element-level metadata, not the document title.
-  const titles = $("title").filter((_, el) => $(el).parents("svg, math").length === 0);
-  const snippets = titles.toArray().map((el) => excerpt($.html(el)));
-  const findings: Finding[] = [];
+const num = (v: unknown) => (typeof v === "number" ? v : null);
+const quoted = (text: unknown, len: unknown) =>
+  typeof text === "string" ? `"${text}" (${len} chars)` : "no <title>";
 
-  if (titles.length === 0) {
-    findings.push({
-      ruleId: "title/missing",
+export const titleEvaluators: Record<string, CriterionEvaluator> = {
+  "title.present": (f) => ({
+    passed: (num(f.titleCount) ?? 0) >= 1,
+    actual: `${f.titleCount} <title> element(s)`,
+  }),
+  "title.exactly-one": (f) => ({
+    passed: f.titleCount === 1,
+    actual: `${f.titleCount} <title> element(s)`,
+  }),
+  "title.non-empty": (f) => ({
+    passed: (num(f.titleLength) ?? 0) > 0,
+    actual: quoted(f.titleText, f.titleLength),
+  }),
+  "title.max-length": (f, p) => {
+    const len = num(f.titleLength);
+    return { passed: len !== null && len > 0 && len <= Number(p.max), actual: quoted(f.titleText, len) };
+  },
+  "title.min-length": (f, p) => {
+    const len = num(f.titleLength);
+    return { passed: len !== null && len >= Number(p.min), actual: quoted(f.titleText, len) };
+  },
+};
+
+export const titleRule: RuleDef<TitleFacts> = {
+  id: TITLE_RULE_ID,
+  name: "Page title",
+  needs: [],
+
+  observe({ $ }) {
+    // <title> inside inline SVG/MathML is element-level metadata, not the document title.
+    const titles = $("title").filter((_, el) => $(el).parents("svg, math").length === 0);
+    const text = titles.length ? titles.first().text().replace(/\s+/g, " ").trim() : null;
+    return {
+      facts: { titleCount: titles.length, titleText: text, titleLength: text === null ? null : text.length },
+      snippets: titles.toArray().map((el) => excerpt($.html(el))),
+    };
+  },
+
+  checks: [
+    {
+      code: "title/missing",
       severity: "high",
-      title: "Missing <title> element",
-      message: "The document has no <title> element.",
-      evidence: {
+      detect: (f) => f.titleCount === 0,
+      criteria: () => [
+        { id: "title.present", description: "The page has a <title> element", params: {} },
+        { id: "title.non-empty", description: "The first <title> contains text", params: {} },
+      ],
+      describe: () => ({
+        title: "Missing <title> element",
+        message: "The document has no <title> element.",
         observed: "0 <title> elements found",
-        expected: "Exactly 1 <title> element in <head>",
-        snippets: [],
-      },
-      recommendation:
-        "Add a single, descriptive <title> inside <head> that summarises the page's primary topic.",
-    });
-    return { ruleId: TITLE_RULE_ID, name: "Page title", passed: false, findings };
-  }
-
-  if (titles.length > 1) {
-    findings.push({
-      ruleId: "title/multiple",
+        expected: "Exactly 1 non-empty <title> element in <head>",
+        recommendations: [
+          "Add a single, descriptive <title> inside <head> that summarises the page's primary topic.",
+          "If titles are set by a CMS or SEO plugin, check that the template outputs it on this page type.",
+        ],
+      }),
+    },
+    {
+      code: "title/multiple",
       severity: "medium",
-      title: "Multiple <title> elements",
-      message: `The document contains ${titles.length} <title> elements. Browsers and crawlers use the first one; the rest are ignored or ambiguous.`,
-      evidence: {
-        observed: `${titles.length} <title> elements found`,
+      detect: (f) => f.titleCount > 1,
+      criteria: () => [{ id: "title.exactly-one", description: "The page has exactly one <title> element", params: {} }],
+      describe: (f) => ({
+        title: "Multiple <title> elements",
+        message: `The document contains ${f.titleCount} <title> elements. Browsers and crawlers use the first one; the rest are ignored or ambiguous.`,
+        observed: `${f.titleCount} <title> elements found`,
         expected: "Exactly 1 <title> element",
-        snippets,
-      },
-      recommendation:
-        "Remove duplicate <title> elements so only one remains in <head>. Check templates, plugins and injected scripts for extra tags.",
-    });
-  }
-
-  // Length/emptiness checks apply to the title browsers actually use: the first one.
-  const text = normaliseTitle(titles.first().text());
-  const firstSnippet = snippets[0] ? [snippets[0]] : [];
-
-  if (text.length === 0) {
-    findings.push({
-      ruleId: "title/empty",
+        recommendations: [
+          "Remove duplicate <title> elements so only one remains in <head>.",
+          "Check layout templates, SEO plugins and client-side head managers for a second title.",
+        ],
+      }),
+    },
+    {
+      code: "title/empty",
       severity: "high",
-      title: "Empty <title> element",
-      message: "The <title> element is present but contains no text (or only whitespace).",
-      evidence: {
+      detect: (f) => f.titleCount >= 1 && f.titleLength === 0,
+      criteria: () => [
+        { id: "title.present", description: "The page has a <title> element", params: {} },
+        { id: "title.non-empty", description: "The first <title> contains text", params: {} },
+      ],
+      describe: () => ({
+        title: "Empty <title> element",
+        message: "The <title> element is present but contains no text (or only whitespace).",
         observed: "Title text is empty",
         expected: "Non-empty, descriptive title text",
-        snippets: firstSnippet,
-      },
-      recommendation: "Write a unique, descriptive title for this page.",
-    });
-  } else if (text.length > TITLE_MAX_CHARS) {
-    findings.push({
-      ruleId: "title/too-long",
+        recommendations: ["Write a unique, descriptive title for this page."],
+      }),
+    },
+    {
+      code: "title/too-long",
       severity: "low",
-      title: "Title may be truncated in search results",
-      message: `The title is ${text.length} characters. Titles longer than ~${TITLE_MAX_CHARS} characters are often truncated in search results (heuristic; actual limit is pixel-based).`,
-      evidence: {
-        observed: `"${text}" (${text.length} chars)`,
+      detect: (f) => (f.titleLength ?? 0) > TITLE_MAX_CHARS,
+      criteria: () => [
+        {
+          id: "title.max-length",
+          description: `The first <title> is 1–${TITLE_MAX_CHARS} characters (heuristic)`,
+          params: { max: TITLE_MAX_CHARS },
+        },
+      ],
+      describe: (f) => ({
+        title: "Title may be truncated in search results",
+        message: `The title is ${f.titleLength} characters. Titles longer than ~${TITLE_MAX_CHARS} characters are often truncated in search results (heuristic; the real limit is pixel-based).`,
+        observed: quoted(f.titleText, f.titleLength),
         expected: `≤ ${TITLE_MAX_CHARS} characters (heuristic)`,
-        snippets: firstSnippet,
-      },
-      recommendation:
-        "Shorten the title and move the most important words to the front.",
-    });
-  } else if (text.length < TITLE_MIN_CHARS) {
-    findings.push({
-      ruleId: "title/too-short",
+        recommendations: [
+          "Shorten the title and move the most important words to the front.",
+          "Drop repeated boilerplate such as long brand suffixes or shipping promos.",
+        ],
+      }),
+    },
+    {
+      code: "title/too-short",
       severity: "low",
-      title: "Title may be too short",
-      message: `The title is ${text.length} characters. Titles under ~${TITLE_MIN_CHARS} characters often under-describe the page (heuristic).`,
-      evidence: {
-        observed: `"${text}" (${text.length} chars)`,
+      detect: (f) => (f.titleLength ?? 0) > 0 && (f.titleLength ?? 0) < TITLE_MIN_CHARS,
+      criteria: () => [
+        {
+          id: "title.min-length",
+          description: `The first <title> is at least ${TITLE_MIN_CHARS} characters (heuristic)`,
+          params: { min: TITLE_MIN_CHARS },
+        },
+      ],
+      describe: (f) => ({
+        title: "Title may be too short",
+        message: `The title is ${f.titleLength} characters. Titles under ~${TITLE_MIN_CHARS} characters often under-describe the page (heuristic).`,
+        observed: quoted(f.titleText, f.titleLength),
         expected: `≥ ${TITLE_MIN_CHARS} characters (heuristic)`,
-        snippets: firstSnippet,
-      },
-      recommendation:
-        "Expand the title to describe the page's topic more specifically, e.g. add the product, service or location.",
-    });
-  }
-
-  return { ruleId: TITLE_RULE_ID, name: "Page title", passed: findings.length === 0, findings };
-}
+        recommendations: [
+          "Expand the title to describe the page's topic more specifically, e.g. add the product, service or location.",
+        ],
+      }),
+    },
+  ],
+};
