@@ -107,7 +107,7 @@ function guardedLookup(
   });
 }
 
-const agent = new Agent({
+export const agent = new Agent({
   connect: { lookup: guardedLookup, timeout: TIMEOUT_MS },
   headersTimeout: TIMEOUT_MS,
   bodyTimeout: TIMEOUT_MS,
