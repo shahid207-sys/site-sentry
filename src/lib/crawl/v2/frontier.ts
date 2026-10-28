@@ -233,8 +233,30 @@ export async function requeueRefused(db: Db, crawlId: string, urlId: number, tok
   });
 }
 
-/** Step 3: write everything the fetch produced and the URL's terminal state, atomically. */
+/** Postgres aborted the transaction to break a lock cycle; it rolled back whole, so running it again is safe. */
+export const isDeadlock = (e: unknown): boolean => {
+  for (let x = e as { code?: string; cause?: unknown } | undefined, i = 0; x && i < 5; x = x.cause as typeof x, i++) if (x.code === "40P01") return true;
+  return false;
+};
+export const RECORD_ATTEMPTS = 3;
+
+/**
+ * Step 3: write everything the fetch produced and the URL's terminal state, atomically. The pre-lock below orders
+ * the rows that exist when it runs, but a linked URL another transaction inserts or commits after it is locked
+ * later, out of that order, so a lock cycle stays possible under concurrency. Postgres then aborts one
+ * transaction (40P01); it rolled back entirely and this worker still holds the claim, so it is run again.
+ */
 export async function recordResult(db: Db, crawlId: string, urlId: number, token: string, result: UrlResult): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await writeResult(db, crawlId, urlId, token, result);
+    } catch (e) {
+      if (!isDeadlock(e) || attempt >= RECORD_ATTEMPTS) throw e;
+    }
+  }
+}
+
+async function writeResult(db: Db, crawlId: string, urlId: number, token: string, result: UrlResult): Promise<void> {
   await db.transaction(async (tx) => {
     // Lock this URL's row and every existing row it links to in one global order (by URL) before writing any of
     // them. Otherwise two pages that link to each other, recorded at once, each hold their own row and wait for

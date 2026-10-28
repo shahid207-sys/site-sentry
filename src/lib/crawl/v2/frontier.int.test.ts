@@ -298,4 +298,35 @@ describe("recordResult under concurrency", () => {
     );
     expect(await stateCounts(db, c)).toEqual({ fetched: N });
   });
+
+  it("runs the write again when Postgres aborts it to break a deadlock with a URL inserted after the pre-lock", async () => {
+    // The validation crawl on a live site died on 40P01: a linked URL that another transaction inserted (uncommitted)
+    // after this one's pre-lock is locked late, out of order. Reproduced exactly: X inserts /late, then this write
+    // waits on X for /late while X waits on this write's own row.
+    const c = await newCrawl(db);
+    await upsertUrls(db, c, [u("/page", "seed", 0)]);
+    const [r] = await reserve(db, c, "w", 1, null);
+    const k = await commitToSend(db, c, r.id, "w");
+    if (!k.ok) throw new Error("commit failed");
+    const x = await db.$client.connect();
+    try {
+      // X never runs the deadlock check itself, so Postgres always aborts the write, the side under test.
+      await x.query("begin; set local deadlock_timeout = '60s'");
+      await x.query("insert into crawl_urls (crawl_id, url, normalised_url, state, discovered_via) values ($1, $2, $2, 'discovered', '{sitemap}')", [c, "https://example.test/late"]);
+      const write = recordResult(db, c, r.id, k.token, { state: "fetched", reason: "HTTP 200", statusCode: 200, newUrls: [u("/late", "link", 1)] });
+      // Wait until the write is blocked on X's uncommitted /late row, then make X wait on the write's own row.
+      for (let i = 0; i < 100; i++) {
+        const w = await db.execute(sql`select count(*)::int as n from pg_locks where locktype = 'transactionid' and not granted`);
+        if ((w.rows[0] as { n: number }).n > 0) break;
+        await new Promise((res) => setTimeout(res, 50));
+      }
+      await x.query("select id from crawl_urls where id = $1 for update", [r.id]);
+      await x.query("commit");
+      await write;
+    } finally {
+      x.release();
+    }
+    expect(await row(c, "/page")).toMatchObject({ state: "fetched", attempts: 1 });
+    expect((await row(c, "/late"))?.discovered_via).toEqual(["link", "sitemap"]);
+  });
 });
