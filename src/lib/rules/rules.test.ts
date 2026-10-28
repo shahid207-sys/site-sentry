@@ -16,6 +16,7 @@ import { simhash, simhashSimilarity } from "../snapshot/text";
 import { paragraph } from "../../../fixtures/site/text";
 import { ENGLISH_PROSE, MIXED_PROSE } from "../../../fixtures/site/defects";
 import { LANGUAGE_MIN_ACCURACY } from "./meta";
+import { meaningfulTerms } from "./util";
 
 const ORIGIN = "https://a.test";
 const U = (path: string) => new URL(path, ORIGIN).toString();
@@ -396,6 +397,18 @@ describe("details", () => {
   it("AIS-003 flags an llms.txt served as HTML", () => {
     const f = run("AIS-003", cleanSite(), crawlOf({ probes: [probe("llms_txt", U("/llms.txt"), { contentType: "text/html", body: "<!doctype html>" })] }));
     expect(f[0].evidence).toMatchObject({ reason: "malformed" });
+  });
+
+  it("CNT-009 v2 matches two-letter terms, word forms and words split by <br> (example-client.ae false positives)", () => {
+    const pair = (title: string, h1: string) => run("CNT-009", pageFrom("/x/", { title: `<title>${title}</title>`, h1: `<h1>${h1}</h1>` }));
+    expect(pair("AI Cost Optimization Dubai", "Find Where Your AI Is Wasting Money")).toEqual([]);
+    expect(pair("UI/UX Design Dubai", "Stop Designing for Dribbble")).toEqual([]);
+    expect(pair("Web Design That Pays", "A Website That<br/>Pays for Itself.")).toEqual([]);
+    expect(pair("AI Visibility Audit", "When Customers Ask AI<br/>Who to Choose")).toEqual([]);
+    // Still an issue when nothing is shared, and two-letter function words do not count as shared.
+    expect(pair("Blogs | Garden Club", "Our Insights &amp; Stories")).toHaveLength(1);
+    expect(pair("Go to the garden", "Go home if it rains")).toHaveLength(1);
+    expect(meaningfulTerms("Designing designed designs")).toEqual(new Set(["design"]));
   });
 
   it("CNT-007 does not report exact duplicates (those are CNT-006)", () => {

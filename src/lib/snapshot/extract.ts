@@ -1,7 +1,7 @@
 // HTML → snapshot fields. Pure: no network, no clock. Runs in the crawl worker on the document it already parsed
 // for outlinks, so each page is parsed once. Main-content text reuses the legacy content rule's extraction.
 import { createHash } from "node:crypto";
-import { detectAll } from "tinyld";
+import { detect } from "tinyld";
 import { blockText, mainContentText } from "../audit/rules/content";
 import type { Doc } from "../audit/parse";
 import type { Outlink } from "../crawl/v2/discovery";
@@ -12,6 +12,11 @@ import type { CanonicalTag, ExtractedHtml, HeadingEntry, HeadTag, JsonLdBlock, P
 export const SNAPSHOT_CAPS = { headTags: 300, headings: 500, images: 1000, jsonLdChars: 100_000, mainTextChars: 100_000, attrChars: 500 } as const;
 /** Language detection runs only on at least this much main-content text. */
 export const LANGUAGE_MIN_CHARS = 200;
+/** tinyld is built for short strings: on a whole long page its scores spread across languages (a plain English page
+ * came out "la" 0.33, "en" third). So it judges sentence-sized chunks of at least this many characters and votes. */
+export const LANGUAGE_CHUNK_CHARS = 80;
+/** Only this much main text is judged, which bounds the time per page. */
+const LANGUAGE_MAX_CHARS = 20_000;
 
 type El = Parameters<Doc>[0];
 const collapse = (s: string) => s.replace(/\s+/g, " ").trim();
@@ -175,10 +180,36 @@ function factsOf($: Doc, html: string, base: string, headers: Record<string, str
   };
 }
 
+/** Sentences, joined until each chunk has at least LANGUAGE_CHUNK_CHARS characters. */
+function languageChunks(text: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  // Tokens with no language mislead the detector: acronyms ("SEO" reads as Irish) and paths, URLs and numbers (a list
+  // of "/content/p-12" link labels), so they are dropped.
+  const judged = text.slice(0, LANGUAGE_MAX_CHARS).replace(/\S*[/\d@]\S*/g, " ").replace(/\b\p{Lu}{2,}s?\b/gu, " ").replace(/ {2,}/g, " ");
+  for (const s of judged.split(/(?<=[.!?。！？])\s+/)) {
+    cur = cur ? `${cur} ${s}` : s;
+    if (cur.length >= LANGUAGE_CHUNK_CHARS) (out.push(cur), (cur = ""));
+  }
+  if (cur.length >= LANGUAGE_CHUNK_CHARS / 2 || !out.length) out.push(cur);
+  return out;
+}
+
+/**
+ * Detected language: the language tinyld gives most chunks, weighted by length. Accuracy is that language's share of
+ * the judged text, so a page that is half one language and half another reads about 0.5, never "sure".
+ */
 function language(declared: string | null, text: string): ExtractedHtml["language"] {
   if (text.length < LANGUAGE_MIN_CHARS) return { declared, detected: null, accuracy: null };
-  const [top] = detectAll(text);
-  return { declared, detected: top?.lang ?? null, accuracy: top ? Math.round(top.accuracy * 1000) / 1000 : null };
+  const votes = new Map<string, number>();
+  let total = 0;
+  for (const chunk of languageChunks(text)) {
+    total += chunk.length;
+    const lang = detect(chunk);
+    if (lang) votes.set(lang, (votes.get(lang) ?? 0) + chunk.length);
+  }
+  const [top] = [...votes].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
+  return { declared, detected: top?.[0] ?? null, accuracy: top ? Math.round((top[1] / total) * 1000) / 1000 : null };
 }
 
 export interface ExtractInput {
@@ -217,7 +248,8 @@ export function extractHtml({ $, html, pageUrl, headers, bytes, outlinks }: Extr
   $("h1, h2, h3, h4, h5, h6").each((_, el) => {
     if (outline.length >= SNAPSHOT_CAPS.headings) return false;
     const level = Number((el as { tagName: string }).tagName.slice(1)) as HeadingEntry["level"];
-    outline.push({ level, text: collapse($(el).text()).slice(0, 300) });
+    // Block boundaries and <br> read as spaces: "Ask AI<br>Who" is "Ask AI Who", not "AIWho".
+    outline.push({ level, text: blockText($(el).clone()).slice(0, 300) });
   });
 
   const main = mainContentText($).text.slice(0, SNAPSHOT_CAPS.mainTextChars);

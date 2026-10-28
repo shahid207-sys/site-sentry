@@ -11,7 +11,8 @@ export const TITLE_MAX_PX = 580;
 export const TITLE_MIN_CHARS = 20;
 export const DESCRIPTION_MAX_PX = 920;
 export const DESCRIPTION_MIN_CHARS = 70;
-/** META-012 flags a mismatch only when the detector is at least this sure (tinyld accuracy, 0–1). */
+/** META-012 flags a mismatch only when the detector is at least this sure: the detected language's share of the
+ * main text, judged by tinyld in sentence-sized chunks with acronyms dropped (0–1). */
 export const LANGUAGE_MIN_ACCURACY = 0.9;
 /** …and the main text has at least this many words. */
 export const LANGUAGE_MIN_WORDS = 40;
@@ -171,7 +172,7 @@ export function langProblem(value: string): string | null {
 
 const META012 = page({
   id: "META-012",
-  version: 2,
+  version: 3,
   confidence: "heuristic",
   impact: 2,
   needs: ["raw"],

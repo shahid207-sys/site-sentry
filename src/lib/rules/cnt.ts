@@ -181,7 +181,7 @@ const CNT008 = page({
 
 const CNT009 = page({
   id: "CNT-009",
-  version: 1,
+  version: 2,
   confidence: "heuristic",
   impact: 2,
   needs: ["raw"],

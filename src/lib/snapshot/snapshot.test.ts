@@ -2,6 +2,8 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { detectAll } from "tinyld";
+import { ACRONYM_PROSE, MIXED_PROSE } from "../../../fixtures/site/defects";
 import { parseHtml } from "../audit/parse";
 import { extractOutlinks } from "../crawl/v2/discovery";
 import { assertKey, getRawHtml, LocalBlobStore, putRawHtml, rawHtmlKey } from "./blob-store";
@@ -106,6 +108,24 @@ describe("extractHtml", () => {
     expect(en.language.accuracy).toBeGreaterThan(0.9);
     expect(extract(para("one")).templateFingerprint).toBe(en.templateFingerprint);
     expect(extract("<html><body><div><p>one</p></div></body></html>").templateFingerprint).not.toBe(en.templateFingerprint);
+  });
+
+  it("reads <br> and block ends in headings as spaces", () => {
+    const x = extract(`<html><body><h1>When Customers Ask AI<br class="x"/>Who to Choose</h1><h2><div>A</div>B</h2></body></html>`);
+    expect(x.outline).toEqual([
+      { level: 1, text: "When Customers Ask AI Who to Choose" },
+      { level: 2, text: "A B" },
+    ]);
+  });
+
+  it("detects English dense with an acronym the detector misreads (\"SEO\" as Irish), and stays unsure on mixed text", () => {
+    const page = (t: string) => extract(`<html lang="en"><body><main><p>${t}</p></main></body></html>`).language;
+    expect(detectAll(ACRONYM_PROSE)[0].lang).toBe("ga"); // the whole-text reading this replaces
+    expect(page(ACRONYM_PROSE)).toMatchObject({ detected: "en", accuracy: 1 });
+    const mixed = page(MIXED_PROSE);
+    expect(mixed.detected).toBe("es");
+    expect(mixed.accuracy).toBeGreaterThan(0.5);
+    expect(mixed.accuracy).toBeLessThan(0.9);
   });
 
   it("finds a meta refresh target", () => {
