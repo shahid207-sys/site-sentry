@@ -711,6 +711,53 @@ describe("runCrawl crawl-level probes", () => {
     }
   });
 
+  it("a host whose robots.txt redirects to the crawl's own is judged by the crawl's rules without a second read; another target is read once", async () => {
+    // gate:p1 caught the crawl's own robots.txt requested twice: once by the crawl, once through a probe's read of
+    // the www twin's robots.txt, which 301s to it.
+    const twin = await startLocalServer(); // robots.txt 301 → the crawl's own robots.txt
+    const relay = await startLocalServer(); // robots.txt 301 → third's robots.txt
+    const third = await startLocalServer();
+    try {
+      srv.routes.set("/robots.txt", send("User-agent: *\nDisallow: /blocked.png\n", "text/plain"));
+      twin.routes.set("/robots.txt", send("", "text/plain", 301, { location: `${srv.origin}/robots.txt` }));
+      twin.routes.set("/fine.png", sendBytes(png(1200, 630), "image/png"));
+      relay.routes.set("/robots.txt", send("", "text/plain", 301, { location: `${third.origin}/robots.txt` }));
+      third.routes.set("/robots.txt", send("User-agent: *\nDisallow: /x.png\n", "text/plain"));
+      const imgs = [`${twin.origin}/blocked.png`, `${twin.origin}/fine.png`, `${relay.origin}/x.png`];
+      ["/", "/b", "/c"].forEach((path, i) => srv.routes.set(path, send(`<!doctype html><html><head><title>t${i}</title><meta property="og:image" content="${imgs[i]}"></head><body>${i ? "" : '<a href="/b">b</a><a href="/c">c</a>'}</body></html>`)));
+      const fetch = createSafeFetch({
+        resolve: async () => ["127.0.0.1"],
+        isBlocked: (ip) => (ip === "127.0.0.1" ? false : isBlockedIp(ip)),
+        allowedPorts: new Set([srv.port, twin.port, relay.port, third.port].map(String)),
+        allowLocalNames: false,
+      });
+      const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
+      expect(await runCrawl(opts({ fetch }), c)).toBe("completed");
+      const probes = ((await db.execute(sql`select probes from crawls where id = ${c}::uuid`)).rows[0] as { probes: ProbeRecord[] }).probes;
+      const og = (url: string) => probes.find((p) => p.kind === "og_image" && p.url === url);
+      expect(og(imgs[0])).toMatchObject({ started: false, skipCode: "probe_skipped_robots", skipped: expect.stringContaining(`redirects to ${srv.origin}/robots.txt`) });
+      expect(og(imgs[1])).toMatchObject({ started: true, status: 200 });
+      expect(og(imgs[2])).toMatchObject({ started: false, skipCode: "probe_skipped_robots" });
+      expect(srv.hits.get("/robots.txt")).toBe(1); // the crawl's own read only
+      expect(twin.hits.get("/robots.txt")).toBe(1);
+      expect(twin.hits.has("/blocked.png")).toBe(false);
+      expect(relay.hits.get("/robots.txt")).toBe(1);
+      expect(third.hits.get("/robots.txt")).toBe(1);
+      expect(third.hits.has("/x.png")).toBe(false);
+      expect(probes.filter((p) => p.kind === "robots_txt").map((p) => [p.url, p.status])).toEqual(
+        expect.arrayContaining([
+          [`${twin.origin}/robots.txt`, 301],
+          [`${relay.origin}/robots.txt`, 301],
+          [`${third.origin}/robots.txt`, 200],
+        ]),
+      );
+    } finally {
+      await twin.close();
+      await relay.close();
+      await third.close();
+    }
+  });
+
   it("skips probes robots.txt disallows on the crawled host, and sends none at all when robots.txt is a full disallow", async () => {
     const o = srv.origin;
     srv.routes.set("/robots.txt", send("User-agent: *\nDisallow: /llms.txt\nDisallow: /assets/\n", "text/plain"));
@@ -763,9 +810,10 @@ describe("runCrawl start URL redirects", () => {
       // www's robots.txt twice: as the crawl's first host, and again before the www probe (probes keep their own
       // robots.txt records per host; the one read before the move is not reused).
       expect(hits("www.fixture.test", "/robots.txt")).toBe(2);
-      // www's /robots.txt itself 301s to the twin's, so each of those reads also reaches fixture.test; the twin's
-      // robots.txt was read once more, on its own, when the crawl moved.
-      expect(hits("fixture.test", "/robots.txt")).toBe(hits("www.fixture.test", "/robots.txt") + 1);
+      // www's /robots.txt itself 301s to the twin's. The crawl's first read follows it (one hit on fixture.test), and
+      // the twin's robots.txt is read once more when the crawl moves. The probe's read does not follow the 301: it
+      // points at the crawl's own robots.txt, whose rules then apply, so it is not requested a third time.
+      expect(hits("fixture.test", "/robots.txt")).toBe(2);
     } finally {
       await site.close();
     }

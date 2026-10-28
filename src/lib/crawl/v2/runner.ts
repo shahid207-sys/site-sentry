@@ -730,8 +730,8 @@ class Run {
       release: (slot) => this.throttle.release(slot),
       request: (url, o, slot) => this.request(url, o, slot),
       robotsToken: ROBOTS_TOKEN,
-      robotsBlocked: (url) => {
-        if (new URL(url).host !== this.host) return null;
+      robotsBlocked: (url, asOwnHost = false) => {
+        if (!asOwnHost && new URL(url).host !== this.host) return null;
         if (this.robotsRecord?.outcome === "disallow_all") return this.robotsRecord.reason ?? "robots.txt disallows everything";
         const d = this.robots ? isAllowed(this.robots, ROBOTS_TOKEN, url) : null;
         return d && !d.allowed ? `${d.matchedRule ?? "rule"} applies to ${ROBOTS_TOKEN}` : null;

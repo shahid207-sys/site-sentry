@@ -25,8 +25,11 @@ export interface ProbeContext {
   release(slot: string): Promise<void>;
   /** Send a request in a slot already held; the slot is released when it returns. */
   request(url: string, o: Omit<FetchOptions, "signal" | "timeoutMs" | "userAgent">, slot: string): Promise<FetchResult>;
-  /** Why the crawl's own robots.txt forbids this URL on the crawled host, or null. Other hosts: see robotsFor. */
-  robotsBlocked(url: string): string | null;
+  /**
+   * Why the crawl's own robots.txt forbids this URL on the crawled host, or null; other hosts get null unless
+   * `asOwnHost` (another host whose robots.txt redirects to the crawl's own, which then applies to it).
+   */
+  robotsBlocked(url: string, asOwnHost?: boolean): string | null;
   /** robots.txt user-agent token the crawl obeys. */
   robotsToken: string;
   /** Aborted when the crawl is stopping; remaining probes are left for the resumed run. */
@@ -163,6 +166,32 @@ async function sendProbe(ctx: ProbeContext, list: ProbeRecord[], byKey: Map<stri
   return rec;
 }
 
+/** A robots_txt probe record for `url`: the stored one, or sent now. Null when the crawl started stopping first. */
+async function robotsRecord(ctx: ProbeContext, list: ProbeRecord[], byKey: Map<string, number>, url: string, follow: boolean): Promise<ProbeRecord | null> {
+  const r = list.find((x) => x.kind === "robots_txt" && x.url === url);
+  if (!r || (!r.started && !r.skipped)) return sendProbe(ctx, list, byKey, { kind: "robots_txt", url, opts: { accept: "robots", followRedirects: follow } });
+  if (r.started && r.status === null && !r.error) r.error = { code: "INTERRUPTED", message: "interrupted before the response was stored" };
+  return r;
+}
+
+/**
+ * RFC 9309 verdict for a probe on another host. Its robots.txt is read without following redirects: a www or scheme
+ * twin usually redirects to the crawl's own robots.txt, which the crawl already holds, so its rules apply and the
+ * file is not requested again. Any other target is read as its own robots_txt probe (redirects followed).
+ */
+async function otherHostRobots(ctx: ProbeContext, list: ProbeRecord[], byKey: Map<string, number>, robotsUrl: string, probeUrl: string): Promise<RobotsVerdict | null> {
+  const r = await robotsRecord(ctx, list, byKey, robotsUrl, false);
+  if (!r) return null;
+  if (r.status === null || r.status < 300 || r.status >= 400 || !r.location) return verdictFrom(r, probeUrl, ctx.robotsToken);
+  const target = new URL(r.location, robotsUrl).toString();
+  if (target === new URL("/robots.txt", ctx.origin).toString()) {
+    const why = ctx.robotsBlocked(probeUrl, true);
+    return why ? { allowed: false, reason: `${robotsUrl} redirects to ${target}: ${why}` } : { allowed: true };
+  }
+  const t = await robotsRecord(ctx, list, byKey, target, true);
+  return t && verdictFrom(t, probeUrl, ctx.robotsToken);
+}
+
 /** Run every probe not yet started. Returns false when the crawl started stopping before all were sent. */
 export async function runProbes(ctx: ProbeContext): Promise<boolean> {
   const list = [...ctx.existing];
@@ -195,16 +224,9 @@ export async function runProbes(ctx: ProbeContext): Promise<boolean> {
       const why = ctx.robotsBlocked(p.url);
       verdict = why ? { allowed: false, reason: why } : { allowed: true };
     } else {
-      const robotsUrl = new URL("/robots.txt", p.url).toString();
-      let r = list.find((x) => x.kind === "robots_txt" && x.url === robotsUrl);
-      if (!r || (!r.started && !r.skipped)) {
-        const got = await sendProbe(ctx, list, byKey, { kind: "robots_txt", url: robotsUrl, opts: { accept: "robots" } });
-        if (!got) return false;
-        r = got;
-      } else if (r.started && r.status === null && !r.error) {
-        r.error = { code: "INTERRUPTED", message: "interrupted before the response was stored" };
-      }
-      verdict = verdictFrom(r, p.url, ctx.robotsToken);
+      const v = await otherHostRobots(ctx, list, byKey, new URL("/robots.txt", p.url).toString(), p.url);
+      if (!v) return false;
+      verdict = v;
     }
     if ("noAnswer" in verdict) {
       // The host does not answer at all: that is the probe's answer too.
