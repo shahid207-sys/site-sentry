@@ -182,6 +182,15 @@ export interface FetchOptions {
   /** HEAD is only used for `status`; servers that reject it are retried with GET. */
   method?: "GET" | "HEAD";
   signal?: AbortSignal;
+  /**
+   * When false, a 3xx is returned as the result (with `location`) instead of being followed, so the caller can
+   * schedule the target as its own URL. Default true (legacy engine, verifier).
+   */
+  followRedirects?: boolean;
+  /** Overrides for crawler v2 profiles; defaults are the legacy values. */
+  timeoutMs?: number;
+  maxBytes?: number;
+  userAgent?: string;
 }
 
 export interface FetchResult {
@@ -200,6 +209,8 @@ export interface FetchResult {
   headers: Record<string, string>;
   /** Response time of the final hop, in ms. */
   elapsedMs: number;
+  /** With `followRedirects: false`: the 3xx Location resolved against the request URL (not yet validated). */
+  location?: string;
 }
 
 /**
@@ -251,7 +262,8 @@ async function fetchWithPolicy(input: string, opts: FetchOptions, policy: FetchP
   let url = validateTargetUrl(input, policy);
   const requestedUrl = url.toString();
   const redirectChain: RedirectHop[] = [];
-  const timeout = AbortSignal.timeout(TIMEOUT_MS);
+  const timeoutMs = opts.timeoutMs ?? TIMEOUT_MS;
+  const timeout = AbortSignal.timeout(timeoutMs);
   const signal = opts.signal ? AbortSignal.any([timeout, opts.signal]) : timeout;
   let method = opts.accept === "status" ? (opts.method ?? "HEAD") : "GET";
 
@@ -270,7 +282,7 @@ async function fetchWithPolicy(input: string, opts: FetchOptions, policy: FetchP
             redirect: "manual",
             dispatcher: pinnedAgent(url.hostname, ips[i]),
             signal,
-            headers: { "user-agent": USER_AGENT, accept: ACCEPT_HEADER[opts.accept] },
+            headers: { "user-agent": opts.userAgent ?? USER_AGENT, accept: ACCEPT_HEADER[opts.accept] },
           });
         } catch (e) {
           if (i + 1 >= ips.length || !isConnectError(e) || signal.aborted) throw e;
@@ -279,6 +291,28 @@ async function fetchWithPolicy(input: string, opts: FetchOptions, policy: FetchP
 
       if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
         await res.body?.cancel();
+        if (opts.followRedirects === false) {
+          let location: string | undefined;
+          try {
+            location = new URL(res.headers.get("location")!, url).toString();
+          } catch {
+            location = undefined;
+          }
+          return {
+            requestedUrl,
+            finalUrl: url.toString(),
+            status: res.status,
+            redirectChain,
+            contentType: res.headers.get("content-type") ?? "",
+            contentTypeAccepted: false,
+            headers: pickHeaders(res.headers),
+            elapsedMs: Date.now() - started,
+            body: "",
+            bytes: 0,
+            truncated: false,
+            location,
+          };
+        }
         redirectChain.push({ url: url.toString(), status: res.status });
         if (hop >= MAX_REDIRECTS) {
           throw new SafeFetchError("TOO_MANY_REDIRECTS", `Stopped after ${MAX_REDIRECTS} redirects.`);
@@ -316,7 +350,7 @@ async function fetchWithPolicy(input: string, opts: FetchOptions, policy: FetchP
         await res.body?.cancel();
         return { ...base, body: "", bytes: 0, truncated: false };
       }
-      const { bytes, truncated, buffer } = await readCapped(res.body, BYTE_CAP[opts.accept]);
+      const { bytes, truncated, buffer } = await readCapped(res.body, opts.maxBytes ?? BYTE_CAP[opts.accept]);
       if (opts.accept === "sitemap" && isGzip(buffer)) {
         // A .gz sitemap without Content-Encoding arrives compressed; undici only decodes Content-Encoding.
         const unzipped = gunzipCapped(buffer, MAX_SITEMAP_BYTES);
@@ -328,7 +362,7 @@ async function fetchWithPolicy(input: string, opts: FetchOptions, policy: FetchP
     const known = findSafeFetchError(e);
     if (known) throw known;
     if (timeout.aborted || (e as Error)?.name === "TimeoutError") {
-      throw new SafeFetchError("TIMEOUT", `No response within ${TIMEOUT_MS / 1000}s.`);
+      throw new SafeFetchError("TIMEOUT", `No response within ${timeoutMs / 1000}s.`);
     }
     if ((e as Error)?.name === "AbortError") throw new SafeFetchError("NETWORK", "The request was cancelled.");
     throw new SafeFetchError("NETWORK", `Could not fetch the URL: ${(e as Error)?.message ?? "network error"}.`);

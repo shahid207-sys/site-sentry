@@ -12,7 +12,8 @@
     "test:e2e": "playwright test",
     "test:int": "vitest run --config vitest.integration.config.mts",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/lib/db/migrate-cli.ts"
+    "db:migrate": "tsx src/lib/db/migrate-cli.ts",
+    "worker": "tsx src/worker/crawl-worker.ts"
   },
   "dependencies": {
     "bullmq": "6.3.14",

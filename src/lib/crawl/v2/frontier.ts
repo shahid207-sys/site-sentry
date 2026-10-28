@@ -150,6 +150,8 @@ export async function reserve(db: Db, crawlId: string, owner: string, limit: num
     with c as (
       select id from crawl_urls
       where crawl_id = ${crawlId}::uuid and state = 'discovered'
+        -- Once the budget is spent nothing more is handed out; the leftovers are finalised as budget_exhausted.
+        and exists (select 1 from crawls k where k.id = ${crawlId}::uuid and (k.budget is null or k.fetches_committed < k.budget))
         and (${maxDepth}::int is null or depth is null or depth <= ${maxDepth}::int or discovered_via && array['seed','sitemap']::text[])
       order by depth nulls last, id
       limit ${limit}
@@ -163,9 +165,12 @@ export async function reserve(db: Db, crawlId: string, owner: string, limit: num
     .sort((a, b) => (a.depth ?? Infinity) - (b.depth ?? Infinity) || a.id - b.id);
 }
 
-export type CommitOutcome = { ok: true; token: string } | { ok: false; why: "budget" | "lost" };
+export type CommitOutcome = { ok: true; token: string } | { ok: false; why: "budget" | "lost" | "stopped" };
 
-/** Step 2: charge the budget and mark the URL `fetching`. Only send the request after this returns ok. */
+/**
+ * Step 2: charge the budget and mark the URL `fetching`. Only send the request after this returns ok.
+ * Refuses (`stopped`) unless the crawl is `running`, so pause and cancel take effect before the next request.
+ */
 export async function commitToSend(db: Db, crawlId: string, urlId: number, owner: string, leaseMs = DEFAULT_LEASE_MS): Promise<CommitOutcome> {
   const token = randomUUID();
   return db.transaction(async (tx) => {
@@ -173,10 +178,12 @@ export async function commitToSend(db: Db, crawlId: string, urlId: number, owner
     if (!mine.rows.length) return { ok: false, why: "lost" } as const;
     const charged = await tx.execute(sql`
       update crawls set fetches_committed = fetches_committed + 1, heartbeat_at = now()
-      where id = ${crawlId}::uuid and (budget is null or fetches_committed < budget) returning id`);
+      where id = ${crawlId}::uuid and status = 'running' and (budget is null or fetches_committed < budget) returning id`);
     if (!charged.rows.length) {
       await tx.execute(sql`update crawl_urls set state = 'discovered', lease_owner = null, lease_until = null, updated_at = now() where id = ${urlId}`);
-      return { ok: false, why: "budget" } as const;
+      const crawl = await tx.execute(sql`select status from crawls where id = ${crawlId}::uuid`);
+      const running = rows<{ status: string }>(crawl)[0]?.status === "running";
+      return { ok: false, why: running ? "budget" : "stopped" } as const;
     }
     await tx.execute(sql`
       update crawl_urls set state = 'fetching', claim_token = ${token}, attempts = attempts + 1,
@@ -230,14 +237,20 @@ export async function renewLeases(db: Db, owner: string, leaseMs = DEFAULT_LEASE
 
 export const INTERRUPTED_REASON = "The worker stopped after this request was committed and before its result was saved; not re-requested (at-most-once).";
 
-/** Recover after a worker died: unsent reservations return to the frontier; committed requests become `interrupted`. */
-export async function sweep(db: Db, crawlId?: string): Promise<{ requeued: number; interrupted: number }> {
+/**
+ * Recover after a worker died: unsent reservations return to the frontier; committed requests become `interrupted`.
+ * By default only expired leases are touched. `force` ignores leases; only call it for a crawl whose runner lock you
+ * hold, which proves no other process is working on it.
+ */
+export async function sweep(db: Db, crawlId?: string, opts: { force?: boolean } = {}): Promise<{ requeued: number; interrupted: number }> {
+  if (opts.force && !crawlId) throw new Error("A forced sweep needs a crawl id.");
   const scope = crawlId ? sql`and crawl_id = ${crawlId}::uuid` : sql``;
+  const expired = opts.force ? sql`` : sql`and lease_until < now()`;
   const requeued = await db.execute(sql`update crawl_urls set state = 'discovered', lease_owner = null, lease_until = null, updated_at = now()
-    where state = 'queued' and lease_until < now() ${scope} returning id`);
+    where state = 'queued' ${expired} ${scope} returning id`);
   const interrupted = await db.execute(sql`update crawl_urls set state = 'interrupted', reason = ${INTERRUPTED_REASON},
       lease_owner = null, lease_until = null, claim_token = null, updated_at = now()
-    where state = 'fetching' and lease_until < now() ${scope} returning id`);
+    where state = 'fetching' ${expired} ${scope} returning id`);
   return { requeued: requeued.rows.length, interrupted: interrupted.rows.length };
 }
 
@@ -252,11 +265,13 @@ export async function activeCount(db: Db, crawlId: string): Promise<{ discovered
 /**
  * Give every remaining active URL its terminal state. Called once no worker holds a claim on the crawl.
  * Completed: URLs beyond the depth limit become `depth_exceeded`, the rest `budget_exhausted`. Cancelled: `cancelled`.
+ * Failed (the run stopped with an error): `cancelled`, with a reason that says so.
  */
-export async function finalizeUrls(db: Db, crawlId: string, outcome: "completed" | "cancelled", maxDepth: number | null, budget: number | null): Promise<void> {
+export async function finalizeUrls(db: Db, crawlId: string, outcome: "completed" | "cancelled" | "failed", maxDepth: number | null, budget: number | null): Promise<void> {
   await db.transaction(async (tx) => {
-    if (outcome === "cancelled") {
-      await tx.execute(sql`update crawl_urls set state = 'cancelled', reason = 'The crawl was cancelled before this URL was fetched.',
+    if (outcome !== "completed") {
+      const reason = outcome === "cancelled" ? "The crawl was cancelled before this URL was fetched." : "The crawl stopped with an error before this URL was fetched.";
+      await tx.execute(sql`update crawl_urls set state = 'cancelled', reason = ${reason},
           lease_owner = null, lease_until = null, updated_at = now()
         where crawl_id = ${crawlId}::uuid and state in ('discovered', 'queued')`);
       return;

@@ -115,6 +115,15 @@ describe("at-most-once fetch accounting", () => {
     expect(await commitToSend(db, c, r.id, "other")).toEqual({ ok: false, why: "lost" });
   });
 
+  it("refuses to commit while the crawl is paused or cancelling, and hands the row back", async () => {
+    const c = await newCrawl(db);
+    await upsertUrls(db, c, [u("/s1", "link", 1)]);
+    const [r] = await reserve(db, c, "w", 1, null);
+    await db.execute(sql`update crawls set status = 'paused' where id = ${c}::uuid`);
+    expect(await commitToSend(db, c, r.id, "w")).toEqual({ ok: false, why: "stopped" });
+    expect(await activeCount(db, c)).toEqual({ discovered: 1, queued: 0, fetching: 0 });
+  });
+
   it("charges the budget at commit time and stops at the budget", async () => {
     const c = await newCrawl(db, { budget: 5 });
     await upsertUrls(db, c, Array.from({ length: 12 }, (_, i) => u(`/b${i}`, "link", 1)));
@@ -124,6 +133,25 @@ describe("at-most-once fetch accounting", () => {
     expect(outcomes.filter((o) => o.ok)).toHaveLength(5);
     expect(outcomes.filter((o) => !o.ok && o.why === "budget")).toHaveLength(7);
     expect(await activeCount(db, c)).toEqual({ discovered: 7, queued: 0, fetching: 5 });
+  });
+
+  it("stops handing out URLs once the budget is spent, so a reserve/commit loop terminates", async () => {
+    const c = await newCrawl(db, { budget: 5 });
+    await upsertUrls(db, c, Array.from({ length: 12 }, (_, i) => u(`/l${i}`, "link", 1)));
+    let sent = 0;
+    for (let rounds = 0; rounds < 50; rounds++) {
+      const batch = await reserve(db, c, "w", 4, null);
+      if (!batch.length) break;
+      for (const r of batch) {
+        const commit = await commitToSend(db, c, r.id, "w");
+        if (!commit.ok) continue;
+        sent++;
+        await recordResult(db, c, r.id, commit.token, { state: "fetched", reason: "HTTP 200", statusCode: 200 });
+      }
+    }
+    expect(sent).toBe(5);
+    expect(await reserve(db, c, "w", 4, null)).toEqual([]);
+    expect(await activeCount(db, c)).toEqual({ discovered: 7, queued: 0, fetching: 0 });
   });
 
   it("discards a result whose claim token no longer matches, writing nothing", async () => {
@@ -161,6 +189,15 @@ describe("recovery and finalisation", () => {
     // The interrupted URL is never handed out again.
     const again = await reserve(db, c, "new", 10, null);
     expect(again.map((r) => r.id)).toEqual([batch[1].id]);
+  });
+
+  it("a forced sweep recovers a crawl immediately, without waiting for leases to expire", async () => {
+    const c = await newCrawl(db);
+    await upsertUrls(db, c, [u("/k1", "link", 1), u("/k2", "link", 1)]);
+    const batch = await reserve(db, c, "killed", 2, null);
+    await commitToSend(db, c, batch[0].id, "killed");
+    expect(await sweep(db, c)).toEqual({ requeued: 0, interrupted: 0 });
+    expect(await sweep(db, c, { force: true })).toEqual({ requeued: 1, interrupted: 1 });
   });
 
   it("releaseReservations hands unsent rows back on pause", async () => {

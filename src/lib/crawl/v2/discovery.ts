@@ -29,6 +29,14 @@ export interface SitemapDocRecord {
   error?: { code: string; message: string };
   /** Set when the document was listed but deliberately not read; the reason says why. */
   skipped?: "max_index_depth" | "max_docs";
+  /** For a sitemap index: its child sitemap URLs, normalised. Lets an interrupted discovery resume without re-reading it. */
+  children?: string[];
+}
+
+/** What an interrupted discovery run had done: documents it started fetching, and documents it finished. */
+export interface SitemapProgress {
+  started: string[];
+  docs: SitemapDocRecord[];
 }
 
 export interface DiscoveredUrl {
@@ -42,6 +50,8 @@ export interface RejectedUrl {
 }
 
 export type SitemapEvent =
+  /** About to request this document. Persist it before pulling the next event, so a resumed run never re-requests it. */
+  | { type: "start"; url: string }
   | { type: "doc"; doc: SitemapDocRecord }
   | { type: "urls"; sitemap: string; urls: DiscoveredUrl[]; rejected: RejectedUrl[] };
 
@@ -57,6 +67,8 @@ export interface SitemapDiscoveryInput {
   maxDocs?: number;
   /** URLs per yielded batch. */
   batchSize?: number;
+  /** Progress of an earlier, interrupted run over the same site. */
+  prior?: SitemapProgress;
 }
 
 const errOf = (e: unknown) => (e instanceof SafeFetchError ? { code: e.code, message: e.message } : { code: "INTERNAL", message: (e as Error)?.message ?? "error" });
@@ -65,6 +77,10 @@ const errOf = (e: unknown) => (e instanceof SafeFetchError ? { code: e.code, mes
  * Breadth-first over sitemap documents: robots.txt declarations, configured sitemaps, then /sitemap.xml and
  * /sitemap_index.xml. Gzipped documents are decompressed by the fetcher. Each document is read once; every
  * document (read, failed or skipped) is reported, so the coverage report can say what was and was not read.
+ *
+ * Resumable at most once per document: a `start` event precedes every request, and a urlset's `doc` event follows
+ * its URL batches. With `prior`, finished documents are replayed from their records without a request, and a
+ * document that was started but never finished is reported as interrupted instead of being requested again.
  */
 export async function* discoverSitemaps(input: SitemapDiscoveryInput): AsyncGenerator<SitemapEvent> {
   const maxDepth = input.maxIndexDepth ?? MAX_SITEMAP_INDEX_DEPTH;
@@ -82,15 +98,45 @@ export async function* discoverSitemaps(input: SitemapDiscoveryInput): AsyncGene
   for (const s of input.configured ?? []) enqueue(s, "config", null, 0);
   for (const p of DEFAULT_SITEMAP_PATHS) enqueue(new URL(p, input.origin).toString(), "default", null, 0);
 
+  const priorDocs = new Map((input.prior?.docs ?? []).map((d) => [d.url, d]));
+  const priorStarted = new Set(input.prior?.started ?? []);
+
+  function* children(item: (typeof queue)[number], urls: string[]): Generator<SitemapEvent> {
+    for (const url of urls) {
+      if (item.depth + 1 > maxDepth) {
+        if (!seen.has(url)) {
+          seen.add(url);
+          if (!priorDocs.has(url)) {
+            yield { type: "doc", doc: { url, via: "index", parent: item.url, depth: item.depth + 1, status: null, kind: null, urlCount: 0, errors: [], truncated: false, skipped: "max_index_depth" } };
+          }
+        }
+        continue;
+      }
+      enqueue(url, "index", item.url, item.depth + 1);
+    }
+  }
+
   let read = 0;
   while (queue.length) {
     const item = queue.shift()!;
     const doc: SitemapDocRecord = { ...item, status: null, kind: null, urlCount: 0, errors: [], truncated: false };
+    const before = priorDocs.get(item.url);
+    if (before) {
+      // Finished in the earlier run: its URLs are already stored; only an index's children need replaying.
+      if (!before.skipped) read++;
+      if (before.children) yield* children(item, before.children);
+      continue;
+    }
     if (read >= maxDocs) {
       yield { type: "doc", doc: { ...doc, skipped: "max_docs" } };
       continue;
     }
     read++;
+    if (priorStarted.has(item.url)) {
+      yield { type: "doc", doc: { ...doc, error: { code: "INTERRUPTED", message: "The worker stopped while reading this sitemap; not requested again (at-most-once)." } } };
+      continue;
+    }
+    yield { type: "start", url: item.url };
     let body: string | null = null;
     try {
       const res = await input.fetch(item.url, { accept: "sitemap" });
@@ -111,22 +157,21 @@ export async function* discoverSitemaps(input: SitemapDiscoveryInput): AsyncGene
     doc.urlCount = parsed.locs.length;
 
     if (parsed.kind === "sitemapindex") {
+      const kids = new Set<string>();
       for (const child of parsed.locs) {
-        if (item.depth + 1 > maxDepth) {
-          const n = normaliseUrl(child, { base: item.url, dropParams: [] });
-          if (n.ok && !seen.has(n.url)) {
-            seen.add(n.url);
-            yield { type: "doc", doc: { url: n.url, via: "index", parent: item.url, depth: item.depth + 1, status: null, kind: null, urlCount: 0, errors: [], truncated: false, skipped: "max_index_depth" } };
-          }
-          continue;
-        }
-        enqueue(child, "index", item.url, item.depth + 1);
+        const n = normaliseUrl(child, { base: item.url, dropParams: [] });
+        if (n.ok) kids.add(n.url);
       }
+      doc.children = [...kids];
+      // Record the index (with its children) before reading any child, so a resume can rebuild the queue.
+      yield { type: "doc", doc };
+      yield* children(item, doc.children);
+      continue;
+    }
+    if (parsed.kind !== "urlset") {
       yield { type: "doc", doc };
       continue;
     }
-    yield { type: "doc", doc };
-    if (parsed.kind !== "urlset") continue;
     for (let i = 0; i < parsed.locs.length; i += batchSize) {
       const urls: DiscoveredUrl[] = [];
       const rejected: RejectedUrl[] = [];
@@ -137,6 +182,7 @@ export async function* discoverSitemaps(input: SitemapDiscoveryInput): AsyncGene
       }
       yield { type: "urls", sitemap: item.url, urls, rejected };
     }
+    yield { type: "doc", doc };
   }
 }
 

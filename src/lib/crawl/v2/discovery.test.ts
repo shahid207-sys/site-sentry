@@ -22,6 +22,7 @@ async function collect(events: AsyncGenerator<SitemapEvent>) {
   const rejected: string[] = [];
   let batches = 0;
   for await (const e of events) {
+    if (e.type === "start") continue;
     if (e.type === "doc") docs.push(e.doc);
     else {
       batches++;
@@ -122,6 +123,38 @@ describe("discoverSitemaps", () => {
     // Reads /sitemap.xml (404), /sitemap_index.xml, s1 and s2: four documents.
     const { docs } = await run([], { maxDocs: 4 });
     expect(docs.filter((d) => d.skipped === "max_docs").map((d) => d.url.replace(o, ""))).toEqual(["/s3.xml", "/s4.xml"]);
+  });
+});
+
+describe("discoverSitemaps resume", () => {
+  it("never re-requests a sitemap after an interruption, and finishes the rest", async () => {
+    const o = srv.origin;
+    srv.routes.set("/sitemap_index.xml", send(index([`${o}/a.xml`, `${o}/b.xml.gz`, `${o}/c.xml`]), XML));
+    srv.routes.set("/a.xml", send(urlset([`${o}/a1`]), XML));
+    srv.routes.set("/b.xml.gz", send(gzipSync(urlset([`${o}/b1`])), "application/gzip"));
+    srv.routes.set("/c.xml", send(urlset([`${o}/c1`]), XML));
+
+    // First run: stop right after the request for b.xml.gz has been announced (and therefore may have been sent).
+    const started: string[] = [];
+    const docs: SitemapDocRecord[] = [];
+    const firstUrls: string[] = [];
+    for await (const e of discoverSitemaps({ origin: o, robotsSitemaps: [], fetch: srv.fetch })) {
+      if (e.type === "start") {
+        started.push(e.url);
+        if (e.url.endsWith("/b.xml.gz")) break;
+      } else if (e.type === "doc") docs.push(e.doc);
+      else firstUrls.push(...e.urls.map((u) => u.url));
+    }
+    expect(firstUrls).toEqual([`${o}/a1`]);
+
+    const second = await collect(discoverSitemaps({ origin: o, robotsSitemaps: [], fetch: srv.fetch, prior: { started, docs } }));
+    expect(second.urls).toEqual([`${o}/c1`]);
+    expect(second.docs.map((d) => [d.url.replace(o, ""), d.error?.code ?? d.status])).toEqual([
+      ["/b.xml.gz", "INTERRUPTED"],
+      ["/c.xml", 200],
+    ]);
+    for (const path of ["/sitemap.xml", "/sitemap_index.xml", "/a.xml", "/c.xml"]) expect(srv.hits.get(path), path).toBe(1);
+    expect(srv.hits.get("/b.xml.gz")).toBeUndefined();
   });
 });
 
