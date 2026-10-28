@@ -2,7 +2,8 @@ import { gzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseHtml } from "../../audit/parse";
 import { send, startLocalServer, type LocalServer } from "@/test/local-server";
-import { discoverSitemaps, extractOutlinks, type SitemapDocRecord, type SitemapEvent } from "./discovery";
+import { parseSitemap } from "../sitemap";
+import { discoverSitemaps, extractOutlinks, lastmodStats, type SitemapDocRecord, type SitemapEvent } from "./discovery";
 
 const XML = "application/xml";
 const urlset = (urls: string[]) => `<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map((u) => `<url><loc>${u}</loc></url>`).join("")}</urlset>`;
@@ -226,5 +227,18 @@ describe("extractOutlinks", () => {
   it("resolves against <base href>", () => {
     const o = extractOutlinks(parseHtml(`<head><base href="https://example.com/base/"></head><a href="rel">x</a>`), page);
     expect(o.links[0].url).toBe("https://example.com/base/rel");
+  });
+});
+
+describe("sitemap lastmod (IDX-031 input)", () => {
+  it("collects urlset lastmods and summarises them", () => {
+    const xml = `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://a.test/1</loc><lastmod>2026-01-02</lastmod></url><url><loc>https://a.test/2</loc><lastmod>2030-05-01T10:00:00Z</lastmod></url><url><loc>https://a.test/3</loc><lastmod>not a date</lastmod></url><url><loc>https://a.test/4</loc></url></urlset>`;
+    const parsed = parseSitemap(xml);
+    expect(parsed.lastmods).toEqual(["2026-01-02", "2030-05-01T10:00:00Z", "not a date"]);
+    expect(lastmodStats(parsed.lastmods)).toEqual({ count: 3, distinct: 3, max: "2030-05-01T10:00:00Z", min: "2026-01-02", invalid: 1 });
+  });
+
+  it("ignores lastmod in a sitemap index", () => {
+    expect(parseSitemap(`<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><sitemap><loc>https://a.test/s.xml</loc><lastmod>2026-01-01</lastmod></sitemap></sitemapindex>`).lastmods).toEqual([]);
   });
 });

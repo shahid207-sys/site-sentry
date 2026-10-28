@@ -13,6 +13,8 @@ export interface ParsedSitemap {
   truncated: boolean;
   /** Well-formedness or structure errors; empty when the document looks valid. */
   errors: string[];
+  /** <lastmod> values of the read entries (urlset only); one per entry that has one. */
+  lastmods: string[];
 }
 
 /**
@@ -65,6 +67,7 @@ export function parseSitemap(xml: string, maxUrls = MAX_SITEMAP_URLS): ParsedSit
   }
   const itemTag = kind === "sitemapindex" ? "sitemap" : "url";
   const locs: string[] = [];
+  const lastmods: string[] = [];
   let truncated = false;
   root.children().each((_, el) => {
     const name = ((el as { tagName?: string }).tagName ?? "").toLowerCase().replace(/^.*:/, "");
@@ -81,8 +84,15 @@ export function parseSitemap(xml: string, maxUrls = MAX_SITEMAP_URLS): ParsedSit
       return false;
     }
     locs.push(loc);
+    const lastmod = $(el)
+      .children()
+      .filter((__, c) => ((c as { tagName?: string }).tagName ?? "").toLowerCase().replace(/^.*:/, "") === "lastmod")
+      .first()
+      .text()
+      .trim();
+    if (lastmod && kind === "urlset") lastmods.push(lastmod);
   });
   const invalid = locs.filter((l) => !/^https?:\/\//i.test(l));
   if (invalid.length) errors.push(`${invalid.length} <loc> value(s) are not absolute http(s) URLs, e.g. "${invalid[0].slice(0, 100)}".`);
-  return { kind, locs, truncated, errors };
+  return { kind, locs, truncated, errors, lastmods };
 }

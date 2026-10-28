@@ -1,7 +1,7 @@
 // Crawl subsystem tables (docs/SPEC.md "Core data model"). Everything else stays in the JSON store until Phase 3.
 // Migrations are generated from this file with `npm run db:generate` into ./drizzle.
 import { sql } from "drizzle-orm";
-import { bigserial, bigint, boolean, check, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { bigserial, bigint, boolean, check, index, integer, jsonb, pgTable, primaryKey, real, smallint, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { ACTIVE_STATES, TERMINAL_STATES } from "../crawl/v2/types";
 
 const list = (values: readonly string[]) => sql.raw(values.map((v) => `'${v}'`).join(", "));
@@ -32,6 +32,10 @@ export const crawls = pgTable(
     /** One record per sitemap document read, failed or skipped. */
     sitemaps: jsonb("sitemaps").notNull().default(sql`'[]'::jsonb`),
     discoveryDone: boolean("discovery_done").notNull().default(false),
+    /** Crawl-level probe results (src/lib/rules/probe-types.ts). */
+    probes: jsonb("probes").notNull().default(sql`'[]'::jsonb`),
+    /** Analysis job progress: { status, startedAt, finishedAt, pages, findings, error }. */
+    analysis: jsonb("analysis"),
     error: jsonb("error"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     startedAt: timestamp("started_at", { withTimezone: true }),
@@ -158,4 +162,54 @@ export const pageSnapshots = pgTable(
     fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
   },
   (t) => [uniqueIndex("page_snapshots_url_uq").on(t.urlId), index("page_snapshots_crawl_idx").on(t.crawlId, t.id)],
+);
+
+/** Rule registry (docs/SPEC.md "Core data model"): synced from src/lib/rules/registry.ts by each analysis run. */
+export const rules = pgTable("rules", {
+  id: text("id").primaryKey(),
+  version: integer("version").notNull(),
+  category: text("category").notNull(),
+  scope: text("scope").notNull(),
+  confidence: text("confidence").notNull(),
+  impact: smallint("impact").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** One per rule × URL × evidence. Written by the analysis job; a re-run replaces a crawl's findings. */
+export const findings = pgTable(
+  "findings",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    crawlId: uuid("crawl_id")
+      .notNull()
+      .references(() => crawls.id, { onDelete: "cascade" }),
+    ruleId: text("rule_id").notNull(),
+    ruleVersion: integer("rule_version").notNull(),
+    url: text("url").notNull(),
+    confidence: text("confidence").notNull(),
+    message: text("message").notNull(),
+    evidence: jsonb("evidence").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("findings_crawl_rule_idx").on(t.crawlId, t.ruleId), index("findings_crawl_url_idx").on(t.crawlId, t.url)],
+);
+
+/** Per rule, per analysis run: did it run, on how many inputs, how many findings, how long. */
+export const ruleRuns = pgTable(
+  "rule_runs",
+  {
+    crawlId: uuid("crawl_id")
+      .notNull()
+      .references(() => crawls.id, { onDelete: "cascade" }),
+    ruleId: text("rule_id").notNull(),
+    ruleVersion: integer("rule_version").notNull(),
+    /** ran | needs_config | error */
+    status: text("status").notNull(),
+    /** Pages evaluated (page rules) or 1 (site rules). */
+    evaluated: integer("evaluated").notNull(),
+    findings: integer("findings").notNull(),
+    totalMs: real("total_ms").notNull(),
+    detail: text("detail"),
+  },
+  (t) => [primaryKey({ columns: [t.crawlId, t.ruleId] })],
 );

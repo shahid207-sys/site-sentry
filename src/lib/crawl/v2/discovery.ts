@@ -31,6 +31,35 @@ export interface SitemapDocRecord {
   skipped?: "max_index_depth" | "max_docs";
   /** For a sitemap index: its child sitemap URLs, normalised. Lets an interrupted discovery resume without re-reading it. */
   children?: string[];
+  /** For a urlset: <lastmod> statistics (IDX-031). Dates are compared as written, ISO 8601 per sitemaps.org. */
+  lastmod?: LastmodStats;
+}
+
+export interface LastmodStats {
+  /** Entries with a <lastmod>. */
+  count: number;
+  distinct: number;
+  /** Latest and earliest value, by parsed time; null when none parse. */
+  max: string | null;
+  min: string | null;
+  /** Values that do not parse as dates. */
+  invalid: number;
+}
+
+export function lastmodStats(values: string[]): LastmodStats {
+  let max: [number, string] | null = null;
+  let min: [number, string] | null = null;
+  let invalid = 0;
+  for (const v of values) {
+    const t = Date.parse(v);
+    if (Number.isNaN(t)) {
+      invalid++;
+      continue;
+    }
+    if (!max || t > max[0]) max = [t, v];
+    if (!min || t < min[0]) min = [t, v];
+  }
+  return { count: values.length, distinct: new Set(values).size, max: max?.[1] ?? null, min: min?.[1] ?? null, invalid };
 }
 
 /** What an interrupted discovery run had done: documents it started fetching, and documents it finished. */
@@ -155,6 +184,7 @@ export async function* discoverSitemaps(input: SitemapDiscoveryInput): AsyncGene
     doc.errors = parsed.errors;
     doc.truncated ||= parsed.truncated;
     doc.urlCount = parsed.locs.length;
+    if (parsed.kind === "urlset") doc.lastmod = lastmodStats(parsed.lastmods);
 
     if (parsed.kind === "sitemapindex") {
       const kids = new Set<string>();
