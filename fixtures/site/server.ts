@@ -9,7 +9,7 @@
 //   fixture.test      the site itself
 //   www.fixture.test  301 to fixture.test (IDX-021 negative)
 //   alt.test          robots.txt answers 503 (IDX-025)
-//   alt2.test         robots.txt without a Sitemap line, no sitemap, no favicon; www.alt2.test serves 200 too
+//   alt2.test         robots.txt without a Sitemap line, no sitemap, no favicon, no llms.txt; www.alt2.test serves 200 too
 //   alt3.test         a 50,001-URL sitemap (IDX-030) and an llms.txt served as HTML (AIS-003)
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -250,10 +250,10 @@ export function createRouter(port: number, canaryPort: number): Router {
       return { status: 200, type: "application/x-gzip", headers: {}, body: sitemapBody(o, { path, paths }) };
     }
     if (key === "alt3" && path === "/llms.txt") return text(`<!doctype html><html><body><h1>${SITE_NAME}</h1></body></html>`, "text/html; charset=utf-8");
+    if (path === "/assets/og.png") return { status: 200, type: "image/png", headers: {}, body: png(1200, 630) };
     if (key !== "alt2" && key !== "www2" && path === "/favicon.ico") return { status: 200, type: "image/x-icon", headers: {}, body: FAVICON };
     if (path === "/" || (key === "alt3" && /^\/item-\d+$/.test(path))) {
       const p = cleanParts(path, o);
-      p.og = p.og.replace(/<meta property="og:image"[^>]*>/, ""); // no og:image to probe on the alt hosts
       if (key === "alt2" || key === "www2") p.icon = "";
       // Page text differs per host, so alt pages never look like copies of fixture.test pages.
       p.title = p.title.replace("</title>", ` on ${HOSTS[key]}</title>`);

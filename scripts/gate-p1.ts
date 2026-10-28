@@ -100,9 +100,13 @@ const histogram = (xs: Iterable<{ state: string }>) => {
   for (const x of xs) h[x.state] = (h[x.state] ?? 0) + 1;
   return Object.entries(h).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(", ");
 };
-function hitCounts(hits: { path: string }[]) {
+/** Requests per URL. Hits on other fixture hosts (the www probe asks www.fixture.test/) are keyed with their host. */
+function hitCounts(hits: { path: string; host?: string }[]) {
   const m = new Map<string, number>();
-  for (const h of hits) m.set(h.path, (m.get(h.path) ?? 0) + 1);
+  for (const h of hits) {
+    const k = h.host ? `${h.host}${h.path}` : h.path;
+    m.set(k, (m.get(k) ?? 0) + 1);
+  }
   return m;
 }
 
