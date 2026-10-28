@@ -190,6 +190,18 @@ export interface AuditRun {
   findingCounts?: Record<Severity, number>;
   /** Rule config in force for this audit (frozen for comparisons). */
   ruleConfig: RuleConfig;
+  /** Set when crawler v2 runs this audit (CRAWLER_V2=true): the crawl itself lives in Postgres. */
+  crawler?: CrawlerV2Ref;
+}
+
+/** Link from a JSON-store audit to its crawler v2 crawl, with the state last read from the crawls table. */
+export interface CrawlerV2Ref {
+  version: 2;
+  crawlId: string;
+  status: "queued" | "running" | "paused" | "cancelling" | "completed" | "cancelled" | "failed";
+  /** URL counts per state (docs/CRAWLER-STATES.md). */
+  states: Record<string, number>;
+  syncedAt: string;
 }
 
 export type WorkflowStatus = "open" | "triaged" | "in_progress" | "ready_to_verify" | "resolved" | "wont_fix";

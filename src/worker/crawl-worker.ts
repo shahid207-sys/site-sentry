@@ -15,13 +15,17 @@ const intEnv = (name: string, fallback: number) => {
   return Number.isFinite(v) && v > 0 ? v : fallback;
 };
 
+const crawlStatus = async (crawlId: string) =>
+  ((await db.execute(sql`select status from crawls where id = ${crawlId}::uuid`)).rows[0] as { status: string } | undefined)?.status;
+
 function log(event: string, data: Record<string, unknown> = {}) {
   console.log(JSON.stringify({ t: new Date().toISOString(), event, ...data }));
 }
 
+const db = createDb(undefined, intEnv("CRAWL_DB_POOL", 10));
+
 async function main() {
   const owner = `${hostname()}-${process.pid}`;
-  const db = createDb(undefined, intEnv("CRAWL_DB_POOL", 10));
   const connection = redisConnection();
   const queue = createCrawlQueue(connection);
   const fetch = createSafeFetch(workerFetchPolicy());
@@ -41,10 +45,11 @@ async function main() {
       const crawlId = job.data.crawlId;
       log("crawl.start", { crawlId });
       try {
-        const outcome = await runCrawl(
-          { db, fetch, owner, leaseMs, concurrency: intEnv("CRAWLER_CONCURRENCY", 3), signal: shutdown.signal, log },
-          crawlId,
-        );
+        const run = () => runCrawl({ db, fetch, owner, leaseMs, concurrency: intEnv("CRAWLER_CONCURRENCY", 3), signal: shutdown.signal, log }, crawlId);
+        let outcome = await run();
+        // A resume that arrived while this job was still winding down from a pause could not enqueue a new job
+        // (same job id), so pick it up here.
+        while (outcome === "paused" && !shutdown.signal.aborted && (await crawlStatus(crawlId)) === "running") outcome = await run();
         log("crawl.end", { crawlId, outcome });
         return outcome;
       } catch (e) {

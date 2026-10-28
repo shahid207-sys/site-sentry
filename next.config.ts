@@ -12,6 +12,8 @@ const nextConfig: NextConfig = {
   cacheComponents: true,
   partialPrefetching: true,
   poweredByHeader: false,
+  // BullMQ loads its Lua scripts from disk at runtime; keep it (and its Redis client) out of the server bundle.
+  serverExternalPackages: ["bullmq", "ioredis"],
   // Keep the dev-only indicator away from the sidebar controls at bottom-left.
   devIndicators: { position: "bottom-right" },
   async headers() {

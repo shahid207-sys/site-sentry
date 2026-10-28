@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { RULE_CATEGORIES, type RuleCategory } from "@/lib/audit/types";
 import { createAudit, LIMITS } from "@/lib/crawl/engine";
+import { crawlerV2Enabled, getCrawlQueue, startCrawl } from "@/lib/crawl/v2/audit-bridge";
+import { getDb } from "@/lib/db/client";
 import { listAudits, summarize } from "@/lib/server/queries";
 import { WorkflowError } from "@/lib/workflow/deps";
 import { assertLiveScans, getDeps, getStore } from "@/lib/workspace";
@@ -27,6 +29,13 @@ export const POST = route<{ ws: string }>(async (req, { ws }) => {
   if (input.mode === "single" && input.urls.length !== 1) throw new WorkflowError("INVALID", "Enter exactly one URL.");
   if (input.mode === "list" && input.urls.length === 0) throw new WorkflowError("INVALID", "Enter at least one URL.");
   const { siteId, ...config } = input;
-  const { audit, reused } = await createAudit({ siteId, config: { ...config, urls: config.mode === "sitemap" ? [] : config.urls } }, await getDeps(ws));
+  const { audit: created, reused } = await createAudit({ siteId, config: { ...config, urls: config.mode === "sitemap" ? [] : config.urls } }, await getDeps(ws));
+  let audit = created;
+  if (crawlerV2Enabled(ws) && !reused) {
+    // Crawler v2: the worker process runs the crawl; the step endpoint only reports its progress.
+    const store = getStore(ws);
+    const site = (await store.read()).sites[siteId];
+    audit = await startCrawl(getDb(), getCrawlQueue(), store, ws, created, site.origin);
+  }
   return { audit: summarize(audit, await getStore(ws).read()), reused };
 });

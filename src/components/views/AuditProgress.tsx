@@ -11,6 +11,8 @@ import {
   FileSearch,
   ListTodo,
   LoaderCircle,
+  Pause,
+  Play,
   Square,
 } from "lucide-react";
 import type { AuditPhase } from "@/lib/model";
@@ -59,6 +61,10 @@ function stageStates(d: AuditDetail): StageState[] {
   const ok = a.status === "completed" || a.status === "partial";
   const cur = ORDER.indexOf(a.phase);
   return STAGES.map((s, i) => {
+    // Crawler v2 (Phase 1) crawls only: link checks and findings come with the Phase 2 rule engine.
+    if (a.crawler && (s.phase === "links" || s.phase === "finalize")) return "off";
+    if (a.crawler && !running) return a.progress.done > 0 || s.phase !== "pages" ? "done" : "not_reached";
+    if (a.crawler && i < cur) return "done";
     if (s.phase === "links" && !a.config.checkLinks) return "off";
     if (running) {
       if (i < cur) return s.phase === "sitemap" && !d.sitemap ? "skipped" : "done";
@@ -79,12 +85,60 @@ function stageStates(d: AuditDetail): StageState[] {
   });
 }
 
+// Order and wording for crawler v2 URL states (docs/CRAWLER-STATES.md).
+const URL_STATE_LABELS: [string, string][] = [
+  ["discovered", "Waiting"],
+  ["queued", "Claimed by the worker"],
+  ["fetching", "Being fetched"],
+  ["fetched", "Fetched"],
+  ["redirected", "Redirected"],
+  ["non_html", "Not HTML"],
+  ["oversized", "Over the size cap"],
+  ["blocked_robots", "Blocked by robots.txt"],
+  ["out_of_scope", "Out of scope"],
+  ["excluded_by_rule", "Excluded by a rule"],
+  ["depth_exceeded", "Beyond the depth limit"],
+  ["budget_exhausted", "Over the page budget"],
+  ["failed_timeout", "Timed out"],
+  ["failed_dns", "DNS failure"],
+  ["failed_tls", "TLS failure"],
+  ["failed_network", "Network error"],
+  ["interrupted", "Interrupted (not re-requested)"],
+  ["cancelled", "Cancelled"],
+];
+
+function UrlStates({ states }: { states: Record<string, number> }) {
+  const rows = URL_STATE_LABELS.filter(([k]) => states[k]);
+  return (
+    <Panel title="URL states" description="Every discovered URL is in exactly one state; finished URLs keep the reason they ended there." flush>
+      {rows.length ? (
+        <dl className="grid grid-cols-1 divide-y divide-line-subtle sm:grid-cols-2 sm:divide-y-0">
+          {rows.map(([k, label]) => (
+            <div key={k} className="flex items-baseline justify-between gap-3 px-5 py-2.5">
+              <dt className="text-[13px] text-fg-2">{label}</dt>
+              <dd className="tabular text-sm font-semibold text-fg">{states[k]}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : (
+        <p className="px-5 py-4 text-[13px] text-fg-3">No URLs yet: the worker has not started this crawl.</p>
+      )}
+    </Panel>
+  );
+}
+
 function Outcome({ audit, href }: { audit: AuditSummary; href: string }) {
   const open = (
     <LinkButton href={href} variant="primary" size="sm" icon={ArrowRight}>
       Open results
     </LinkButton>
   );
+  if (audit.crawler && audit.status === "completed")
+    return (
+      <Notice tone="warn" title="Crawl complete: no checks were run" action={open}>
+        Crawler v2 records which URLs were found and fetched. SEO checks are not run on it yet, so this audit has no findings; that is not a clean result.
+      </Notice>
+    );
   if (audit.status === "completed")
     return (
       <Notice tone="ok" title="Audit complete" action={open}>
@@ -119,6 +173,7 @@ export function AuditProgressView() {
   const [audit, setAudit] = useState<AuditDetail | null>(null);
   const [stepError, setStepError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [toggling, setToggling] = useState(false);
   const alive = useRef(true);
 
   // Step loop
@@ -187,6 +242,18 @@ export function AuditProgressView() {
     }
   };
 
+  const togglePause = async (action: "pause" | "resume") => {
+    setToggling(true);
+    try {
+      await api(`${apiBase}/audits/${auditId}/${action}`, { method: "POST" });
+      setAudit(await api<AuditDetail>(`${apiBase}/audits/${auditId}`));
+    } catch (e) {
+      toast({ tone: "error", title: action === "pause" ? "Could not pause" : "Could not resume", detail: (e as Error).message });
+    } finally {
+      setToggling(false);
+    }
+  };
+
   const currentAudit = audit || initialAudit;
   const crumbs = [
     { label: "Audits", href: `${base}/audits` },
@@ -224,6 +291,17 @@ export function AuditProgressView() {
             <LinkButton href={`${base}/audits`} variant="ghost">
               All audits
             </LinkButton>
+            {isRunning && a.crawler ? (
+              a.crawler.status === "paused" ? (
+                <Button icon={Play} loading={toggling} onClick={() => togglePause("resume")}>
+                  Resume
+                </Button>
+              ) : (
+                <Button icon={Pause} loading={toggling} disabled={a.crawler.status === "cancelling"} onClick={() => togglePause("pause")}>
+                  Pause
+                </Button>
+              )
+            ) : null}
             {isRunning ? (
               <Button variant="danger" icon={Square} loading={cancelling} onClick={cancelAudit}>
                 Cancel audit
@@ -242,7 +320,13 @@ export function AuditProgressView() {
           <div className="flex items-baseline justify-between gap-3">
             <p className="flex items-center gap-2 text-base font-semibold text-fg">
               {isRunning ? <LoaderCircle className="size-4 animate-spin text-accent-ink" aria-hidden /> : null}
-              {isRunning ? STAGES.find((s) => s.phase === a.phase)?.label ?? "Working…" : "Finished"}
+              {isRunning
+                ? a.crawler?.status === "paused"
+                  ? "Paused"
+                  : a.crawler?.status === "cancelling"
+                    ? "Cancelling…"
+                    : STAGES.find((s) => s.phase === a.phase)?.label ?? "Working…"
+                : "Finished"}
             </p>
             <p className="text-sm text-fg-2">
               {p.planned ? `${p.done} of ${plural(p.planned, "page")}` : "Planning pages…"}
@@ -273,6 +357,8 @@ export function AuditProgressView() {
           { label: "Failed or skipped", value: p.failed + p.skipped, hint: `${p.failed} failed · ${p.skipped} skipped`, icon: CircleSlash, tone: "medium" },
         ]}
       />
+
+      {a.crawler ? <UrlStates states={a.crawler.states} /> : null}
 
       <Panel title="Audit steps" description="What the crawler does, in order. Steps outside this audit's scope are marked." flush>
         <ol className="divide-y divide-line-subtle">

@@ -156,6 +156,13 @@ export function AuditReportView() {
         {ws === "sample" ? <p className="mt-3 text-[13px] text-sample">Sample data: a fictional website. These results are illustrative and do not describe a real site.</p> : null}
       </header>
 
+      {a.crawler ? (
+        <div className="pt-6">
+          <Notice tone="warn" title="Crawl only: no checks were run">
+            This audit ran on crawler v2, which records which URLs were found and fetched. SEO checks are not run on it yet, so it has no findings. That does not mean the site has no issues.
+          </Notice>
+        </div>
+      ) : null}
       <section className="print-break border-b border-line py-6">
         <h2 className="text-sm font-semibold text-fg">Summary</h2>
         <div className="mt-3 grid gap-4 text-sm sm:grid-cols-3">

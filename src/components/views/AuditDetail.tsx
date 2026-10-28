@@ -581,6 +581,13 @@ export function AuditDetailView() {
         </div>
       ) : null}
 
+      {a.crawler && !running ? (
+        <div className="mb-6">
+          <Notice tone="warn" title="Crawl only: no checks were run">
+            This audit ran on crawler v2, which records which URLs were found and fetched. SEO checks are not run on it yet, so it has no findings. That does not mean the site has no issues.
+          </Notice>
+        </div>
+      ) : null}
       {a.status === "failed" ? <div className="mb-6"><Notice tone="error" title="The audit failed">{a.error?.message ?? "Unknown error."} Results collected before the failure are shown below and were not used to resolve any issue.</Notice></div> : null}
       {!running && a.coverage.length ? (
         <div className="mb-6">

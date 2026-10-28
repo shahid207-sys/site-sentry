@@ -7,7 +7,7 @@ import { DEFAULT_POLICY, systemResolve, type FetchPolicy } from "../../fetch/saf
  * CRAWLER_LOCAL_HOSTS="site.test=127.0.0.1,other.test=127.0.0.1" and CRAWLER_LOCAL_PORTS="8081,8082".
  * Only the listed names resolve to the listed addresses, and only those addresses are let through the IP guard.
  */
-export function workerFetchPolicy(env: NodeJS.ProcessEnv = process.env): FetchPolicy {
+export function workerFetchPolicy(env: Record<string, string | undefined> = process.env): FetchPolicy {
   const raw = env.CRAWLER_LOCAL_HOSTS?.trim();
   if (!raw) return DEFAULT_POLICY;
   if (env.NODE_ENV === "production") throw new Error("CRAWLER_LOCAL_HOSTS is a test setting and is refused when NODE_ENV=production.");
