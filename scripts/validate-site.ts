@@ -174,7 +174,7 @@ async function main() {
   console.log(`Raw HTML storage: ${blob.map((b) => `${b.blob_status ?? "no body"} ${b.n}`).join(", ")}`);
   console.log(`robots.txt: ${clip(crawl.robots && { ...(crawl.robots as object), body: undefined }, 300)}`);
   console.log(`Probes: ${clip((crawl.probes as { kind: string; url: string; status: number | null; skipCode?: string; error?: unknown }[]).map((p) => [p.kind, p.url, p.status, p.skipCode ?? (p.error ? "error" : "")]), 1200)}`);
-  console.log(`Rules not run normally: ${runs.filter((r) => r.status !== "ok").map((r) => `${r.rule_id} ${r.status}${r.detail ? ` (${r.detail})` : ""}`).join("; ") || "none"}`);
+  console.log(`Rules not run normally: ${runs.filter((r) => r.status !== "ran").map((r) => `${r.rule_id} ${r.status}${r.detail ? ` (${r.detail})` : ""}`).join("; ") || "none"}`);
   console.log(`\nFindings per rule:`);
   for (const [k, xs] of [...byRule].sort()) console.log(`  ${k.padEnd(28)} ${xs.length}`);
   for (const [k, xs] of [...byRule].sort()) {
