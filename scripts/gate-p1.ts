@@ -43,7 +43,7 @@ async function setupDb(): Promise<Db> {
   return db;
 }
 
-/** A real worker process with the production defaults: only the fixture host mapping and the database differ. */
+/** A real worker process with the production politeness defaults: only the fixture host mapping (which needs NODE_ENV=test) and the database differ. */
 function startWorker(site: FixtureSite, label: string): { child: ChildProcess; booted: Promise<void>; exited: Promise<number | null> } {
   const env = {} as NodeJS.ProcessEnv;
   for (const [k, v] of Object.entries(process.env)) if (!/^CRAWL(ER)?_/.test(k)) env[k] = v; // no tuned politeness or locks
@@ -52,7 +52,7 @@ function startWorker(site: FixtureSite, label: string): { child: ChildProcess; b
     CRAWL_QUEUE_NAME: QUEUE,
     CRAWLER_LOCAL_HOSTS: "fixture.test=127.0.0.1",
     CRAWLER_LOCAL_PORTS: String(site.port),
-    NODE_ENV: "development",
+    NODE_ENV: "test", // the loopback mapping above is refused under any other NODE_ENV
   });
   const child = spawn(process.execPath, ["--import", "tsx", "src/worker/crawl-worker.ts"], { env, stdio: ["ignore", "pipe", "pipe"] });
   let out = "";

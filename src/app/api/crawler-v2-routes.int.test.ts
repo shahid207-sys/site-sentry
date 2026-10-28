@@ -73,7 +73,7 @@ afterAll(async () => {
   await rm(dataDir, { recursive: true, force: true });
 });
 
-const fetcher = () => createSafeFetch(workerFetchPolicy({ CRAWLER_LOCAL_HOSTS: "site.test=127.0.0.1", CRAWLER_LOCAL_PORTS: String(srv.port) }));
+const fetcher = () => createSafeFetch(workerFetchPolicy({ NODE_ENV: "test", CRAWLER_LOCAL_HOSTS: "site.test=127.0.0.1", CRAWLER_LOCAL_PORTS: String(srv.port) }));
 const ctx = <P extends object>(p: P) => ({ params: Promise.resolve({ ws: "live", ...p }) });
 const post = (url: string, body?: unknown, headers?: Record<string, string>) =>
   new NextRequest(`http://localhost${url}`, { method: "POST", body: body ? JSON.stringify(body) : undefined, headers });

@@ -1,5 +1,7 @@
-// The fetch policy the crawl worker uses. Production: the default SSRF policy. For the local fixture site and the
-// worker integration tests, CRAWLER_LOCAL_HOSTS maps named test hosts to loopback; this is refused in production.
+// The fetch policy the crawl worker uses. Normally: the default SSRF policy. For the local fixture site and the
+// worker integration tests, CRAWLER_LOCAL_HOSTS maps named test hosts to loopback. That is honoured only when
+// NODE_ENV is exactly "test" and refused otherwise (production, development or unset), so a stray variable on a real
+// worker cannot open loopback to crawls.
 import { isBlockedIp } from "../../fetch/ip-guard";
 import { DEFAULT_POLICY, systemResolve, type FetchPolicy } from "../../fetch/safe-fetch";
 
@@ -10,7 +12,9 @@ import { DEFAULT_POLICY, systemResolve, type FetchPolicy } from "../../fetch/saf
 export function workerFetchPolicy(env: Record<string, string | undefined> = process.env): FetchPolicy {
   const raw = env.CRAWLER_LOCAL_HOSTS?.trim();
   if (!raw) return DEFAULT_POLICY;
-  if (env.NODE_ENV === "production") throw new Error("CRAWLER_LOCAL_HOSTS is a test setting and is refused when NODE_ENV=production.");
+  if (env.NODE_ENV !== "test") {
+    throw new Error(`CRAWLER_LOCAL_HOSTS is a test setting and is refused unless NODE_ENV=test (NODE_ENV is ${env.NODE_ENV ? `"${env.NODE_ENV}"` : "unset"}).`);
+  }
   const table = new Map<string, string>();
   for (const pair of raw.split(",")) {
     const [host, ip] = pair.split("=").map((s) => s.trim().toLowerCase());

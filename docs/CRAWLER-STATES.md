@@ -188,6 +188,14 @@ the server and was then lost is never retried: the URL ends `interrupted`.
 | `TLS` (Node/OpenSSL `CERT_*`, `ERR_TLS_*`, `ERR_SSL_*`, self-signed or unverifiable chains) | `failed_tls` |
 | anything else | `failed_network` |
 
+### Worker fetch policy
+
+The worker fetches through the default SSRF policy (`src/lib/crawl/v2/fetch-policy.ts`), which blocks loopback and every
+private or reserved address. For the fixture site and the worker integration tests, `CRAWLER_LOCAL_HOSTS` can map
+named `*.test` hosts to loopback. That is honoured only when `NODE_ENV` is exactly `test`. Under any other value
+(production, development or unset) the worker refuses to start. `npm run gate:p1` runs its workers with `NODE_ENV=test`.
+`fetch-policy.test.ts` shows the production policy refusing a real local server, with 0 requests reaching it.
+
 ### Pause and cancel
 
 The runner polls `crawls.status` every 500 ms (`STATUS_POLL_MS`). Every wait listens to that poll: the host
