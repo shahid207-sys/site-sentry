@@ -81,6 +81,16 @@ describe("crawler v2 audit bridge", () => {
     expect(after.finishedAt).not.toBeNull();
   });
 
+  it("a crawl failed by a refused stored scope rule shows scope_rule_invalid on the audit", async () => {
+    const id = await crawlIdOf();
+    await db.execute(sql`update crawls set config = jsonb_set(config, '{scope}', '{"include": ["(a+)+$"], "exclude": []}'::jsonb) where id = ${id}::uuid`);
+    expect(await run()).toBe("failed");
+    const a = await syncAudit(db, store, auditId);
+    expect(a).toMatchObject({ status: "failed", phase: "done", crawler: { status: "failed" }, error: { code: "scope_rule_invalid" } });
+    expect(a.error!.message).toMatch(/^Include rule 1 "\(a\+\)\+\$" is refused: /);
+    expect(srv.hits.size).toBe(0);
+  });
+
   it("pause, resume and cancel go through crawls.status", async () => {
     const audit = () => store.read().then((d) => d.audits[auditId]);
     await controlCrawl(db, queue, await audit(), "pause");

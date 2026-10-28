@@ -234,6 +234,13 @@ form and the methodology page.
   - each rule must compile;
   - each rule must pass `safe-regex2`'s star-height check: no repeated group inside another repetition.
 
+  - rules never run on input longer than 2,048 characters (`MAX_MATCH_INPUT`, the URL maximum); such a URL is
+    `excluded_by_rule` without matching.
+
+  A stored rule that fails these checks (saved before they tightened, or written without the API) does not crash the
+  worker. The crawl ends `failed` with `crawls.error.code = "scope_rule_invalid"` before any request. The audit shows
+  that code and a message naming the rule.
+
   That check counts `?` as a repetition, so `(en/.*)?` is refused although it is harmless. The error suggests
   `($|en/)` instead. It also misses overlapping alternation such as `^(a|a)*$`. A linear-time engine (RE2) would
   close that gap, but it is a native dependency.

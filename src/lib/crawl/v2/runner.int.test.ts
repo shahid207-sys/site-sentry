@@ -368,10 +368,17 @@ describe("runCrawl Custom profile scope and auth", () => {
     expect(row.c).not.toContain("s3cret");
   });
 
-  it("refuses to run an unsafe scope rule that reached the database without API validation", async () => {
-    const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued", config: { scope: { include: [], exclude: ["(a+)+$"] } } });
-    await expect(runCrawl(opts({ throttle: fast() }), c)).rejects.toThrow('Scope rule "(a+)+$" is unusable: Refused:');
+  it("a stored scope rule that is now refused fails the crawl with scope_rule_invalid, without fetching or throwing", async () => {
+    srv.routes.set("/", page(["/a"]));
+    const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued", config: { scope: { include: [], exclude: ["/ok/", "(a+)+$"] } } });
+    expect(await runCrawl(opts({ throttle: fast() }), c)).toBe("failed");
     expect(srv.hits.size).toBe(0);
+    const row = (await db.execute(sql`select status, error, finished_at from crawls where id = ${c}::uuid`)).rows[0] as { status: string; error: { code: string; message: string }; finished_at: unknown };
+    expect(row.status).toBe("failed");
+    expect(row.error).toMatchObject({ code: "scope_rule_invalid", message: expect.stringMatching(/^Exclude rule 2 "\(a\+\)\+\$" is refused: Refused: .* Edit the rule and start a new audit\.$/) });
+    expect(row.finished_at).not.toBeNull();
+    expect(await activeCount(db, c)).toMatchObject({ queued: 0, fetching: 0, discovered: 0 });
+    expect(await runCrawl(opts({ throttle: fast() }), c)).toBe("not_runnable"); // never retried
   });
 
   it("fails the crawl with a clear error when the worker has no CRAWLER_SECRET_KEY", async () => {

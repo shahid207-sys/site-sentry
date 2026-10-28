@@ -13,7 +13,7 @@ import { SafeFetchError, type FetchOptions, type FetchResult, type Fetcher } fro
 import { normaliseUrl } from "../normalise";
 import type { ScopeRules } from "../profiles";
 import { crawlDelayFor, isAllowed, parseRobots, type ParsedRobots } from "../robots";
-import { compileRules } from "../scope-rules";
+import { compileRules, ruleVerdict, ScopeRuleError } from "../scope-rules";
 import { discoverSitemaps, extractOutlinks, type SitemapDocRecord } from "./discovery";
 import {
   ClaimLostError,
@@ -85,7 +85,7 @@ export interface RobotsRecord {
 /** `crawls.sitemaps` entries: a start marker before each request, then the finished document record. */
 type SitemapLogEntry = { started: string } | SitemapDocRecord;
 
-export type RunOutcome = "completed" | "paused" | "cancelled" | "locked" | "not_runnable" | "shutdown";
+export type RunOutcome = "completed" | "paused" | "cancelled" | "failed" | "locked" | "not_runnable" | "shutdown";
 
 export interface RunnerOptions {
   db: Db;
@@ -205,7 +205,12 @@ class Run {
     this.origin = new URL(crawl.site_origin).origin;
     this.throttle = this.opts.throttle ?? new HostThrottle(this.opts.redis, this.host, this.opts.politeness);
     const scope = crawl.config?.scope;
-    this.scope = { include: compileRules(scope?.include), exclude: compileRules(scope?.exclude), subfolder: scope?.subfolder ?? null };
+    try {
+      this.scope = { include: compileRules(scope?.include, "Include"), exclude: compileRules(scope?.exclude, "Exclude"), subfolder: scope?.subfolder ?? null };
+    } catch (e) {
+      if (!(e instanceof ScopeRuleError)) throw e;
+      return this.finishFailed({ code: e.code, message: `${e.message} Edit the rule and start a new audit.` });
+    }
     if (crawl.config?.auth) {
       const key = secretKey();
       if (!key) throw new Error("This crawl uses basic auth, but CRAWLER_SECRET_KEY is not set on the worker.");
@@ -326,9 +331,8 @@ class Run {
     if (u.host !== this.host) return { state: "out_of_scope", reason: `Different host (${u.host}); this crawl covers ${this.host}.` };
     const { subfolder, include, exclude } = this.scope;
     if (subfolder && !u.pathname.startsWith(subfolder)) return { state: "out_of_scope", reason: `Outside ${subfolder}; this crawl covers only that subfolder.` };
-    const excluded = exclude.find(([, re]) => re.test(url));
-    if (excluded) return { state: "excluded_by_rule", reason: `Matches the exclude rule "${excluded[0]}".` };
-    if (include.length && !include.some(([, re]) => re.test(url))) return { state: "excluded_by_rule", reason: `Matches none of the ${include.length} include rule(s).` };
+    const ruled = ruleVerdict(url, include, exclude);
+    if (ruled) return { state: "excluded_by_rule", reason: ruled };
     if (this.robotsRecord?.outcome === "disallow_all") return { state: "blocked_robots", reason: this.robotsRecord.reason! };
     if (this.robots) {
       const d = isAllowed(this.robots, ROBOTS_TOKEN, url);
@@ -554,6 +558,16 @@ class Run {
   }
 
   // ---------- endings ----------
+
+  /** The crawl cannot run as configured: record why (shown on the audit) and settle every URL. Nothing was fetched. */
+  private async finishFailed(error: { code: string; message: string }): Promise<RunOutcome> {
+    const at = new Date().toISOString();
+    const failed = await this.db.execute(sql`update crawls set status = 'failed', error = ${JSON.stringify({ ...error, at })}::jsonb, finished_at = now()
+      where id = ${this.crawlId}::uuid and status not in ('completed', 'cancelled', 'failed') returning id`);
+    if (failed.rows.length) await finalizeUrls(this.db, this.crawlId, "failed", this.crawl.max_depth, this.crawl.budget);
+    this.log("crawl.failed", { crawlId: this.crawlId, ...error });
+    return "failed";
+  }
 
   private async finishCompleted(): Promise<RunOutcome> {
     const stop = await this.checkStop();

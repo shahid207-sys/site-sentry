@@ -6,7 +6,30 @@
 // - It misses overlapping alternation: ^(a|a)*$ passes.
 // Kept out of profiles.ts so the client bundle does not carry the checker.
 import safeRegex from "safe-regex2";
+import { MAX_URL_LENGTH } from "./normalise";
 import { MAX_RULE_LENGTH } from "./profiles";
+
+/**
+ * Second ReDoS guard: the longest input a rule is ever run against. Normalised URLs are already capped at this length;
+ * the check here keeps that true for any caller. Longer input is not matched (and not truncated, which could make an
+ * include rule match a URL it should not).
+ */
+export const MAX_MATCH_INPUT = MAX_URL_LENGTH;
+
+/** Error code a crawl fails with when one of its stored rules is refused (crawls.error.code, shown on the audit). */
+export const SCOPE_RULE_INVALID = "scope_rule_invalid";
+
+export class ScopeRuleError extends Error {
+  readonly code = SCOPE_RULE_INVALID;
+  constructor(
+    readonly kind: "Include" | "Exclude",
+    readonly index: number,
+    readonly rule: string,
+    readonly problem: string,
+  ) {
+    super(`${kind} rule ${index + 1} ${JSON.stringify(rule.length > 80 ? `${rule.slice(0, 80)}…` : rule)} is refused: ${problem}`);
+  }
+}
 
 /** Why a regex is unusable as a scope rule, or null. Patterns are compiled without flags, so matching is case-sensitive. */
 export function regexProblem(source: string): string | null {
@@ -23,11 +46,24 @@ export function regexProblem(source: string): string | null {
   return null;
 }
 
-/** Compile scope rules, throwing on the first unusable one (rules stored before validation tightened, or edited rows). */
-export function compileRules(list: string[] = []): [string, RegExp][] {
-  return list.map((s): [string, RegExp] => {
+/**
+ * Apply compiled include/exclude rules to a URL: an excluded_by_rule reason, or null when the rules let it through.
+ * Input longer than MAX_MATCH_INPUT is excluded without running any rule.
+ */
+export function ruleVerdict(url: string, include: [string, RegExp][], exclude: [string, RegExp][]): string | null {
+  if (!include.length && !exclude.length) return null;
+  if (url.length > MAX_MATCH_INPUT) return `Longer than ${MAX_MATCH_INPUT} characters; scope rules are not run on it.`;
+  const excluded = exclude.find(([, re]) => re.test(url));
+  if (excluded) return `Matches the exclude rule "${excluded[0]}".`;
+  if (include.length && !include.some(([, re]) => re.test(url))) return `Matches none of the ${include.length} include rule(s).`;
+  return null;
+}
+
+/** Compile scope rules, throwing ScopeRuleError on the first unusable one (rules stored before validation tightened, or edited rows). */
+export function compileRules(list: string[] = [], kind: "Include" | "Exclude" = "Include"): [string, RegExp][] {
+  return list.map((s, i): [string, RegExp] => {
     const problem = regexProblem(s);
-    if (problem) throw new Error(`Scope rule ${JSON.stringify(s)} is unusable: ${problem}`);
+    if (problem) throw new ScopeRuleError(kind, i, s, problem);
     return [s, new RegExp(s)];
   });
 }

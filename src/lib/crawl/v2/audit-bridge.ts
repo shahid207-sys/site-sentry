@@ -85,7 +85,7 @@ interface CrawlStatusRow {
   status: CrawlerV2Ref["status"];
   robots: { outcome?: string } | null;
   discovery_done: boolean;
-  error: { message?: string } | null;
+  error: { code?: string; message?: string } | null;
   finished_at: string | null;
 }
 
@@ -114,7 +114,10 @@ export async function syncAudit(db: Db, store: Store, auditId: string): Promise<
       a.status = status;
       a.phase = "done";
       a.finishedAt = row.finished_at ? new Date(row.finished_at).toISOString() : new Date().toISOString();
-      if (status === "failed") a.error = { code: "INTERNAL", message: `The crawl stopped with an error: ${row.error?.message ?? "unknown"}` };
+      if (status === "failed") {
+        // A failure the runner recorded on purpose carries its own code and message; anything else is an internal error.
+        a.error = row.error?.code ? { code: row.error.code, message: row.error.message ?? row.error.code } : { code: "INTERNAL", message: `The crawl stopped with an error: ${row.error?.message ?? "unknown"}` };
+      }
     } else {
       a.phase = !row.robots?.outcome ? "robots" : !row.discovery_done ? "sitemap" : "pages";
     }
