@@ -53,6 +53,8 @@ export const V2_MAX_HTML_BYTES = 5 * 1024 * 1024;
  */
 export const MAX_THROTTLE_RETRIES = 2;
 export const RETRY_WAIT_CAP_MS = 60_000;
+/** How often a running crawl re-reads crawls.status, so a pause or cancel takes effect within about this long. */
+export const STATUS_POLL_MS = 500;
 
 /** Stored in `crawls.config`. Scope is always the start URL's host; the Custom profile can narrow it further. */
 export interface CrawlConfig {
@@ -154,6 +156,12 @@ class Run {
   private throttle!: HostThrottle;
   private scope: { include: [string, RegExp][]; exclude: [string, RegExp][]; subfolder: string | null } = { include: [], exclude: [], subfolder: null };
   private authHeader: string | null = null;
+  /** Aborted by a pause or cancel (crawls.status) or worker shutdown: ends every wait, and no new request starts. */
+  private readonly stopping = new AbortController();
+  /** Aborted by a cancel or worker shutdown: also ends requests in flight. A pause lets them finish. */
+  private readonly cancelling = new AbortController();
+  private readonly signal: AbortSignal;
+  private readonly fetchSignal: AbortSignal;
 
   constructor(
     private readonly opts: RunnerOptions,
@@ -162,6 +170,24 @@ class Run {
   ) {
     this.owner = `${opts.owner}/${randomUUID().slice(0, 8)}`;
     this.leaseMs = opts.leaseMs ?? DEFAULT_LEASE_MS;
+    const shutdown = opts.signal ? [opts.signal] : [];
+    this.signal = AbortSignal.any([...shutdown, this.stopping.signal]);
+    this.fetchSignal = AbortSignal.any([...shutdown, this.cancelling.signal]);
+  }
+
+  /** Re-read crawls.status every STATUS_POLL_MS; a pause or cancel aborts the waits (and, for cancel, the requests). */
+  private watchStatus(): () => void {
+    const timer = setInterval(() => {
+      void crawlStatus(this.db, this.crawlId)
+        .then((status) => {
+          if (status === "running") return;
+          this.stopping.abort(new Error(`crawl ${status ?? "deleted"}`));
+          if (status !== "paused") this.cancelling.abort(new Error(`crawl ${status ?? "deleted"}`));
+        })
+        .catch(() => {}); // a missed poll is retried on the next tick
+    }, STATUS_POLL_MS);
+    timer.unref();
+    return () => clearInterval(timer);
   }
 
   private get db() {
@@ -197,8 +223,9 @@ class Run {
 
     const renew = setInterval(() => void renewLeases(this.db, this.owner, this.leaseMs).catch(() => {}), Math.max(1000, this.leaseMs / 3));
     renew.unref();
+    const unwatch = this.watchStatus();
     try {
-      if (!(await this.loadRobots())) return "shutdown";
+      if (!(await this.loadRobots())) return (await this.checkStop()) ?? "shutdown";
       const stop = await this.checkStop();
       if (stop) return stop;
       await this.seed();
@@ -208,6 +235,7 @@ class Run {
       }
       return await this.crawlLoop();
     } finally {
+      unwatch();
       clearInterval(renew);
       await releaseReservations(this.db, this.owner).catch(() => {});
     }
@@ -223,13 +251,13 @@ class Run {
 
   /** Every request this crawl makes: inside a host throttle slot, with the v2 timeout and user-agent. */
   private async request(url: string, o: Omit<FetchOptions, "signal" | "timeoutMs" | "userAgent">, held?: string): Promise<FetchResult> {
-    const slot = held ?? (await this.throttle.acquire(this.opts.signal));
+    const slot = held ?? (await this.throttle.acquire(this.signal));
     try {
       const res = await this.opts.fetch(url, {
         ...o,
         // Credentials go to the crawl's own origin only (configured sitemaps can live elsewhere).
         headers: this.authHeader && new URL(url).origin === this.origin ? { authorization: this.authHeader } : undefined,
-        signal: this.opts.signal,
+        signal: this.fetchSignal,
         timeoutMs: this.timeoutMs,
         userAgent: this.opts.fetchOptions?.userAgent ?? V2_USER_AGENT,
       });
@@ -242,7 +270,7 @@ class Run {
     }
   }
 
-  /** False when the worker is shutting down; robots.txt then stays "started" and is requested again on resume. */
+  /** False when the crawl is stopping (shutdown, pause, cancel); robots.txt then stays "started" and is requested again on resume. */
   private async loadRobots(): Promise<boolean> {
     let rec = this.crawl.robots;
     if (rec?.outcome) {
@@ -265,7 +293,7 @@ class Run {
         Object.assign(rec, { outcome: "disallow_all", reason: `robots.txt returned ${res.status}; treated as a full disallow (RFC 9309 §2.3.1.4).`, sitemaps: [] });
       }
     } catch (e) {
-      if (this.opts.signal?.aborted) return false;
+      if (this.signal.aborted) return false;
       const err = e instanceof SafeFetchError ? { code: e.code, message: e.message } : { code: "INTERNAL", message: String((e as Error)?.message ?? e) };
       Object.assign(rec, { error: err, outcome: "disallow_all", reason: `robots.txt could not be fetched (${err.message}); treated as a full disallow (RFC 9309 §2.3.1.4).`, sitemaps: [] });
     }
@@ -344,8 +372,8 @@ class Run {
         if (stop) return stop;
         await append({ started: e.url });
       } else if (e.type === "doc") {
-        // Shutting down mid-request: leave the document "started" so a resumed run files it as interrupted.
-        if (e.doc.error && this.opts.signal?.aborted) return "shutdown";
+        // Stopping mid-request: leave the document "started" so a resumed run files it as interrupted.
+        if (e.doc.error && this.signal.aborted) return (await this.checkStop()) ?? "shutdown";
         await append(e.doc);
       } else {
         await upsertUrls(this.db, this.crawlId, e.urls.map((u) => this.newUrl(u.url, u.original, "sitemap", null)));
@@ -398,7 +426,7 @@ class Run {
     };
     const work = async () => {
       while (!halted && next < batch.length) {
-        if (this.opts.signal?.aborted) {
+        if (this.signal.aborted) {
           halted = "stopped";
           return;
         }
@@ -406,9 +434,9 @@ class Run {
         // Take the host slot before committing, so a committed URL never waits out a backoff unsent.
         let slot: string;
         try {
-          slot = await this.throttle.acquire(this.opts.signal);
+          slot = await this.throttle.acquire(this.signal);
         } catch (e) {
-          if (!this.opts.signal?.aborted) throw e;
+          if (!this.signal.aborted) throw e;
           halted = "stopped"; // aborted while waiting; the reservation is released
           return;
         }
@@ -443,8 +471,9 @@ class Run {
       try {
         res = await this.request(r.url, { accept: "html", followRedirects: false, maxBytes }, slot);
       } catch (e) {
-        // Shutting down mid-request: it may have reached the server, so it is not retried.
+        // Stopped mid-request: it may have reached the server, so it is not retried.
         if (this.opts.signal?.aborted) return { state: "interrupted", reason: INTERRUPTED_REASON };
+        if (this.fetchSignal.aborted) return { state: "cancelled", reason: "The crawl was cancelled while this request was in flight; the response was not read." };
         return failure(e);
       }
       if ((res.status !== 429 && res.status !== 503) || retries >= MAX_THROTTLE_RETRIES) return this.classify(r, res, retries);
@@ -453,10 +482,11 @@ class Run {
         return this.classify(r, res, retries, `Retry-After asks for ${Math.round(wait / 1000)} s, longer than the ${RETRY_WAIT_CAP_MS / 1000} s this crawl waits; not retried.`);
       }
       try {
-        slot = await this.throttle.acquire(this.opts.signal); // waits out the backoff the 429/503 just set
+        slot = await this.throttle.acquire(this.signal); // waits out the backoff the 429/503 just set
       } catch (e) {
-        if (!this.opts.signal?.aborted) throw e;
-        return this.classify(r, res, retries, "The worker stopped before the retry.");
+        if (!this.signal.aborted) throw e;
+        const why = this.opts.signal?.aborted ? "The worker stopped" : this.fetchSignal.aborted ? "The crawl was cancelled" : "The crawl was paused";
+        return this.classify(r, res, retries, `${why} before the retry.`);
       }
       try {
         await recordRetry(this.db, r.id, token);

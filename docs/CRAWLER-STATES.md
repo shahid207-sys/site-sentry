@@ -179,6 +179,22 @@ the server and was then lost is never retried: the URL ends `interrupted`.
 | `TLS` (Node/OpenSSL `CERT_*`, `ERR_TLS_*`, `ERR_SSL_*`, self-signed or unverifiable chains) | `failed_tls` |
 | anything else | `failed_network` |
 
+### Pause and cancel
+
+The runner polls `crawls.status` every 500 ms (`STATUS_POLL_MS`). Every wait listens to that poll: the host
+throttle's slot and backoff wait, the wait before a 429/503 retry, and the robots.txt and sitemap reads. Pause and
+cancel therefore take effect within about 0.5 s, and within 2 s in every test, even while the host is held for a
+60 s `Retry-After`.
+
+- **Pause.** No new request starts. A request already in flight is allowed to finish and is recorded normally. Rows
+  claimed but not yet sent go back to `discovered` for the resume.
+- **Cancel** (and worker shutdown). Requests in flight are aborted as well. A request aborted by cancel ends
+  `cancelled` with `The crawl was cancelled while this request was in flight; the response was not read.` One
+  aborted by worker shutdown ends `interrupted`, as before.
+- **A pause or cancel during a 429/503 retry wait** files the page with the status already received and a note:
+  `HTTP 503. The crawl was paused before the retry.` The page is not requested again on resume. This is the price of
+  stopping promptly: the alternative is to keep the claim open across a pause.
+
 ## Profiles
 
 Defined once in `src/lib/crawl/profiles.ts` and read by the API, the New audit form, the add-site form, the homepage

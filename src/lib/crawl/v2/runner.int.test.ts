@@ -356,3 +356,85 @@ describe("runCrawl Custom profile scope and auth", () => {
     expect(srv.hits.size).toBe(0);
   });
 });
+
+describe("runCrawl pause and cancel take effect within 2 s", () => {
+  const fast = () => hostThrottle({ ratePerSecond: 1000 }); // spec backoff: a 503 with Retry-After holds the host for up to 60 s
+  const row = async (crawlId: string, path: string) =>
+    (await db.execute(sql`select state, reason from crawl_urls where crawl_id = ${crawlId}::uuid and normalised_url = ${srv.origin + path}`)).rows[0] as { state: string; reason: string };
+  const setStatus = (c: string, status: string) => db.execute(sql`update crawls set status = ${status} where id = ${c}::uuid`);
+  const until = async (cond: () => boolean) => {
+    while (!cond()) await new Promise((r) => setTimeout(r, 10));
+  };
+  /**
+   * /busy answers 503 with Retry-After: 50, so its lane waits 50 s for the retry. /x is linked from /a (fetched
+   * alongside /busy), so it can only be claimed in the next batch, which waits for that retry: it is never fetched.
+   */
+  const heldHost = () => {
+    srv.routes.set("/", page(["/busy", "/a"]));
+    srv.routes.set("/busy", send("busy", "text/html", 503, { "retry-after": "50" }));
+    srv.routes.set("/a", page(["/x"]));
+    srv.routes.set("/x", page([]));
+  };
+
+  it("pause during a Retry-After wait: stops within 2 s, files the 503, and leaves the rest to resume", async () => {
+    heldHost();
+    const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
+    const run = runCrawl(opts({ throttle: fast() }), c);
+    await until(() => srv.hits.get("/busy") === 1);
+    await new Promise((r) => setTimeout(r, 100)); // the 503 is in; the host is now held for 50 s
+    const t0 = Date.now();
+    await setStatus(c, "paused");
+    expect(await run).toBe("paused");
+    expect(Date.now() - t0).toBeLessThan(2_000);
+    expect(await row(c, "/busy")).toMatchObject({ state: "fetched", reason: "HTTP 503. The crawl was paused before the retry." });
+    expect(srv.hits.get("/busy")).toBe(1);
+    expect(srv.hits.has("/x")).toBe(false);
+    expect(await activeCount(db, c)).toMatchObject({ queued: 0, fetching: 0, discovered: 1 }); // /x, for the resume
+  });
+
+  it("cancel during a Retry-After wait: ends cancelled within 2 s", async () => {
+    heldHost();
+    const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
+    const run = runCrawl(opts({ throttle: fast() }), c);
+    await until(() => srv.hits.get("/busy") === 1);
+    await new Promise((r) => setTimeout(r, 100));
+    const t0 = Date.now();
+    await setStatus(c, "cancelling");
+    expect(await run).toBe("cancelled");
+    expect(Date.now() - t0).toBeLessThan(2_000);
+    expect(await row(c, "/busy")).toMatchObject({ reason: "HTTP 503. The crawl was cancelled before the retry." });
+    expect(await row(c, "/x")).toMatchObject({ state: "cancelled" });
+    expect(((await db.execute(sql`select status from crawls where id = ${c}::uuid`)).rows[0] as { status: string }).status).toBe("cancelled");
+  });
+
+  it("cancel with a request in flight: aborts it and ends cancelled within 2 s", async () => {
+    srv.routes.set("/", page(["/hang"]));
+    srv.routes.set("/hang", (req, res) => void setTimeout(() => !res.destroyed && page([])(req, res), 10_000));
+    const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
+    const run = runCrawl(opts({ throttle: fast() }), c);
+    await until(() => srv.hits.get("/hang") === 1);
+    const t0 = Date.now();
+    await setStatus(c, "cancelling");
+    expect(await run).toBe("cancelled");
+    expect(Date.now() - t0).toBeLessThan(2_000);
+    expect(await row(c, "/hang")).toMatchObject({ state: "cancelled", reason: "The crawl was cancelled while this request was in flight; the response was not read." });
+  });
+
+  it("pause with a request in flight: no new request starts, and the one in flight is recorded, not interrupted", async () => {
+    const arrivals: [string, number][] = [];
+    const kids = Array.from({ length: 6 }, (_, i) => `/k/${i}`);
+    srv.routes.set("/", page(["/slow"]));
+    srv.routes.set("/slow", (req, res) => (arrivals.push(["/slow", Date.now()]), void setTimeout(() => page(kids)(req, res), 1_500)));
+    for (const k of kids) srv.routes.set(k, (req, res) => (arrivals.push([k, Date.now()]), void setTimeout(() => page([])(req, res), 300)));
+    const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
+    const run = runCrawl(opts({ throttle: oneAtATime() }), c); // /slow links the kids, which are found only after the pause
+    await until(() => srv.hits.get("/slow") === 1);
+    const t0 = Date.now();
+    await setStatus(c, "paused");
+    expect(await run).toBe("paused");
+    expect(arrivals.filter(([, t]) => t > t0 + 2_000)).toEqual([]);
+    expect(await row(c, "/slow")).toMatchObject({ state: "fetched", reason: "HTTP 200" });
+    expect(await activeCount(db, c)).toMatchObject({ queued: 0, fetching: 0 });
+    expect((await activeCount(db, c)).discovered).toBeGreaterThan(0);
+  });
+});
