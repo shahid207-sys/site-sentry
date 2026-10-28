@@ -1,0 +1,39 @@
+# Local infrastructure for crawler v2 (CRAWLER_V2=true): Postgres for crawl state, Redis for the BullMQ queue.
+# Development credentials only. Ports bind to 127.0.0.1; Postgres uses 5433 because 5432 is often taken by a local install.
+#   docker compose up -d
+#   DATABASE_URL=postgres://sitesentry:sitesentry@127.0.0.1:5433/sitesentry
+#   REDIS_URL=redis://127.0.0.1:6379
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sitesentry
+      POSTGRES_PASSWORD: sitesentry
+      POSTGRES_DB: sitesentry
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sitesentry -d sitesentry"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    # AOF so queued jobs survive a container restart; BullMQ requires noeviction.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:
+  redisdata:
