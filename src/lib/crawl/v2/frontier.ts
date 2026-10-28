@@ -153,6 +153,13 @@ export async function reserve(db: Db, crawlId: string, owner: string, limit: num
         -- Once the budget is spent nothing more is handed out; the leftovers are finalised as budget_exhausted.
         and exists (select 1 from crawls k where k.id = ${crawlId}::uuid and (k.budget is null or k.fetches_committed < k.budget))
         and (${maxDepth}::int is null or depth is null or depth <= ${maxDepth}::int or discovered_via && array['seed','sitemap']::text[])
+        -- Sitemap-only rows (null depth) wait until no row with a link depth is left to claim. Their children count
+        -- from depth 0, so fetching one early would give pages that links do reach a lower depth than their real
+        -- click depth, and LEAST would keep it.
+        and (depth is not null or not exists (
+          select 1 from crawl_urls a
+          where a.crawl_id = ${crawlId}::uuid and a.state = 'discovered' and a.depth is not null
+            and (${maxDepth}::int is null or a.depth <= ${maxDepth}::int or a.discovered_via && array['seed','sitemap']::text[])))
       order by depth nulls last, id
       limit ${limit}
       for update skip locked

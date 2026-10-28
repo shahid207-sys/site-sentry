@@ -89,6 +89,10 @@ cause a second fetch.
   depth (a redirect is not a click), with `redirect_hops` + 1. Beyond 10 hops the target is `excluded_by_rule`.
 - A row is eligible when its depth is within the profile's maximum, or a seed or sitemap lists it. Rows that are left
   over and beyond the depth limit end as `depth_exceeded`, and all other leftovers as `budget_exhausted`.
+- Sitemap-only rows wait: `reserve` claims a null-depth row only when no eligible row with a known link depth is still
+  `discovered`. Otherwise one large batch of sitemap pages, fetched before the start page's links are recorded, would
+  give their children depth 1 and `LEAST` would keep that wrong depth. The cost: lanes can idle briefly between the
+  last link-depth batch and the first sitemap-only one.
 
 ## Politeness
 

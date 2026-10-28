@@ -66,9 +66,23 @@ describe("reserve", () => {
       u("/too-deep-but-in-sitemap", "link", 4),
     ]);
     await upsertUrls(db, c, [u("/too-deep-but-in-sitemap", "sitemap", null)]);
+    const path = (rs: { url: string }[]) => rs.map((r) => r.url.replace("https://example.test", ""));
     const got = await reserve(db, c, "w1", 10, 3);
-    expect(got.map((r) => r.url.replace("https://example.test", ""))).toEqual(["/d0", "/d1", "/d2", "/too-deep-but-in-sitemap", "/sitemap-only"]);
+    // Sitemap-only rows are held back while a row with a link depth can still be claimed (the batch has room for them).
+    expect(path(got)).toEqual(["/d0", "/d1", "/d2", "/too-deep-but-in-sitemap"]);
+    for (const r of got) await db.execute(sql`update crawl_urls set state = 'fetched', reason = 'test', lease_owner = null where id = ${r.id}`);
+    // A row beyond the depth limit that nothing will claim does not hold them back.
+    expect(path(await reserve(db, c, "w1", 10, 3))).toEqual(["/sitemap-only"]);
     expect((await row(c, "/too-deep"))!.state).toBe("discovered");
+  });
+
+  it("does not fetch sitemap-only pages before the link depths they would distort are known", async () => {
+    // /home links to /a (depth 1), /a links to /b (depth 2). /b is also in the sitemap. If /b were fetched as
+    // sitemap-only, its children would get depth 1 and /c's true depth (3) would be lost.
+    const c = await newCrawl(db);
+    await upsertUrls(db, c, [u("/home", "seed", 0), u("/a", "sitemap", null), u("/b", "sitemap", null), u("/c", "sitemap", null)]);
+    const first = await reserve(db, c, "w1", 200, null);
+    expect(first.map((r) => r.url)).toEqual(["https://example.test/home"]);
   });
 
   it("gives concurrent workers disjoint rows (FOR UPDATE SKIP LOCKED)", async () => {
