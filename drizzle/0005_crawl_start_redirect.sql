@@ -1,0 +1,1 @@
+ALTER TABLE "crawls" ADD COLUMN "start_redirect" jsonb;

@@ -134,6 +134,12 @@ function Outcome({ audit, href }: { audit: AuditSummary; href: string }) {
       Open results
     </LinkButton>
   );
+  if (audit.status === "completed_empty")
+    return (
+      <Notice tone="warn" title="Crawl complete: nothing to analyse" action={open}>
+        {audit.emptyReason ?? "No HTML page was fetched, so no checks ran."} This is not a clean result.
+      </Notice>
+    );
   if (audit.crawler && audit.status === "completed")
     return (
       <Notice tone="warn" title="Crawl complete: no checks were run" action={open}>
@@ -362,6 +368,11 @@ export function AuditProgressView() {
         ]}
       />
 
+      {a.crawler?.startRedirect ? (
+        <Notice tone="info" title={`Started at ${a.crawler.startRedirect.from}, redirected to ${a.crawler.startRedirect.to}`}>
+          The start URL redirects to another address of the same site, so the crawl covers {new URL(a.crawler.startRedirect.to).host} and reads its robots.txt.
+        </Notice>
+      ) : null}
       {a.crawler ? <UrlStates states={a.crawler.states} /> : null}
       {a.crawler?.blobMissing ? (
         <Notice tone="warn" title={`Raw HTML missing for ${plural(a.crawler.blobMissing, "page")}`}>

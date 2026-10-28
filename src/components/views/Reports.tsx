@@ -161,6 +161,8 @@ export function AuditReportView() {
           <Notice tone="warn" title="Crawl only: no checks were run">
             This audit ran on crawler v2, which records which URLs were found and fetched. SEO checks are not run on it yet, so it has no findings. That does not mean the site has no issues.
           </Notice>
+          {a.crawler.startRedirect ? <p className="mt-3 text-[13px] text-fg-2">Started at {a.crawler.startRedirect.from}, redirected to {a.crawler.startRedirect.to}: the crawl covers {new URL(a.crawler.startRedirect.to).host}.</p> : null}
+          {a.status === "completed_empty" ? <p className="mt-3 text-[13px] text-fg-2">Nothing was analysed: {a.emptyReason ?? "no HTML page was fetched."}</p> : null}
         </div>
       ) : null}
       <section className="print-break border-b border-line py-6">

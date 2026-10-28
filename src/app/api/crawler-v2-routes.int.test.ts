@@ -230,4 +230,24 @@ describe("audit API crawl profiles", () => {
       process.env.CRAWLER_V2 = "true";
     }
   });
+
+  it("an audit whose crawl fetched no HTML page ends completed_empty with the reason, and shows a start redirect", async () => {
+    const robots = srv.routes.get("/robots.txt")!;
+    srv.routes.set("/robots.txt", send("User-agent: *\nDisallow: /\n", "text/plain"));
+    try {
+      const body = { ...base, siteId: "s7", urls: [`${origin}/`], profile: "custom", budget: 20, maxDepth: 2 };
+      const { audit } = await call<{ audit: AuditSummary }>(r.audits.POST(post("/api/live/audits", body), ctx({})));
+      const crawlId = audit.crawler!.crawlId;
+      expect(await runCrawl({ db, redis, politeness: { keyPrefix: throttlePrefix }, fetch: fetcher(), owner: "routes-test" }, crawlId)).toBe("completed");
+      const after = (await step(audit.id)).audit;
+      expect(after.status).toBe("completed_empty"); // never a plain "completed"
+      expect(after.emptyReason).toMatch(/^robots\.txt blocks the whole site .*1 blocked robots/);
+      // The start redirect recorded by the runner is shown on the audit ("Started at X, redirected to Y").
+      const moved = { kind: "twin", from: `${origin}/`, to: `http://www.site.test:${srv.port}/`, hops: [{ url: `${origin}/`, status: 301 }] };
+      await db.execute(sql`update crawls set start_redirect = ${JSON.stringify(moved)}::jsonb where id = ${crawlId}::uuid`);
+      expect((await step(audit.id)).audit.crawler).toMatchObject({ startRedirect: { from: moved.from, to: moved.to } });
+    } finally {
+      srv.routes.set("/robots.txt", robots);
+    }
+  });
 });

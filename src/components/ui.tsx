@@ -129,6 +129,7 @@ const AUDIT_STATUS: Record<AuditStatus | "stale", { tone: string; icon: LucideIc
   running: { tone: "bg-info-soft text-info", icon: LoaderCircle, label: "Running" },
   stale: { tone: "bg-sev-medium-soft text-sev-medium", icon: Clock, label: "Interrupted" },
   completed: { tone: "bg-ok-soft text-ok", icon: CircleCheck, label: "Completed" },
+  completed_empty: { tone: "bg-sev-medium-soft text-sev-medium", icon: CircleDashed, label: "Completed, nothing analysed" },
   partial: { tone: "bg-sev-medium-soft text-sev-medium", icon: CircleDashed, label: "Partial" },
   failed: { tone: "bg-sev-high-soft text-sev-high", icon: CircleX, label: "Failed" },
   cancelled: { tone: "bg-elevated text-fg-2 border border-line", icon: Ban, label: "Cancelled" },

@@ -75,7 +75,8 @@ export interface AuditConfig {
   includeImportant: boolean;
 }
 
-export type AuditStatus = "running" | "completed" | "partial" | "failed" | "cancelled";
+/** completed_empty: the crawl finished but no HTML page was fetched to analyse (crawler v2); `emptyReason` says why. */
+export type AuditStatus = "running" | "completed" | "completed_empty" | "partial" | "failed" | "cancelled";
 export type AuditPhase = "robots" | "sitemap" | "pages" | "links" | "finalize" | "done";
 
 export interface QueueItem {
@@ -196,6 +197,8 @@ export interface AuditRun {
   coverage: CoverageNote[];
   /** Fatal error for failed audits. */
   error?: { code: string; message: string };
+  /** Why a completed_empty audit has nothing to analyse. */
+  emptyReason?: string;
   /** Counts by severity of the final findings; set when finalised. */
   findingCounts?: Record<Severity, number>;
   /** Rule config in force for this audit (frozen for comparisons). */
@@ -211,6 +214,8 @@ export interface CrawlerV2Ref {
   status: "queued" | "running" | "paused" | "cancelling" | "completed" | "cancelled" | "failed";
   /** URL counts per state (docs/CRAWLER-STATES.md). */
   states: Record<string, number>;
+  /** The start URL redirected to the same site's www/non-www or http/https twin, and the crawl moved there. */
+  startRedirect?: { from: string; to: string };
   /** Fetched HTML pages whose raw HTML could not be stored (page_snapshots.blob_status = 'blob_missing'). */
   blobMissing?: number;
   syncedAt: string;

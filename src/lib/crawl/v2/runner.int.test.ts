@@ -13,7 +13,9 @@ import { getRawHtml, LocalBlobStore, type BlobStore } from "@/lib/snapshot/blob-
 import { gunzipSync } from "node:zlib";
 import { activeCount, stateCounts } from "./frontier";
 import { HostThrottle, type ThrottleOptions } from "./politeness";
-import { MAX_THROTTLE_RETRIES, runCrawl, V2_USER_AGENT, type RunnerOptions } from "./runner";
+import { isTwinOrigin, MAX_THROTTLE_RETRIES, runCrawl, V2_USER_AGENT, type RunnerOptions, type StartRedirect } from "./runner";
+import { workerFetchPolicy } from "./fetch-policy";
+import { LOCAL_HOSTS_ENV, startFixtureSite } from "../../../../fixtures/site/server";
 import type { ProbeRecord } from "@/lib/rules/probe-types";
 import { runProbes, type ProbeContext } from "./probes";
 
@@ -732,5 +734,66 @@ describe("runCrawl crawl-level probes", () => {
     const probes2 = ((await db.execute(sql`select probes from crawls where id = ${c2}::uuid`)).rows[0] as { probes: ProbeRecord[] }).probes;
     expect(probes2.filter((p) => new URL(p.url).host === new URL(o).host).every((p) => p.skipped?.startsWith("blocked by robots.txt"))).toBe(true);
     for (const path of ["/", "/favicon.ico", "/llms.txt", "/assets/og.png"]) expect(srv.hits.has(path), path).toBe(false); // sitemap discovery still runs
+  });
+});
+
+describe("runCrawl start URL redirects", () => {
+  it("moves to the www/non-www twin the start URL redirects to: reads the twin's robots.txt and crawls only the twin", async () => {
+    const site = await startFixtureSite();
+    try {
+      const fetch = createSafeFetch(workerFetchPolicy({ NODE_ENV: "test", CRAWLER_LOCAL_HOSTS: LOCAL_HOSTS_ENV, CRAWLER_LOCAL_PORTS: String(site.port) }));
+      // www.fixture.test answers every path with a 301 to fixture.test.
+      const c = await newCrawl(db, { siteOrigin: site.origins.www, status: "queued", budget: 6, maxDepth: 1 });
+      expect(await runCrawl(opts({ fetch }), c)).toBe("completed");
+      const row = (await db.execute(sql`select site_origin, start_redirect, robots from crawls where id = ${c}::uuid`)).rows[0] as { site_origin: string; start_redirect: StartRedirect; robots: { url: string; outcome: string } };
+      expect(row.site_origin).toBe(site.origin);
+      expect(row.start_redirect).toEqual({ kind: "twin", from: `${site.origins.www}/`, to: `${site.origin}/`, hops: [{ url: `${site.origins.www}/`, status: 301 }] });
+      expect(row.robots).toMatchObject({ url: `${site.origin}/robots.txt`, outcome: "parsed" });
+      const states = (await db.execute(sql`select split_part(split_part(normalised_url, '//', 2), '/', 1) as host, state, count(*)::int as n from crawl_urls where crawl_id = ${c}::uuid group by 1, 2`)).rows as { host: string; state: string; n: number }[];
+      const www = new URL(site.origins.www).host;
+      // On www: only the start URL, recorded as the redirect it is. Everything fetched is on the twin.
+      expect(states.filter((s) => s.host === www)).toEqual([{ host: www, state: "redirected", n: 1 }]);
+      expect(states.find((s) => s.host === new URL(site.origin).host && s.state === "fetched")?.n).toBeGreaterThan(0);
+      // No extra pre-check request: www's robots.txt, then its start URL; then the twin's robots.txt.
+      const hits = (host: string, p: string) => site.requests.filter((h) => (h.host ?? "fixture.test") === host && h.path === p).length; // main-host hits carry no host
+      // www "/" twice: the start URL, and at the end the www-variant probe (IDX-021) of the twin, which is relative to it.
+      expect(hits("www.fixture.test", "/")).toBe(2);
+      const probes = ((await db.execute(sql`select probes from crawls where id = ${c}::uuid`)).rows[0] as { probes: ProbeRecord[] }).probes;
+      expect(probes.filter((p) => p.url === `${site.origins.www}/`).map((p) => p.kind)).toEqual(["home_www"]);
+      // www's robots.txt twice: as the crawl's first host, and again before the www probe (probes keep their own
+      // robots.txt records per host; the one read before the move is not reused).
+      expect(hits("www.fixture.test", "/robots.txt")).toBe(2);
+      // www's /robots.txt itself 301s to the twin's, so each of those reads also reaches fixture.test; the twin's
+      // robots.txt was read once more, on its own, when the crawl moved.
+      expect(hits("fixture.test", "/robots.txt")).toBe(hits("www.fixture.test", "/robots.txt") + 1);
+    } finally {
+      await site.close();
+    }
+  });
+
+  it("ends the crawl as failed with start_redirected_off_host when the start URL redirects to another site", async () => {
+    srv.routes.set("/", send("", "text/html", 302, { location: "http://elsewhere.test/welcome" }));
+    srv.routes.set("/robots.txt", send("User-agent: *\nAllow: /\n", "text/plain"));
+    const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
+    expect(await runCrawl(opts(), c)).toBe("failed");
+    const row = (await db.execute(sql`select status, error, start_redirect from crawls where id = ${c}::uuid`)).rows[0] as { status: string; error: { code: string; message: string }; start_redirect: StartRedirect };
+    expect(row.status).toBe("failed");
+    expect(row.error).toMatchObject({ code: "start_redirected_off_host", message: `Started at ${srv.origin}/, which redirects to http://elsewhere.test/welcome, another site. Start a new audit on that site to crawl it.` });
+    expect(row.start_redirect).toMatchObject({ kind: "off_host", from: `${srv.origin}/`, to: "http://elsewhere.test/welcome" });
+    expect(srv.hits.get("/")).toBe(1);
+    expect(pageHits()).toEqual([["/", 1]]); // no sitemap reading, no other page
+  });
+
+  it("isTwinOrigin: www/non-www and http/https of one host are twins; other hosts, subdomains and ports are not", () => {
+    const t = (a: string, b: string) => isTwinOrigin(new URL(a), new URL(b));
+    expect(t("https://example-client.ae/", "https://www.example-client.ae/")).toBe(true);
+    expect(t("https://www.example.com/", "https://example.com/x")).toBe(true);
+    expect(t("http://example.com/", "https://example.com/")).toBe(true);
+    expect(t("http://example.com/", "https://www.example.com/")).toBe(true);
+    expect(t("https://example.com/", "https://example.com/en/")).toBe(false); // same origin: not a move
+    expect(t("https://example.com/", "https://shop.example.com/")).toBe(false);
+    expect(t("https://example.com/", "https://example.org/")).toBe(false);
+    expect(t("http://example.com:8080/", "http://www.example.com:8081/")).toBe(false);
+    expect(t("https://example.com/", "ftp://example.com/")).toBe(false);
   });
 });

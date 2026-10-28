@@ -9,6 +9,7 @@ import type { AuditRun, AuditStatus, CrawlerV2Ref, Workspace } from "../../model
 import type { Store } from "../../store/store";
 import { WorkflowError } from "../../workflow/deps";
 import { stateCounts } from "./frontier";
+import type { StartRedirect } from "./runner";
 import { createCrawlQueue, enqueueCrawl, type CrawlJob } from "./queue";
 import type { CrawlConfig } from "./runner";
 import { crawlSecretScope, encryptSecret, secretKey } from "./secrets";
@@ -84,10 +85,11 @@ export async function startCrawl(
 
 interface CrawlStatusRow {
   status: CrawlerV2Ref["status"];
-  robots: { outcome?: string } | null;
+  robots: { outcome?: string; reason?: string } | null;
   discovery_done: boolean;
   error: { code?: string; message?: string } | null;
   finished_at: string | null;
+  start_redirect: StartRedirect | null;
 }
 
 /** Read the crawl's status and URL counts from Postgres and mirror them onto the audit. */
@@ -96,7 +98,7 @@ export async function syncAudit(db: Db, store: Store, auditId: string): Promise<
   if (!audit) throw new WorkflowError("NOT_FOUND", "Audit not found.");
   if (!audit.crawler) return audit;
   const crawlId = audit.crawler.crawlId;
-  const r = await db.execute(sql`select status, robots, discovery_done, error, finished_at from crawls where id = ${crawlId}::uuid`);
+  const r = await db.execute(sql`select status, robots, discovery_done, error, finished_at, start_redirect from crawls where id = ${crawlId}::uuid`);
   const row = r.rows[0] as unknown as CrawlStatusRow | undefined;
   if (!row) throw new WorkflowError("NOT_FOUND", "The crawl for this audit no longer exists.");
   const states = (await stateCounts(db, crawlId)) as Record<string, number>;
@@ -104,15 +106,23 @@ export async function syncAudit(db: Db, store: Store, auditId: string): Promise<
   const total = Object.values(states).reduce((a, b) => a + b, 0);
   const missing = await db.execute(sql`select count(*)::int as n from page_snapshots where crawl_id = ${crawlId}::uuid and blob_status = 'blob_missing'`);
   const blobMissing = (missing.rows[0] as { n: number }).n;
+  const html = await db.execute(sql`select count(*)::int as n from page_snapshots where crawl_id = ${crawlId}::uuid and facts is not null`);
+  const htmlPages = (html.rows[0] as { n: number }).n;
+  const moved = row.start_redirect?.kind === "twin" && row.start_redirect.to ? { from: row.start_redirect.from, to: row.start_redirect.to } : undefined;
 
   return store.update((d) => {
     const a = d.audits[auditId];
     if (!a?.crawler) throw new WorkflowError("NOT_FOUND", "Audit not found.");
-    a.crawler = { ...a.crawler, status: row.status, states, blobMissing, syncedAt: new Date().toISOString() };
+    a.crawler = { ...a.crawler, status: row.status, states, blobMissing, ...(moved ? { startRedirect: moved } : {}), syncedAt: new Date().toISOString() };
     a.progress = { ...a.progress, planned: total, done: total - sum(ACTIVE), inspected: sum(INSPECTED), failed: sum(FAILED), skipped: sum(SKIPPED) };
     a.heartbeatAt = new Date().toISOString();
     const finished: Partial<Record<CrawlerV2Ref["status"], AuditStatus>> = { completed: "completed", cancelled: "cancelled", failed: "failed" };
-    const status = finished[row.status];
+    let status = finished[row.status];
+    // A crawl that completes without one HTML page to analyse is not a clean result: say so, with the reason.
+    if (status === "completed" && htmlPages === 0) {
+      status = "completed_empty";
+      a.emptyReason = emptyReason(states, row.robots);
+    }
     if (status) {
       a.status = status;
       a.phase = "done";
@@ -126,6 +136,17 @@ export async function syncAudit(db: Db, store: Store, auditId: string): Promise<
     }
     return a;
   });
+}
+
+/** Why a completed crawl fetched no HTML page, from its URL states and robots.txt outcome. */
+export function emptyReason(states: Record<string, number>, robots: { outcome?: string; reason?: string } | null): string {
+  const total = Object.values(states).reduce((a, b) => a + b, 0);
+  const top = Object.entries(states).sort((a, b) => b[1] - a[1]);
+  const list = top.map(([k, n]) => `${n} ${k.replace(/_/g, " ")}`).join(", ");
+  if (!total) return "No URL was found to crawl.";
+  if (robots?.outcome === "disallow_all" || states.blocked_robots === total) return `robots.txt blocks the whole site (${robots?.reason ?? "every URL found is disallowed"}), so no page was fetched. URLs: ${list}.`;
+  if (states.out_of_scope === total) return `Every URL found was outside this audit's scope (another host or subfolder), so no page was fetched. URLs: ${list}.`;
+  return `No HTML page was fetched, so no checks ran. URLs: ${list}.`;
 }
 
 /** Pause, resume or cancel through crawls.status; the worker acts on it before its next request. */

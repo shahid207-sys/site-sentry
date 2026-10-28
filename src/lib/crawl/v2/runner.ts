@@ -126,10 +126,34 @@ interface CrawlRow {
   sitemaps: SitemapLogEntry[];
   probes: ProbeRecord[];
   discovery_done: boolean;
+  start_redirect: StartRedirect | null;
 }
 
+/**
+ * What the start URL did before the crawl began. "twin": it redirected to the same site's www/non-www or http/https
+ * variant, and the crawl moved there (site_origin is the target; `from` keeps what the user asked for). "off_host":
+ * it redirected to another site, and the crawl ended as failed with start_redirected_off_host. "none": no redirect
+ * off the start origin (or the check could not get an answer; the seed fetch then records why).
+ */
+export interface StartRedirect {
+  kind: "none" | "twin" | "off_host";
+  from: string;
+  to: string | null;
+  hops: { url: string; status: number }[];
+  error?: string;
+}
+
+/** Same site, other door: hostnames equal once a leading "www." is dropped, scheme http or https, same explicit port. */
+export function isTwinOrigin(a: URL, b: URL): boolean {
+  const bare = (h: string) => h.toLowerCase().replace(/^www\./, "");
+  return a.origin !== b.origin && /^https?:$/.test(b.protocol) && bare(a.hostname) === bare(b.hostname) && a.port === b.port;
+}
+
+/** Redirect hops followed while resolving the start URL. */
+const START_MAX_HOPS = 5;
+
 async function loadCrawl(db: Db, crawlId: string): Promise<CrawlRow | undefined> {
-  const r = await db.execute(sql`select id, site_origin, status, budget, max_depth, config, robots, sitemaps, probes, discovery_done from crawls where id = ${crawlId}::uuid`);
+  const r = await db.execute(sql`select id, site_origin, status, budget, max_depth, config, robots, sitemaps, probes, discovery_done, start_redirect from crawls where id = ${crawlId}::uuid`);
   return r.rows[0] as unknown as CrawlRow | undefined;
 }
 
@@ -251,6 +275,11 @@ class Run {
       const stop = await this.checkStop();
       if (stop) return stop;
       await this.seed();
+      const start = await this.resolveStart();
+      if (start === "stopped") return (await this.checkStop()) ?? "shutdown";
+      if (start?.kind === "off_host") {
+        return this.finishFailed({ code: "start_redirected_off_host", message: `Started at ${start.from}, which redirects to ${start.to}, another site. Start a new audit on that site to crawl it.` });
+      }
       if (!crawl.discovery_done) {
         const stopped = await this.discover();
         if (stopped) return stopped;
@@ -264,6 +293,81 @@ class Run {
       const pruned = await this.throttle.detach(this.crawlId).catch(() => "error" as const);
       this.log("crawl.throttle_detached", { crawlId: this.crawlId, host: this.host, pruned });
     }
+  }
+
+  // ---------- start URL ----------
+
+  /**
+   * After robots.txt and before sitemaps: fetch the start URL on its own, through the normal fetch path (no extra
+   * request). If it redirects to the same site's www/non-www or http/https twin, the crawl moves there: the twin's
+   * robots.txt is read, the target becomes the seed, and the check repeats (http apex → https apex → https www). If it
+   * redirects to another site, the caller ends the crawl. Checked once; the result is stored on the crawl.
+   */
+  private async resolveStart(): Promise<StartRedirect | "stopped" | null> {
+    if (this.crawl.start_redirect) return this.crawl.start_redirect;
+    if (this.crawl.config?.seeds?.length) return null; // explicit seeds: the user chose the URLs
+    const from = this.startUrl();
+    const rec: StartRedirect = { kind: "none", from, to: null, hops: [] };
+    for (let hop = 0; hop < START_MAX_HOPS; hop++) {
+      const cur = this.startUrl();
+      let row = await this.urlRow(cur);
+      if (row && (row.state === "discovered" || row.state === "queued")) {
+        const batch = (await reserve(this.db, this.crawlId, this.owner, 1, this.crawl.max_depth, this.leaseMs)).filter((r) => Number(r.id) === Number(row!.id));
+        if (batch.length) await this.processBatch(batch);
+        await releaseReservations(this.db, this.owner);
+        if (this.signal.aborted) return "stopped";
+        row = await this.urlRow(cur);
+      }
+      if (row?.state !== "redirected" || !row.redirect_target) break;
+      const next = new URL(row.redirect_target);
+      rec.hops.push({ url: cur, status: row.status_code ?? 0 });
+      if (next.origin === new URL(cur).origin) break; // a path redirect on the same host: the crawl follows it as usual
+      if (!isTwinOrigin(new URL(from), next)) {
+        Object.assign(rec, { kind: "off_host", to: next.toString() });
+        break;
+      }
+      Object.assign(rec, { kind: "twin", to: next.toString() });
+      if (!(await this.rehome(next))) return "stopped";
+    }
+    await this.db.execute(sql`update crawls set start_redirect = ${JSON.stringify(rec)}::jsonb where id = ${this.crawlId}::uuid`);
+    this.crawl.start_redirect = rec;
+    if (rec.kind !== "none") this.log("crawl.start_redirect", { crawlId: this.crawlId, ...rec });
+    return rec;
+  }
+
+  private startUrl(): string {
+    return new URL(this.scope.subfolder ?? "/", this.crawl.site_origin).toString();
+  }
+
+  private async urlRow(url: string) {
+    const n = normaliseUrl(url);
+    if (!n.ok) return undefined;
+    const r = await this.db.execute(sql`select id, state, status_code, redirect_target from crawl_urls where crawl_id = ${this.crawlId}::uuid and normalised_url = ${n.url}`);
+    return r.rows[0] as { id: number; state: string; status_code: number | null; redirect_target: string | null } | undefined;
+  }
+
+  /**
+   * Move the crawl to the twin origin of `target`: new host throttle, that host's robots.txt, and the URLs already
+   * filed out of scope on it (the redirect target) filed again as seeds under the new host's rules. Nothing but the
+   * start URL has been fetched yet, so nothing else needs re-filing.
+   */
+  private async rehome(target: URL): Promise<boolean> {
+    this.crawl.site_origin = target.origin;
+    this.host = target.host;
+    this.origin = target.origin;
+    await this.db.execute(sql`update crawls set site_origin = ${target.origin}, robots = null where id = ${this.crawlId}::uuid`);
+    if (!this.opts.throttle) {
+      await this.throttle.detach(this.crawlId).catch(() => {});
+      this.throttle = new HostThrottle(this.opts.redis, this.host, this.opts.politeness);
+      await this.throttle.attach(this.crawlId);
+    }
+    this.crawl.robots = null;
+    if (!(await this.loadRobots())) return false;
+    const moved = await this.db.execute(sql`delete from crawl_urls where crawl_id = ${this.crawlId}::uuid and state = 'out_of_scope'
+      and split_part(split_part(normalised_url, '//', 2), '/', 1) = ${this.host} returning url`);
+    const seeds = (moved.rows as { url: string }[]).map((r) => r.url);
+    await upsertUrls(this.db, this.crawlId, [...new Set([...seeds, this.startUrl()])].map((u) => this.newUrl(u, u, "seed", 0)));
+    return true;
   }
 
   // ---------- robots.txt ----------

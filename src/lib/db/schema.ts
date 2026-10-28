@@ -32,6 +32,8 @@ export const crawls = pgTable(
     /** One record per sitemap document read, failed or skipped. */
     sitemaps: jsonb("sitemaps").notNull().default(sql`'[]'::jsonb`),
     discoveryDone: boolean("discovery_done").notNull().default(false),
+    /** Where the start URL redirected before the crawl began (StartRedirect in runner.ts); null until checked. */
+    startRedirect: jsonb("start_redirect"),
     /** Crawl-level probe results (src/lib/rules/probe-types.ts). */
     probes: jsonb("probes").notNull().default(sql`'[]'::jsonb`),
     /** Analysis job progress: { status, startedAt, finishedAt, pages, findings, error }. */
