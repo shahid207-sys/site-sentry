@@ -72,8 +72,8 @@ describe("runCrawl", () => {
     expect(s["/file.pdf"]).toMatchObject({ state: "non_html" });
     expect(s["/missing"]).toMatchObject({ state: "fetched", reason: "HTTP 404" });
     expect(s["/sitemap-only"]).toMatchObject({ state: "fetched", depth: null, via: ["sitemap"] });
-    // A sitemap-only page counts as depth 0 for its children.
-    expect(s["/from-sitemap-page"]).toMatchObject({ state: "fetched", depth: 1, via: ["link"] });
+    // Linked only from a sitemap-only page: fetched, but no link path from the start URL reaches it.
+    expect(s["/from-sitemap-page"]).toMatchObject({ state: "fetched", depth: null, via: ["link"] });
 
     expect(await activeCount(db, c)).toEqual({ discovered: 0, queued: 0, fetching: 0 });
     expectNoDuplicateFetches();

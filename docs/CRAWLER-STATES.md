@@ -82,7 +82,14 @@ cause a second fetch.
 
 ## Depth and eligibility
 
-- `depth` is the minimum link depth from a seed. It is null when only sitemaps found the URL. Merging takes `LEAST`.
+- While the crawl runs, `depth` is the frontier depth: the minimum depth from a seed over every reference, null
+  when only sitemaps found the URL. Merging takes `LEAST`. It orders claims and enforces the depth limit.
+- When the crawl ends (completed, cancelled or failed), `finalizeUrls` replaces it with the **final click depth**,
+  computed by one breadth-first pass over `url_edges` from the seeds: an `<a>`/`<area>` link (via `link`) is one
+  click, a redirect hop is zero, and canonical, hreflang, alternate, pagination `<link>` and iframe references are not
+  clicks. A URL that no link path from a seed reaches gets `depth = null` ("not linked from the start URL"), which
+  includes sitemap-only pages and pages linked only from them. `depth_exceeded` reasons are rewritten from the final
+  depth, which is never lower than the frontier depth.
 - `discovered_via` is the sorted union of every source that found the URL.
 - A child's depth is its parent's depth + 1. A page found only through sitemaps (null depth) counts as depth 0 for
   its children, so sitemap-only pages cannot carry links past the depth limit. A redirect target keeps the source's
@@ -93,8 +100,8 @@ cause a second fetch.
   `discovered`. Otherwise one large batch of sitemap pages, fetched before the start page's links are recorded, would
   give their children depth 1 and `LEAST` would keep that wrong depth. The cost: lanes idle while the last link-depth
   rows are in flight, before the first sitemap-only batch can be claimed (not measured separately).
-- Depth is still not exact. A sitemap-only page counts as depth 0 for its children, so one fetched after the
-  link crawl can lower the depth of a page that links also reach. Click-depth rules (Phase 2) must allow for this.
+- During the crawl, the frontier depth can still be too low (a sitemap-only page fetched after the link crawl counts
+  as depth 0 for its children). The final click depth corrects this; reports and rules read only the final value.
 
 ## Politeness
 

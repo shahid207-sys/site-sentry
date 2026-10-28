@@ -6,6 +6,7 @@ import {
   ClaimLostError,
   commitToSend,
   finalizeUrls,
+  insertEdges,
   recordResult,
   releaseReservations,
   reserve,
@@ -231,8 +232,35 @@ describe("recovery and finalisation", () => {
     await recordResult(db, c, first.id, commit.token, { state: "fetched", reason: "HTTP 200", statusCode: 200 });
     await finalizeUrls(db, c, "completed", 2, 1);
     expect(await stateCounts(db, c)).toEqual({ fetched: 1, budget_exhausted: 1, depth_exceeded: 1 });
-    expect((await row(c, "/deep"))!.reason).toMatch(/5 clicks/);
+    // No recorded edge reaches /deep, so its final click depth is unknown and the reason says so.
+    expect(await row(c, "/deep")).toMatchObject({ depth: null, reason: expect.stringMatching(/^Not reachable by links from the start URL/) });
     expect(await activeCount(db, c)).toEqual({ discovered: 0, queued: 0, fetching: 0 });
+  });
+
+  it("finalize recomputes click depth by one BFS over link edges from the seeds", async () => {
+    const c = await newCrawl(db, { maxDepth: 3 });
+    // Frontier depths as a crawl leaves them: /s is sitemap-only, so /x got depth 1 from it although links reach /x
+    // only at depth 3; /orphan-child is linked only from /s; /canon is reached only by a canonical reference.
+    await upsertUrls(db, c, [
+      u("/", "seed", 0), u("/a", "link", 1), u("/b", "link", 2), u("/x", "link", 1), u("/s", "sitemap", null),
+      u("/orphan-child", "link", 1), u("/old", "link", 1), u("/mid", "redirect", 1), u("/new", "redirect", 1),
+      u("/canon", "canonical", 1), u("/c4", "link", 4),
+    ]);
+    const e = (from: string, to: string, via = "link") => ({ fromUrl: `https://example.test${from}`, toUrl: `https://example.test${to}`, via, anchor: null, rel: null, location: null, nofollow: false });
+    await insertEdges(db, c, [
+      e("/", "/a"), e("/a", "/b"), e("/b", "/x"), e("/s", "/x"), e("/s", "/orphan-child"),
+      e("/", "/old"), e("/old", "/mid", "redirect"), e("/mid", "/new", "redirect"), e("/new", "/a"),
+      e("/a", "/canon", "canonical"), e("/x", "/c4"),
+      e("/b", "/a"), // a cycle back up does not lower or loop
+    ]);
+    await db.execute(sql`update crawl_urls set state = 'fetched', reason = 'HTTP 200' where crawl_id = ${c}::uuid and normalised_url !~ '/c4$'`);
+    await finalizeUrls(db, c, "completed", 3, null);
+
+    const depths: Record<string, number | null> = {};
+    for (const p of ["/", "/a", "/b", "/x", "/s", "/orphan-child", "/old", "/mid", "/new", "/canon", "/c4"]) depths[p] = (await row(c, p))!.depth;
+    expect(depths).toEqual({ "/": 0, "/a": 1, "/b": 2, "/x": 3, "/s": null, "/orphan-child": null, "/old": 1, "/mid": 1, "/new": 1, "/canon": null, "/c4": 4 });
+    // The depth_exceeded reason quotes the final depth, not the frontier's.
+    expect(await row(c, "/c4")).toMatchObject({ state: "depth_exceeded", reason: "Found only through links 4 clicks from the start URL; this crawl follows links up to 3." });
   });
 
   it("finalize on cancel marks leftovers cancelled", async () => {

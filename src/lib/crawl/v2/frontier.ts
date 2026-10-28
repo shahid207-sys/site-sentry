@@ -300,7 +300,40 @@ export async function finalizeUrls(db: Db, crawlId: string, outcome: "completed"
         reason = ${`The crawl's URL budget${budget !== null ? ` of ${budget}` : ""} was used up before this URL was fetched.`},
         lease_owner = null, lease_until = null, updated_at = now()
       where crawl_id = ${crawlId}::uuid and state in ('discovered', 'queued')`);
+    await recomputeClickDepths(tx, crawlId, maxDepth);
   });
+}
+
+/**
+ * Final click depth: one breadth-first pass over the recorded edges from the seeds. Only `<a>`/`<area>` links
+ * (via 'link') count as a click; a redirect hop costs nothing; canonical, hreflang, alternate, pagination `<link>`
+ * and iframe references are not clicks. A URL no link path reaches gets null ("not linked from the start URL"),
+ * including sitemap-only pages. Replaces the frontier depth, which treats a sitemap-only page as depth 0.
+ * `depth_exceeded` reasons are rewritten from the final depth, which is never lower than the frontier depth.
+ */
+export async function recomputeClickDepths(tx: Exec, crawlId: string, maxDepth: number | null): Promise<void> {
+  await tx.execute(sql`create temp table if not exists click_depth (url text primary key, depth int not null) on commit drop`);
+  await tx.execute(sql`truncate click_depth`);
+  await tx.execute(sql`insert into click_depth select normalised_url, 0 from crawl_urls where crawl_id = ${crawlId}::uuid and 'seed' = any(discovered_via)`);
+  const step = (via: "redirect" | "link", to: number, from: number) =>
+    tx.execute(sql`insert into click_depth
+      select distinct e.to_url, ${to}::int from url_edges e join click_depth b on b.url = e.from_url and b.depth = ${from}::int
+      where e.crawl_id = ${crawlId}::uuid and e.via = ${via}
+      on conflict do nothing`);
+  for (let d = 0; ; d++) {
+    // Redirect targets share the depth of their source, through any number of hops.
+    for (let more = true; more; ) more = !!(await step("redirect", d, d)).rowCount;
+    if (!(await step("link", d + 1, d)).rowCount) break;
+  }
+  await tx.execute(sql`update crawl_urls u set depth = b.depth, updated_at = now()
+    from (select c.id, d.depth from crawl_urls c left join click_depth d on d.url = c.normalised_url where c.crawl_id = ${crawlId}::uuid) b
+    where u.id = b.id and u.depth is distinct from b.depth`);
+  if (maxDepth !== null) {
+    await tx.execute(sql`update crawl_urls set reason = case when depth is null
+        then 'Not reachable by links from the start URL, and found only through references beyond this crawl''s depth limit of ' || ${maxDepth}::int || '.'
+        else 'Found only through links ' || depth || ' clicks from the start URL; this crawl follows links up to ' || ${maxDepth}::int || '.' end
+      where crawl_id = ${crawlId}::uuid and state = 'depth_exceeded'`);
+  }
 }
 
 export async function stateCounts(db: Exec, crawlId: string): Promise<Partial<Record<UrlState, number>>> {
