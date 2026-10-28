@@ -10,7 +10,7 @@ import { RULES } from "../../src/lib/rules/registry";
 import { extractHtml } from "../../src/lib/snapshot/extract";
 import { simhashSimilarity } from "../../src/lib/snapshot/text";
 import { manifestPaths } from "./definition";
-import { DEFECTS, EXACT_SECTIONS, expectedFindings, INDEX_EXTRAS } from "./defects";
+import { DEFECTS, EXACT_SECTIONS, expectedFindings, findingKey, INDEX_EXTRAS } from "./defects";
 import { gunzipSync } from "node:zlib";
 import { ALT3_SITEMAP_URLS, createRouter, fixtureSitemaps, LASTMOD, LLMS_TXT } from "./server";
 
@@ -105,13 +105,13 @@ for (const r of RULES) {
     const u = new URL(f.url);
     const key = u.pathname + u.search;
     if (!found.has(key)) found.set(key, new Set());
-    found.get(key)!.add(f.ruleId);
+    found.get(key)!.add(findingKey(f.ruleId, f.outcome));
   }
 }
 const ruleMs = performance.now() - t1;
 
 /** The rules this test evaluates. */
-const judged = (id: string) => RULES.find((r) => r.id === id)?.scope === "page" || SITE_RULES.has(id);
+const judged = (key: string, id = key.split(":")[0]) => RULES.find((r) => r.id === id)?.scope === "page" || SITE_RULES.has(id);
 
 describe("fixture site against its manifest (no crawl)", () => {
   it("renders every manifest page", () => {
@@ -123,7 +123,7 @@ describe("fixture site against its manifest (no crawl)", () => {
     const diffs: string[] = [];
     for (const [path, expected] of expectedFindings()) {
       if (!pages.has(path)) continue; // redirects and error pages: judged by the gate
-      const want = [...new Set(expected.filter(judged))].sort();
+      const want = [...new Set(expected.filter((k) => judged(k)))].sort();
       const got = [...(found.get(path) ?? [])].sort();
       if (want.join() !== got.join()) diffs.push(`${path}: expected [${want}] got [${got}]${DEFECTS[path] ? ` (${DEFECTS[path].name})` : ""}`);
     }

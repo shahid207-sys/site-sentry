@@ -616,6 +616,7 @@ class Run {
       acquire: () => this.throttle.acquire(this.signal),
       release: (slot) => this.throttle.release(slot),
       request: (url, o, slot) => this.request(url, o, slot),
+      robotsToken: ROBOTS_TOKEN,
       robotsBlocked: (url) => {
         if (new URL(url).host !== this.host) return null;
         if (this.robotsRecord?.outcome === "disallow_all") return this.robotsRecord.reason ?? "robots.txt disallows everything";

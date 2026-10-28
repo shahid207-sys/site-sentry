@@ -16,9 +16,18 @@ export interface Finding {
   /** The URL the finding is about (a page, robots.txt, a sitemap, llms.txt…). */
   url: string;
   confidence: Confidence;
+  /**
+   * "issue": the rule found the problem. "inconclusive": the rule could not judge this subject (its input was not
+   * available, e.g. a probe skipped by robots.txt); evidence.code says why. Maps to SPEC's `inconclusive` finding state.
+   */
+  outcome: Outcome;
   message: string;
   evidence: Record<string, unknown>;
 }
+
+export type Outcome = "issue" | "inconclusive";
+/** Machine-readable reasons a rule reports inconclusive. */
+export type InconclusiveCode = "probe_skipped_robots" | "low_confidence";
 
 /** What a rule knows about the crawl as a whole. */
 export interface CrawlView {
@@ -115,7 +124,12 @@ export class NeedsConfig extends Error {
 
 /** A finding for `rule` about `url`. */
 export function finding(rule: Pick<Rule, "id" | "version" | "confidence">, url: string, message: string, evidence: Record<string, unknown> = {}): Finding {
-  return { ruleId: rule.id, ruleVersion: rule.version, url, confidence: rule.confidence, message, evidence };
+  return { ruleId: rule.id, ruleVersion: rule.version, url, confidence: rule.confidence, outcome: "issue", message, evidence };
+}
+
+/** The rule could not judge `url`; `code` says why. */
+export function inconclusive(rule: Pick<Rule, "id" | "version" | "confidence">, url: string, code: InconclusiveCode, message: string, evidence: Record<string, unknown> = {}): Finding {
+  return { ...finding(rule, url, message, { code, ...evidence }), outcome: "inconclusive" };
 }
 
 /** HTML 200 page that may be indexed: no noindex for all crawlers, and no canonical pointing elsewhere. */

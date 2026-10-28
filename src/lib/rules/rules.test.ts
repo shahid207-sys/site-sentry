@@ -356,10 +356,30 @@ describe.each(Object.keys(CASES))("%s", (id) => {
   it("fires on its positive case", () => {
     const f = CASES[id].pos();
     expect(f.length).toBeGreaterThan(0);
-    for (const x of f) expect(x).toMatchObject({ ruleId: id, ruleVersion: rule(id).version, confidence: rule(id).confidence });
+    for (const x of f) expect(x).toMatchObject({ ruleId: id, ruleVersion: rule(id).version, confidence: rule(id).confidence, outcome: "issue" });
   });
   it("is silent on its negative case", () => {
     expect(CASES[id].neg()).toEqual([]);
+  });
+});
+
+describe("probes skipped by robots.txt make their rules inconclusive, not silent", () => {
+  const skipped = (kind: ProbeRecord["kind"], url: string) => probe(kind, url, { started: false, status: null, skipped: "blocked by robots.txt: Disallow: / applies to SiteSentryBot", skipCode: "probe_skipped_robots" });
+  it.each([
+    ["IDX-020", skipped("home_scheme", "http://a.test/"), U("/")],
+    ["IDX-021", skipped("home_www", "https://www.a.test/"), U("/")],
+    ["META-017", skipped("og_image", U("/og.png")), null],
+    ["META-019", skipped("favicon", U("/favicon.ico")), U("/")],
+    ["AIS-003", skipped("llms_txt", U("/llms.txt")), U("/llms.txt")],
+  ] as const)("%s", (id, p, url) => {
+    const probes = [...GOOD_PROBES.filter((g) => g.kind !== p.kind), p];
+    const f = run(id, cleanSite(), crawlOf({ probes }));
+    expect(f.length).toBeGreaterThan(0);
+    for (const x of f) expect(x).toMatchObject({ ruleId: id, outcome: "inconclusive", evidence: { code: "probe_skipped_robots" } });
+    if (url) expect(f.map((x) => x.url)).toEqual([url]);
+  });
+  it("a probe skipped for another reason (over the og:image cap) stays silent", () => {
+    expect(run("META-017", cleanSite(), crawlOf({ probes: [probe("og_image", U("/og.png"), { started: false, status: null, skipped: "cap", skipCode: "over_cap" })] }))).toEqual([]);
   });
 });
 

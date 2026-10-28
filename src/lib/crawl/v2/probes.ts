@@ -7,6 +7,7 @@
 import { sql } from "drizzle-orm";
 import type { Db } from "../../db/client";
 import { SafeFetchError, type FetchOptions, type FetchResult } from "../../fetch/safe-fetch";
+import { isAllowed, parseRobots } from "../robots";
 import { imageSize } from "../../snapshot/image-size";
 import { MAX_OG_IMAGE_PROBES, resolveOgImage, type ProbeKind, type ProbeRecord } from "../../rules/probe-types";
 
@@ -24,8 +25,10 @@ export interface ProbeContext {
   release(slot: string): Promise<void>;
   /** Send a request in a slot already held; the slot is released when it returns. */
   request(url: string, o: Omit<FetchOptions, "signal" | "timeoutMs" | "userAgent">, slot: string): Promise<FetchResult>;
-  /** Why robots.txt forbids this URL on the crawled host, or null (allowed, or another host). */
+  /** Why the crawl's own robots.txt forbids this URL on the crawled host, or null. Other hosts: see robotsFor. */
   robotsBlocked(url: string): string | null;
+  /** robots.txt user-agent token the crawl obeys. */
+  robotsToken: string;
   /** Aborted when the crawl is stopping; remaining probes are left for the resumed run. */
   signal: AbortSignal;
   log(event: string, data?: Record<string, unknown>): void;
@@ -82,8 +85,82 @@ async function plan(ctx: ProbeContext): Promise<Planned[]> {
 
 const key = (p: { kind: ProbeKind; url: string }) => `${p.kind} ${p.url}`;
 
+/** robots.txt of another host is kept up to this many characters to decide its probes (Google reads 500 KiB). */
+export const ROBOTS_KEEP_CHARS = 64 * 1024;
+/** Transport failures that mean the host does not answer at all: the probe would fail the same way, so it is recorded
+ * as that error (the variant serves nothing) instead of being skipped. An HTTP 5xx or a timeout is not this. */
+const NO_ANSWER = new Set(["DNS_FAILED", "TLS", "NETWORK", "BLOCKED_HOST"]);
+
+type RobotsVerdict = { allowed: true } | { allowed: false; reason: string } | { noAnswer: { code: string; message: string } };
+
+/** RFC 9309 verdict for `url` from a stored robots_txt record. */
+function verdictFrom(rec: ProbeRecord, url: string, token: string): RobotsVerdict {
+  if (rec.error && NO_ANSWER.has(rec.error.code)) return { noAnswer: rec.error };
+  if (rec.status === null) return { allowed: false, reason: `${rec.url} could not be read${rec.error ? ` (${rec.error.message})` : ""}; treated as a full disallow (RFC 9309 §2.3.1.4)` };
+  if (rec.status >= 200 && rec.status < 300) {
+    const d = isAllowed(parseRobots(rec.robotsBody ?? ""), token, url);
+    return d.allowed ? { allowed: true } : { allowed: false, reason: `${rec.url}: ${d.matchedRule ?? "rule"} applies to ${token}` };
+  }
+  if (rec.status >= 400 && rec.status < 500) return { allowed: true };
+  return { allowed: false, reason: `${rec.url} returned ${rec.status}; treated as a full disallow (RFC 9309 §2.3.1.4)` };
+}
+
 async function save(ctx: ProbeContext, list: ProbeRecord[]) {
   await ctx.db.execute(sql`update crawls set probes = ${JSON.stringify(list)}::jsonb where id = ${ctx.crawlId}::uuid`);
+}
+
+function upsert(list: ProbeRecord[], byKey: Map<string, number>, rec: ProbeRecord): ProbeRecord {
+  const at = byKey.get(key(rec));
+  if (at !== undefined) list[at] = rec;
+  else {
+    byKey.set(key(rec), list.length);
+    list.push(rec);
+  }
+  return rec;
+}
+
+/** Send one probe: queued until it holds a throttle slot, then started, then its response stored. Null when the crawl
+ * started stopping first (a queued probe stays unsent; one cut off mid-request stays "started"). */
+async function sendProbe(ctx: ProbeContext, list: ProbeRecord[], byKey: Map<string, number>, p: Planned): Promise<ProbeRecord | null> {
+  const at = byKey.get(key(p));
+  const rec = upsert(list, byKey, at !== undefined ? list[at] : { kind: p.kind, url: p.url, started: false, status: null });
+  let slot: string;
+  try {
+    slot = await ctx.acquire();
+  } catch (e) {
+    if (!ctx.signal.aborted) throw e;
+    await save(ctx, list);
+    return null;
+  }
+  rec.started = true;
+  try {
+    await save(ctx, list);
+  } catch (e) {
+    await ctx.release(slot);
+    throw e;
+  }
+  try {
+    const res = await ctx.request(p.url, p.opts, slot);
+    rec.status = res.status;
+    if (res.contentType) rec.contentType = res.contentType;
+    if (res.location) rec.location = res.location;
+    if (p.kind === "llms_txt" && res.status === 200) rec.body = res.body.slice(0, LLMS_TXT_KEEP_CHARS);
+    if (p.kind === "robots_txt" && res.status >= 200 && res.status < 300) rec.robotsBody = res.body.slice(0, ROBOTS_KEEP_CHARS);
+    if (p.kind === "og_image" && res.status === 200 && res.raw) {
+      const size = imageSize(res.raw);
+      if (size) Object.assign(rec, { width: size.width, height: size.height });
+    }
+  } catch (e) {
+    if (ctx.signal.aborted && !(e instanceof SafeFetchError && e.code !== "NETWORK")) {
+      // Stopped mid-request: leave it "started"; the resumed run records it as interrupted.
+      await save(ctx, list);
+      return null;
+    }
+    rec.error = e instanceof SafeFetchError ? { code: e.code, message: e.message } : { code: "INTERNAL", message: String((e as Error)?.message ?? e) };
+  }
+  await save(ctx, list);
+  ctx.log("crawl.probe", { crawlId: ctx.crawlId, kind: rec.kind, url: rec.url, status: rec.status, error: rec.error?.code });
+  return rec;
 }
 
 /** Run every probe not yet started. Returns false when the crawl started stopping before all were sent. */
@@ -96,7 +173,7 @@ export async function runProbes(ctx: ProbeContext): Promise<boolean> {
     if (p.kind === "og_image" && ++ogCount > MAX_OG_IMAGE_PROBES) {
       if (!byKey.has(key(p))) {
         byKey.set(key(p), list.length);
-        list.push({ kind: p.kind, url: p.url, started: false, status: null, skipped: `over the cap of ${MAX_OG_IMAGE_PROBES} og:image probes per crawl` });
+        list.push({ kind: p.kind, url: p.url, started: false, status: null, skipped: `over the cap of ${MAX_OG_IMAGE_PROBES} og:image probes per crawl`, skipCode: "over_cap" });
       }
       continue;
     }
@@ -104,66 +181,45 @@ export async function runProbes(ctx: ProbeContext): Promise<boolean> {
     const prev = at === undefined ? undefined : list[at];
     if (prev?.started) {
       // Sent by an earlier run that stopped before the response was stored: never re-send it.
-      if (prev.status === null && !prev.error && !prev.skipped) list[at!] = { ...prev, skipped: "interrupted before the response was stored" };
+      if (prev.status === null && !prev.error && !prev.skipped) list[at!] = { ...prev, skipped: "interrupted before the response was stored", skipCode: "interrupted" };
       continue;
     }
-    if (prev?.skipped) continue;
+    if (prev?.skipped || prev?.error) continue;
     if (ctx.signal.aborted) {
       await save(ctx, list);
       return false;
     }
-    const blocked = ctx.robotsBlocked(p.url);
-    if (blocked) {
-      // The crawl obeys robots.txt for probes too; a rule reading a skipped probe stays silent.
-      const skip: ProbeRecord = { kind: p.kind, url: p.url, started: false, status: null, skipped: `blocked by robots.txt: ${blocked}` };
-      if (prev) list[at!] = skip;
-      else {
-        byKey.set(key(p), list.length);
-        list.push(skip);
+    // robots.txt of the probe's own host: the crawl's for the crawled host, else read once per host (itself a probe).
+    let verdict: RobotsVerdict;
+    if (new URL(p.url).host === new URL(ctx.origin).host) {
+      const why = ctx.robotsBlocked(p.url);
+      verdict = why ? { allowed: false, reason: why } : { allowed: true };
+    } else {
+      const robotsUrl = new URL("/robots.txt", p.url).toString();
+      let r = list.find((x) => x.kind === "robots_txt" && x.url === robotsUrl);
+      if (!r || (!r.started && !r.skipped)) {
+        const got = await sendProbe(ctx, list, byKey, { kind: "robots_txt", url: robotsUrl, opts: { accept: "robots" } });
+        if (!got) return false;
+        r = got;
+      } else if (r.started && r.status === null && !r.error) {
+        r.error = { code: "INTERRUPTED", message: "interrupted before the response was stored" };
       }
+      verdict = verdictFrom(r, p.url, ctx.robotsToken);
+    }
+    if ("noAnswer" in verdict) {
+      // The host does not answer at all: that is the probe's answer too.
+      const rec: ProbeRecord = { kind: p.kind, url: p.url, started: false, status: null, error: verdict.noAnswer };
+      upsert(list, byKey, rec);
+      await save(ctx, list);
       continue;
     }
-    // Queued until it holds a throttle slot: a stop while waiting leaves it unsent, and the resumed run sends it.
-    const rec: ProbeRecord = prev ?? { kind: p.kind, url: p.url, started: false, status: null };
-    if (!prev) {
-      byKey.set(key(p), list.length);
-      list.push(rec);
-    }
-    let slot: string;
-    try {
-      slot = await ctx.acquire();
-    } catch (e) {
-      if (!ctx.signal.aborted) throw e;
+    if (!verdict.allowed) {
+      // The crawl obeys robots.txt for probes too; rules that need this probe report inconclusive.
+      upsert(list, byKey, { kind: p.kind, url: p.url, started: false, status: null, skipped: `blocked by robots.txt: ${verdict.reason}`, skipCode: "probe_skipped_robots" });
       await save(ctx, list);
-      return false;
+      continue;
     }
-    rec.started = true;
-    try {
-      await save(ctx, list);
-    } catch (e) {
-      await ctx.release(slot);
-      throw e;
-    }
-    try {
-      const res = await ctx.request(p.url, p.opts, slot);
-      rec.status = res.status;
-      if (res.contentType) rec.contentType = res.contentType;
-      if (res.location) rec.location = res.location;
-      if (p.kind === "llms_txt" && res.status === 200) rec.body = res.body.slice(0, LLMS_TXT_KEEP_CHARS);
-      if (p.kind === "og_image" && res.status === 200 && res.raw) {
-        const size = imageSize(res.raw);
-        if (size) Object.assign(rec, { width: size.width, height: size.height });
-      }
-    } catch (e) {
-      if (ctx.signal.aborted && !(e instanceof SafeFetchError && e.code !== "NETWORK")) {
-        // Stopped mid-request: leave it "started"; the resumed run records it as interrupted.
-        await save(ctx, list);
-        return false;
-      }
-      rec.error = e instanceof SafeFetchError ? { code: e.code, message: e.message } : { code: "INTERNAL", message: String((e as Error)?.message ?? e) };
-    }
-    await save(ctx, list);
-    ctx.log("crawl.probe", { crawlId: ctx.crawlId, kind: rec.kind, url: rec.url, status: rec.status, error: rec.error?.code });
+    if (!(await sendProbe(ctx, list, byKey, p))) return false;
   }
   await save(ctx, list);
   return true;

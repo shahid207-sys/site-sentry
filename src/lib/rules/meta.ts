@@ -1,7 +1,7 @@
 // Metadata rules (docs/SPEC.md catalog, META).
 import { descriptionPixels, titlePixels } from "../snapshot/text";
-import { finding, isIndexable, type Finding, type PageRule, type SiteRule, type UrlFacts } from "./contract";
-import { resolveOgImage } from "./probe-types";
+import { finding, inconclusive, isIndexable, type Finding, type PageRule, type SiteRule, type UrlFacts } from "./contract";
+import { resolveOgImage, skippedByRobots } from "./probe-types";
 import { groupBy, homeUrl, isHtml200, others } from "./util";
 
 const page = (r: Omit<PageRule, "scope" | "category">): PageRule => ({ scope: "page", category: "metadata", ...r });
@@ -260,7 +260,7 @@ const META016 = page({
 export const OG_IMAGE_MIN_PX = 200;
 const META017 = site({
   id: "META-017",
-  version: 1,
+  version: 2,
   confidence: "verified",
   impact: 1,
   needs: ["headers"],
@@ -271,7 +271,11 @@ const META017 = site({
       if (u.statusCode !== 200 || !u.page) continue;
       const img = resolveOgImage(u.page.ogImage, u.url);
       const pr = img ? probes.get(img) : undefined;
-      if (!pr || pr.skipped) continue; // not probed: inconclusive
+      if (skippedByRobots(pr)) {
+        out.push(inconclusive(META017, u.url, "probe_skipped_robots", `og:image not checked: ${pr.skipped}.`, { image: img }));
+        continue;
+      }
+      if (!pr || pr.skipped) continue; // not probed (over the per-crawl cap, or interrupted)
       if (pr.status !== 200) out.push(finding(META017, u.url, pr.error ? `og:image could not be fetched: ${pr.error.message}` : `og:image returns HTTP ${pr.status}.`, { image: img, status: pr.status, reason: "unreachable" }));
       else if (pr.width !== undefined && pr.height !== undefined && (pr.width < OG_IMAGE_MIN_PX || pr.height < OG_IMAGE_MIN_PX)) out.push(finding(META017, u.url, `og:image is ${pr.width}×${pr.height} px, under ${OG_IMAGE_MIN_PX} px.`, { image: img, width: pr.width, height: pr.height, reason: "small" }));
     }
@@ -292,13 +296,14 @@ const META018 = page({
 
 const META019 = site({
   id: "META-019",
-  version: 1,
+  version: 2,
   confidence: "verified",
   impact: 1,
   needs: ["headers"],
   evaluate({ site: s, crawl }) {
     const probe = crawl.probes.find((p) => p.kind === "favicon");
     const home: UrlFacts | undefined = s.byUrl.get(homeUrl(crawl.origin));
+    if (skippedByRobots(probe)) return [inconclusive(META019, home?.url ?? homeUrl(crawl.origin), "probe_skipped_robots", `Favicon not checked: ${probe.skipped}.`, { favicon: probe.url })];
     if (!probe || probe.skipped || probe.status === 200) return [];
     return [finding(META019, home?.url ?? homeUrl(crawl.origin), probe.error ? `Favicon could not be fetched: ${probe.error.message}` : `Favicon ${probe.url} returns HTTP ${probe.status}.`, { favicon: probe.url, status: probe.status })];
   },

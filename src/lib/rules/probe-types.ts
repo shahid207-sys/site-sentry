@@ -6,7 +6,8 @@ export type ProbeKind =
   | "home_www" // the start page on the www / non-www host (IDX-021)
   | "favicon" // the declared icon, else /favicon.ico (META-019)
   | "llms_txt" // /llms.txt (AIS-003)
-  | "og_image"; // an og:image URL (META-017)
+  | "og_image" // an og:image URL (META-017)
+  | "robots_txt"; // robots.txt of another host a probe targets, read before probing it
 
 export interface ProbeRecord {
   kind: ProbeKind;
@@ -23,9 +24,16 @@ export interface ProbeRecord {
   width?: number;
   height?: number;
   error?: { code: string; message: string };
+  /** For robots_txt: the file as read (capped), to decide later probes to that host. */
+  robotsBody?: string;
   /** Set when the probe was not sent, and why. */
   skipped?: string;
+  /** Machine-readable form of `skipped`. */
+  skipCode?: "probe_skipped_robots" | "over_cap" | "interrupted";
 }
+
+/** The probe was not sent because robots.txt of its host disallows it (or could not be read): rules relying on it are inconclusive. */
+export const skippedByRobots = (p: ProbeRecord | undefined): p is ProbeRecord & { skipCode: "probe_skipped_robots" } => p?.skipCode === "probe_skipped_robots";
 
 /** og:image URLs probed per crawl, at most. */
 export const MAX_OG_IMAGE_PROBES = 10;

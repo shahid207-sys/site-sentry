@@ -4,6 +4,8 @@ import { testRedis } from "@/test/redis";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { newCrawl, testDb } from "@/test/db";
 import { send, startLocalServer, type LocalServer } from "@/test/local-server";
+import { createSafeFetch } from "@/lib/fetch/safe-fetch";
+import { isBlockedIp } from "@/lib/fetch/ip-guard";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -586,6 +588,7 @@ describe("runCrawl crawl-level probes", () => {
       signal,
       log: () => {},
       robotsBlocked: () => null,
+      robotsToken: "SiteSentryBot",
       release: async () => {},
       request: (url, opts) => srv.fetch(url, { ...opts, signal, timeoutMs: 5_000, userAgent: V2_USER_AGENT }),
       acquire: async () => "slot",
@@ -619,6 +622,51 @@ describe("runCrawl crawl-level probes", () => {
     expect(after.find((p) => p.kind === "favicon")).toMatchObject({ started: true, status: 404 });
     expect(srv.hits.get("/favicon.ico")).toBe(1);
     expect(srv.hits.get("/llms.txt")).toBe(1);
+  });
+
+  it("reads another host's robots.txt before probing it: disallowed or 5xx is skipped (probe_skipped_robots), no answer is that error", async () => {
+    const other = await startLocalServer(); // a second host (another port): robots.txt disallows /og.png
+    const down = await startLocalServer(); // robots.txt answers 503
+    const gone = await startLocalServer(); // closed before the crawl: connection refused
+    await gone.close();
+    try {
+      other.routes.set("/robots.txt", send("User-agent: *\nDisallow: /og.png\n", "text/plain"));
+      other.routes.set("/ok.png", sendBytes(png(1200, 630), "image/png"));
+      down.routes.set("/robots.txt", send("down", "text/plain", 503));
+      const imgs = [`${other.origin}/og.png`, `${other.origin}/ok.png`, `${down.origin}/og.png`, `${gone.origin}/og.png`];
+      srv.routes.set("/", page(["/b", "/c", "/d"]));
+      ["/", "/b", "/c", "/d"].forEach((path, i) => srv.routes.set(path, send(`<!doctype html><html><head><title>t${i}</title><meta property="og:image" content="${imgs[i]}"></head><body>${i ? "" : '<a href="/b">b</a><a href="/c">c</a><a href="/d">d</a>'}</body></html>`)));
+      const fetch = createSafeFetch({
+        resolve: async () => ["127.0.0.1"],
+        isBlocked: (ip) => (ip === "127.0.0.1" ? false : isBlockedIp(ip)),
+        allowedPorts: new Set([srv.port, other.port, down.port, gone.port].map(String)),
+        allowLocalNames: false,
+      });
+      const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
+      expect(await runCrawl(opts({ fetch }), c)).toBe("completed");
+      const probes = ((await db.execute(sql`select probes from crawls where id = ${c}::uuid`)).rows[0] as { probes: ProbeRecord[] }).probes;
+      const og = (url: string) => probes.find((p) => p.kind === "og_image" && p.url === url);
+      expect(og(imgs[0])).toMatchObject({ started: false, status: null, skipCode: "probe_skipped_robots" });
+      expect(og(imgs[1])).toMatchObject({ started: true, status: 200, width: 1200 });
+      expect(og(imgs[2])).toMatchObject({ started: false, skipCode: "probe_skipped_robots", skipped: expect.stringMatching(/returned 503/) });
+      expect(og(imgs[3])).toMatchObject({ started: false, status: null, error: { code: expect.any(String) } });
+      expect(og(imgs[3])?.skipCode).toBeUndefined();
+      // Each host's robots.txt is read once, stored as a probe; nothing robots.txt disallows was requested.
+      expect(probes.filter((p) => p.kind === "robots_txt").map((p) => [p.url, p.status])).toEqual(
+        expect.arrayContaining([
+          [`${other.origin}/robots.txt`, 200],
+          [`${down.origin}/robots.txt`, 503],
+        ]),
+      );
+      expect(other.hits.get("/robots.txt")).toBe(1);
+      expect(other.hits.has("/og.png")).toBe(false);
+      expect(other.hits.get("/ok.png")).toBe(1);
+      expect(down.hits.get("/robots.txt")).toBe(1);
+      expect(down.hits.has("/og.png")).toBe(false);
+    } finally {
+      await other.close();
+      await down.close();
+    }
   });
 
   it("skips probes robots.txt disallows on the crawled host, and sends none at all when robots.txt is a full disallow", async () => {

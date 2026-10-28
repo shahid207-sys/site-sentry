@@ -231,6 +231,9 @@ export const EXACT_SECTIONS = ["/clean/", "/meta/", "/index/", "/redirects/", "/
  * Every finding the fixture site's main host must produce on the pages of EXACT_SECTIONS, the home page and the
  * /index/ extras, by path (with query). An empty list means the page must be silent.
  */
+/** How the manifest names a finding: the rule id for an issue, `RULE:inconclusive` for an inconclusive one. */
+export const findingKey = (ruleId: string, outcome: string) => (outcome === "issue" ? ruleId : `${ruleId}:${outcome}`);
+
 export function expectedFindings(): Map<string, RuleId[]> {
   const out = new Map<string, RuleId[]>([["/", []]]);
   const noindex = new Set(noindexPaths());

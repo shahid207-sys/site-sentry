@@ -1,7 +1,8 @@
 // Crawlability and indexability rules (docs/SPEC.md catalog, IDX). IDX-018 (canonical raw vs rendered) needs the
 // Phase 5 renderer and is not implemented.
 import { parseRobotsHeader } from "../snapshot/extract";
-import { finding, inSitemap, isIndexable, type Finding, type PageRule, type SiteRule, type UrlFacts } from "./contract";
+import { finding, inconclusive, inSitemap, isIndexable, type Finding, type PageRule, type SiteRule, type UrlFacts } from "./contract";
+import { skippedByRobots } from "./probe-types";
 import { generalDirectives, homeUrl, isHtml200, robotsUrl } from "./util";
 
 const page = (r: Omit<PageRule, "scope" | "category">): PageRule => ({ scope: "page", category: "indexability", ...r });
@@ -399,13 +400,14 @@ const IDX019 = page({
 function hostVariantRule(id: "IDX-020" | "IDX-021", kind: "home_scheme" | "home_www", what: string): SiteRule {
   const rule: SiteRule = site({
     id,
-    version: 1,
+    version: 2,
     confidence: "verified",
     impact: 3,
     needs: ["headers"],
     evaluate({ site: s, crawl }) {
       const home = s.byUrl.get(homeUrl(crawl.origin));
       const probe = crawl.probes.find((p) => p.kind === kind);
+      if (skippedByRobots(probe) && home?.statusCode === 200) return [inconclusive(rule, home.url, "probe_skipped_robots", `${what}: ${probe.url} not checked: ${probe.skipped}.`, { variant: probe.url })];
       if (!probe || home?.statusCode !== 200 || probe.status !== 200) return [];
       return [finding(rule, home.url, `Both ${home.url} and ${probe.url} return 200 (${what}).`, { variant: probe.url, status: probe.status })];
     },

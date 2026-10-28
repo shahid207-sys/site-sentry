@@ -13,7 +13,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { SECTIONS } from "../fixtures/site/definition";
-import { DEFECT_COUNTS, EXACT_SECTIONS, expectedFindings } from "../fixtures/site/defects";
+import { DEFECT_COUNTS, EXACT_SECTIONS, expectedFindings, findingKey } from "../fixtures/site/defects";
 import { HOSTS, LOCAL_HOSTS_ENV, startFixtureSite, type FixtureSite, type HostKey } from "../fixtures/site/server";
 import { createDb, migrateDb, type Db } from "../src/lib/db/client";
 import { crawls } from "../src/lib/db/schema";
@@ -131,7 +131,12 @@ function plans(site: FixtureSite): Plan[] {
       label: `${HOSTS.alt} (robots.txt 503)`,
       config: { aiCrawlers: "block" },
       budget: 10,
-      expected: new Map([[abs("alt", "/robots.txt"), ["IDX-025", "IDX-027"]], [abs("alt", "/"), []]]),
+      expected: new Map([
+        [abs("alt", "/robots.txt"), ["IDX-025", "IDX-027"]],
+        // robots.txt 503 disallows the whole host, so its probes are skipped (probe_skipped_robots) and their rules say so.
+        [abs("alt", "/"), ["META-019:inconclusive"]],
+        [abs("alt", "/llms.txt"), ["AIS-003:inconclusive"]],
+      ]),
       exactPrefixes: [o.alt],
     },
     {
@@ -193,11 +198,11 @@ async function main() {
       console.log(`\n== ${plan.label}`);
       check(`${plan.key}: crawl completed and analysed through the queue`, c.status === "completed" && c.analysis?.status === "completed", `crawl ${c.status}, analysis ${JSON.stringify(c.analysis)} after ${((Date.now() - t0) / 1000).toFixed(1)} s`);
 
-      const f = await db.$client.query<{ rule_id: string; url: string }>("select rule_id, url from findings where crawl_id = $1", [row.id]);
+      const f = await db.$client.query<{ rule_id: string; url: string; outcome: string }>("select rule_id, url, outcome from findings where crawl_id = $1", [row.id]);
       const got = new Map<string, Set<string>>();
       for (const x of f.rows) {
         if (!got.has(x.url)) got.set(x.url, new Set());
-        got.get(x.url)!.add(x.rule_id);
+        got.get(x.url)!.add(findingKey(x.rule_id, x.outcome));
         fired.add(x.rule_id);
       }
       const exact = (u: string) => plan.exactPrefixes.some((p) => u.startsWith(p));

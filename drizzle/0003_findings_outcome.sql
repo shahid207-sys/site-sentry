@@ -1,0 +1,1 @@
+ALTER TABLE "findings" ADD COLUMN "outcome" text DEFAULT 'issue' NOT NULL;

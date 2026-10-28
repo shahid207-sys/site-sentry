@@ -188,6 +188,8 @@ export const findings = pgTable(
     url: text("url").notNull(),
     confidence: text("confidence").notNull(),
     message: text("message").notNull(),
+    /** issue | inconclusive (the rule could not judge: e.g. its probe was skipped by robots.txt). */
+    outcome: text("outcome").notNull().default("issue"),
     evidence: jsonb("evidence").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },

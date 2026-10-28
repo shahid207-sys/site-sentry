@@ -215,7 +215,7 @@ class Stats {
 async function insertFindings(tx: Exec, crawlId: string, list: Finding[]): Promise<void> {
   for (let i = 0; i < list.length; i += 500) {
     await tx.insert(findingsTable).values(
-      list.slice(i, i + 500).map((f) => ({ crawlId, ruleId: f.ruleId, ruleVersion: f.ruleVersion, url: f.url, confidence: f.confidence, message: f.message, evidence: f.evidence })),
+      list.slice(i, i + 500).map((f) => ({ crawlId, ruleId: f.ruleId, ruleVersion: f.ruleVersion, url: f.url, confidence: f.confidence, outcome: f.outcome, message: f.message, evidence: f.evidence })),
     );
   }
 }

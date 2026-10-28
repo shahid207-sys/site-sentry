@@ -1,5 +1,6 @@
 // AI-search readiness rules (docs/SPEC.md catalog, AIS).
-import { finding, NeedsConfig, type SiteRule } from "./contract";
+import { finding, inconclusive, NeedsConfig, type SiteRule } from "./contract";
+import { skippedByRobots } from "./probe-types";
 import { homeUrl, robotsUrl } from "./util";
 
 const site = (r: Omit<SiteRule, "scope" | "category">): SiteRule => ({ scope: "site", category: "ai_search", ...r });
@@ -59,12 +60,13 @@ export function llmsTxtProblem(body: string, contentType: string | undefined): s
 
 const AIS003 = site({
   id: "AIS-003",
-  version: 1,
+  version: 2,
   confidence: "advisory",
   impact: 1,
   needs: ["headers"],
   evaluate({ crawl }) {
     const p = crawl.probes.find((x) => x.kind === "llms_txt");
+    if (skippedByRobots(p)) return [inconclusive(AIS003, p.url, "probe_skipped_robots", `llms.txt not checked: ${p.skipped}.`)];
     if (!p || p.skipped) return [];
     if (p.status !== 200) return [finding(AIS003, p.url, p.error ? `llms.txt could not be fetched: ${p.error.message}` : `No llms.txt (HTTP ${p.status}).`, { status: p.status, reason: "missing" })];
     const problem = llmsTxtProblem(p.body ?? "", p.contentType);
