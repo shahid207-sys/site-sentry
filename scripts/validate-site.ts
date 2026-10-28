@@ -1,0 +1,145 @@
+// Real-site validation (Phase 2 Part B): crawl one live site with crawler v2 and the production fetch policy, run the
+// rule analysis on it, and print what a reviewer needs to judge the findings: URL states, coverage, crawl time,
+// findings per rule (issue and inconclusive), and for each rule with findings three sample URLs with their evidence.
+//
+// Production settings on purpose: the default SSRF policy (CRAWLER_LOCAL_HOSTS and NODE_ENV=test are refused), the
+// default politeness (3 requests in flight, 5 per second per host), the real crawler user agent, and robots.txt obeyed.
+// The AI-crawler setting is left unset, so AIS-002 reports needs_config. Read-only: GET and HEAD requests only.
+//
+// Run: npx tsx scripts/validate-site.ts https://example.com [--profile standard] [--out report.json]
+//      (needs `docker compose up -d`; uses its own database, sitesentry_validate, and keeps earlier runs)
+import { randomUUID } from "node:crypto";
+import { writeFile } from "node:fs/promises";
+import { Redis } from "ioredis";
+import { Client } from "pg";
+import { PROFILES, type ProfileId } from "../src/lib/crawl/profiles";
+import { workerFetchPolicy } from "../src/lib/crawl/v2/fetch-policy";
+import { stateCounts } from "../src/lib/crawl/v2/frontier";
+import { redisConnection } from "../src/lib/crawl/v2/queue";
+import { runCrawl, V2_USER_AGENT } from "../src/lib/crawl/v2/runner";
+import { createDb, migrateDb, type Db } from "../src/lib/db/client";
+import { crawls } from "../src/lib/db/schema";
+import { createSafeFetch } from "../src/lib/fetch/safe-fetch";
+import { analyseCrawl } from "../src/lib/rules/analyse";
+
+const DB_URL = process.env.VALIDATE_DATABASE_URL ?? "postgres://sitesentry:sitesentry@127.0.0.1:5433/sitesentry_validate";
+const SAMPLES = 3;
+/** URL states that mean the URL was requested and answered. */
+const ANSWERED = ["fetched", "analysed", "redirected", "non_html", "oversized"];
+/** States the crawl chose not to request because the site or the audit's scope said so; not counted against coverage. */
+const NOT_OURS = ["blocked_robots", "out_of_scope", "excluded_by_rule"];
+
+function args() {
+  const a = process.argv.slice(2);
+  const site = a.find((x) => !x.startsWith("--"));
+  const opt = (name: string) => {
+    const i = a.indexOf(`--${name}`);
+    return i >= 0 ? a[i + 1] : undefined;
+  };
+  if (!site) throw new Error("Usage: tsx scripts/validate-site.ts <https://site> [--profile standard] [--out file.json]");
+  const profile = (opt("profile") ?? "standard") as ProfileId;
+  if (!PROFILES[profile] || profile === "custom") throw new Error(`Unknown or unsupported profile "${profile}".`);
+  return { site: new URL(site).origin, profile, out: opt("out") };
+}
+
+async function setupDb(): Promise<Db> {
+  const url = new URL(DB_URL);
+  const admin = new Client({ connectionString: Object.assign(new URL(url), { pathname: "/postgres" }).toString() });
+  await admin.connect();
+  const name = url.pathname.slice(1);
+  if (!(await admin.query("select 1 from pg_database where datname = $1", [name])).rowCount) await admin.query(`create database "${name}"`);
+  await admin.end();
+  const db = createDb(url.toString(), 6);
+  await migrateDb(db);
+  return db;
+}
+
+/** Evenly spread picks, so the samples are not all from one corner of the site. */
+function spread<T>(xs: T[], n: number): T[] {
+  if (xs.length <= n) return xs;
+  return Array.from({ length: n }, (_, i) => xs[Math.floor((i * (xs.length - 1)) / (n - 1))]);
+}
+
+const clip = (v: unknown, max = 600) => {
+  const s = JSON.stringify(v);
+  return s.length > max ? `${s.slice(0, max)}…` : s;
+};
+
+async function main() {
+  const { site, profile, out } = args();
+  if (process.env.NODE_ENV === "test" || process.env.CRAWLER_LOCAL_HOSTS) throw new Error("Validation runs with the production fetch policy: unset NODE_ENV=test and CRAWLER_LOCAL_HOSTS.");
+  const policy = workerFetchPolicy(process.env); // the default SSRF policy when nothing local is configured
+  const { budget, maxDepth } = PROFILES[profile];
+  const db = await setupDb();
+  const redis = new Redis({ ...redisConnection(), maxRetriesPerRequest: null });
+  const [row] = await db
+    .insert(crawls)
+    .values({ workspace: "validation", auditId: randomUUID(), siteOrigin: site, profile, config: {}, status: "queued", budget, maxDepth })
+    .returning({ id: crawls.id });
+  console.log(`Crawling ${site}: profile ${profile} (budget ${budget}, depth ${maxDepth}), user agent "${V2_USER_AGENT}", default politeness. Crawl ${row.id} in ${new URL(DB_URL).pathname.slice(1)}.`);
+
+  const t0 = Date.now();
+  const progress = setInterval(() => {
+    void stateCounts(db, row.id).then((c) => console.log(`  … ${((Date.now() - t0) / 1000).toFixed(0)} s: ${Object.entries(c).map(([k, n]) => `${k} ${n}`).join(", ")}`));
+  }, 30_000);
+  const outcome = await runCrawl(
+    {
+      db,
+      redis,
+      fetch: createSafeFetch(policy),
+      owner: `validate-${process.pid}`,
+      log: (event, data) => {
+        if (/error|failed|refused|halt|throttle|requeued/.test(event)) console.log(`  ${event} ${clip(data, 300)}`);
+      },
+    },
+    row.id,
+  );
+  clearInterval(progress);
+  const crawlMs = Date.now() - t0;
+  const t1 = Date.now();
+  const analysis = await analyseCrawl(db, row.id);
+  const analysisMs = Date.now() - t1;
+
+  const states = (await stateCounts(db, row.id)) as Record<string, number>;
+  const total = Object.values(states).reduce((a, b) => a + b, 0);
+  const sum = (ks: string[]) => ks.reduce((n, k) => n + (states[k] ?? 0), 0);
+  const answered = sum(ANSWERED);
+  const eligible = total - sum(NOT_OURS);
+  const crawl = (await db.$client.query("select status, robots, probes, sitemaps, error from crawls where id = $1", [row.id])).rows[0] as Record<string, unknown>;
+  const blob = (await db.$client.query<{ blob_status: string | null; n: number }>("select blob_status, count(*)::int as n from page_snapshots where crawl_id = $1 group by 1", [row.id])).rows;
+  const runs = (await db.$client.query<{ rule_id: string; status: string; evaluated: number; findings: number; total_ms: number; detail: string | null }>("select rule_id, status, evaluated, findings, total_ms, detail from rule_runs where crawl_id = $1 order by rule_id", [row.id])).rows;
+  const f = (await db.$client.query<{ rule_id: string; outcome: string; url: string; message: string; evidence: unknown }>("select rule_id, outcome, url, message, evidence from findings where crawl_id = $1 order by rule_id, outcome, url", [row.id])).rows;
+
+  const byRule = new Map<string, typeof f>();
+  for (const x of f) {
+    const k = x.outcome === "issue" ? x.rule_id : `${x.rule_id} (${x.outcome})`;
+    if (!byRule.has(k)) byRule.set(k, []);
+    byRule.get(k)!.push(x);
+  }
+
+  console.log(`\nCrawl ${outcome} in ${(crawlMs / 1000).toFixed(1)} s; analysis ${analysis.outcome} in ${(analysisMs / 1000).toFixed(1)} s (${analysis.pages} pages, ${analysis.findings} findings).`);
+  console.log(`URL states (${total} URLs): ${Object.entries(states).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(", ")}`);
+  console.log(`Coverage: ${answered} answered of ${eligible} eligible URLs = ${eligible ? ((100 * answered) / eligible).toFixed(1) : "n/a"}%`);
+  console.log(`Raw HTML storage: ${blob.map((b) => `${b.blob_status ?? "no body"} ${b.n}`).join(", ")}`);
+  console.log(`robots.txt: ${clip(crawl.robots && { ...(crawl.robots as object), body: undefined }, 300)}`);
+  console.log(`Probes: ${clip((crawl.probes as { kind: string; url: string; status: number | null; skipCode?: string; error?: unknown }[]).map((p) => [p.kind, p.url, p.status, p.skipCode ?? (p.error ? "error" : "")]), 1200)}`);
+  console.log(`Rules not run normally: ${runs.filter((r) => r.status !== "ok").map((r) => `${r.rule_id} ${r.status}${r.detail ? ` (${r.detail})` : ""}`).join("; ") || "none"}`);
+  console.log(`\nFindings per rule:`);
+  for (const [k, xs] of [...byRule].sort()) console.log(`  ${k.padEnd(28)} ${xs.length}`);
+  for (const [k, xs] of [...byRule].sort()) {
+    console.log(`\n== ${k}: ${xs.length} finding(s); samples:`);
+    for (const x of spread(xs, SAMPLES)) console.log(`  - ${x.url}\n    ${x.message}\n    evidence ${clip(x.evidence)}`);
+  }
+
+  if (out) {
+    await writeFile(out, JSON.stringify({ site, profile, crawlId: row.id, outcome, crawlMs, analysisMs, states, answered, eligible, blob, robots: crawl.robots, probes: crawl.probes, sitemaps: crawl.sitemaps, runs, findings: f }, null, 2));
+    console.log(`\nFull report: ${out}`);
+  }
+  redis.disconnect();
+  await db.$client.end();
+}
+
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
