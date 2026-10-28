@@ -14,6 +14,8 @@ import { DEFERRED_RULES, RULES, RULES_BY_ID } from "./registry";
 import { NEAR_DUPLICATE, NEAR_DUPLICATE_MIN_WORDS } from "./cnt";
 import { simhash, simhashSimilarity } from "../snapshot/text";
 import { paragraph } from "../../../fixtures/site/text";
+import { ENGLISH_PROSE, MIXED_PROSE } from "../../../fixtures/site/defects";
+import { LANGUAGE_MIN_ACCURACY } from "./meta";
 
 const ORIGIN = "https://a.test";
 const U = (path: string) => new URL(path, ORIGIN).toString();
@@ -435,6 +437,19 @@ describe("details", () => {
 
   it("IDX-012 treats an unfetched canonical target as inconclusive", () => {
     expect(run("IDX-012", cleanSite(pageFrom("/c/", { canonical: `<link rel="canonical" href="${U("/private/x")}">` }), other("/private/x", "blocked_robots", 10)))).toEqual([]);
+  });
+
+  it("META-012 reports a low-confidence mismatch as inconclusive, and stays silent when the detector agrees", () => {
+    const mixed = pageFrom("/x/", { lang: ' lang="en"', h1: "", body: `<main><p>${MIXED_PROSE}</p></main>` });
+    expect(mixed.language).toMatchObject({ detected: "es" });
+    expect(mixed.language!.accuracy!).toBeLessThan(LANGUAGE_MIN_ACCURACY);
+    const [f, ...rest] = run("META-012", mixed);
+    expect(rest).toEqual([]);
+    expect(f).toMatchObject({ ruleId: "META-012", outcome: "inconclusive", evidence: { code: "low_confidence", declared: "en", detected: "es", reason: "mismatch" } });
+    // Same text declared Spanish: the detector agrees, so nothing to report whatever its confidence.
+    expect(run("META-012", pageFrom("/x/", { lang: ' lang="es"', h1: "", body: `<main><p>${MIXED_PROSE}</p></main>` }))).toEqual([]);
+    // A confident mismatch is still an issue.
+    expect(run("META-012", pageFrom("/x/", { lang: ' lang="fr"', h1: "", body: `<main><p>${ENGLISH_PROSE}</p></main>` }))[0]).toMatchObject({ outcome: "issue" });
   });
 
   it("META-012 does not judge the language of short text", () => {

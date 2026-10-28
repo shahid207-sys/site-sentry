@@ -171,7 +171,7 @@ export function langProblem(value: string): string | null {
 
 const META012 = page({
   id: "META-012",
-  version: 1,
+  version: 2,
   confidence: "heuristic",
   impact: 2,
   needs: ["raw"],
@@ -181,10 +181,11 @@ const META012 = page({
     const problem = langProblem(l.declared);
     if (problem) return [finding(META012, p.url, `lang="${l.declared}" is invalid: ${problem}.`, { declared: l.declared, reason: "invalid" })];
     const primary = l.declared.split("-")[0].toLowerCase();
-    if (l.detected && l.accuracy !== null && l.accuracy >= LANGUAGE_MIN_ACCURACY && p.wordCount >= LANGUAGE_MIN_WORDS && l.detected !== primary) {
-      return [finding(META012, p.url, `lang="${l.declared}" but the text reads as "${l.detected}".`, { declared: l.declared, detected: l.detected, accuracy: l.accuracy, reason: "mismatch" })];
-    }
-    return [];
+    if (!l.detected || l.accuracy === null || p.wordCount < LANGUAGE_MIN_WORDS || l.detected === primary) return [];
+    const evidence = { declared: l.declared, detected: l.detected, accuracy: l.accuracy, reason: "mismatch" };
+    if (l.accuracy >= LANGUAGE_MIN_ACCURACY) return [finding(META012, p.url, `lang="${l.declared}" but the text reads as "${l.detected}".`, evidence)];
+    // The detector leans away from the declared language but is not sure (mixed-language text, close languages): say so.
+    return [inconclusive(META012, p.url, "low_confidence", `lang="${l.declared}"; the text may be "${l.detected}", but the detector is only ${Math.round(l.accuracy * 100)}% sure.`, evidence)];
   },
   explain: { why: "A wrong lang value misleads search engines about which audience the page serves.", fix: "Set lang to the language the page is written in.", acceptance: "lang is valid and matches the detected language." },
 });

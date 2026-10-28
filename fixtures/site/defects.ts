@@ -26,6 +26,38 @@ and the smell of cooking drifted down the narrow streets. It was the kind of pla
 where doors were not locked at night, and where a stranger was noticed as soon as they stepped off the bus. Later in the
 year the storms would come, but for now the sea was calm and the sky was clear, and everyone was glad of it.`.replace(/\s+/g, " ");
 
+const MIXED_EN = [
+  "The garden opens at nine every morning and closes at dusk.",
+  "Visitors can buy seeds and small plants at the shop near the gate.",
+  "Bring water and a hat in summer, because the paths have little shade.",
+  "Dogs are welcome on a short lead in the outer meadows.",
+  "The glasshouses are warm all year and hold more than two hundred kinds of fern.",
+  "Guided walks leave from the fountain at eleven and at three.",
+  "The café serves soup, bread and cakes made in our own kitchen.",
+  "Children under twelve enter free with an adult.",
+  "In autumn the old orchard is open for apple picking on weekends.",
+  "Please keep to the paths so that the lawns can recover after rain.",
+  "Members receive a newsletter with planting tips for each season.",
+  "Wheelchairs can be borrowed at the ticket office without charge.",
+];
+const MIXED_ES = [
+  "El jardín abre a las nueve cada mañana y cierra al atardecer.",
+  "Los visitantes pueden comprar semillas y plantas pequeñas en la tienda junto a la puerta.",
+  "Traiga agua y un sombrero en verano, porque los caminos tienen poca sombra.",
+  "Los perros son bienvenidos con correa corta en los prados exteriores.",
+  "Los invernaderos están templados todo el año y guardan más de doscientas clases de helechos.",
+  "Las visitas guiadas salen de la fuente a las once y a las tres.",
+  "La cafetería sirve sopa, pan y pasteles hechos en nuestra propia cocina.",
+  "Los niños menores de doce años entran gratis con un adulto.",
+  "En otoño el viejo huerto abre los fines de semana para recoger manzanas.",
+  "Por favor, no salga de los caminos para que el césped se recupere después de la lluvia.",
+  "Los socios reciben un boletín con consejos de jardinería para cada estación.",
+  "Se pueden pedir sillas de ruedas en la taquilla sin ningún coste.",
+];
+/** A bilingual notice, each English sentence followed by its Spanish translation (~300 words): tinyld leans to "es"
+ * at about 0.7 accuracy, so META-012 on a lang="en" page is inconclusive (low_confidence), neither an issue nor silent. */
+export const MIXED_PROSE = MIXED_EN.map((e, i) => `${e} ${MIXED_ES[i]}`).join(" ");
+
 const LONG_TITLE_TAIL = "with a very long list of additional words that keeps going well past the point where results cut it off";
 
 // ---------- /meta/ ----------
@@ -54,6 +86,7 @@ const META: Defect[] = [
   { name: "no lang", expect: ["META-011"], apply: (p) => void (p.lang = "") },
   { name: "invalid lang", expect: ["META-012"], apply: (p) => void (p.lang = ' lang="english"') },
   { name: "lang mismatch", expect: ["META-012"], apply: (p) => ((p.lang = ' lang="fr"'), (p.text = `<p>${ENGLISH_PROSE}</p>`)) },
+  { name: "lang uncertain", expect: ["META-012:inconclusive"], apply: (p) => ((p.lang = ' lang="en"'), (p.text = `<p>${MIXED_PROSE}</p>`)) },
   { name: "no viewport", expect: ["META-013"], apply: (p) => void (p.viewport = "") },
   { name: "viewport blocks zoom", expect: ["META-014"], apply: (p) => void (p.viewport = '<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">') },
   { name: "no charset", expect: ["META-015"], apply: (p) => ((p.charset = ""), (p.type = "text/html")) },
