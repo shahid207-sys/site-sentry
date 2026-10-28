@@ -11,7 +11,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { DEEP_CHAIN_DEPTH, deepChainPath, manifestPaths, ROBOTS_BLOCKED_PREFIX, SECTIONS, sectionPaths } from "../fixtures/site/definition";
-import { startFixtureSite, type FixtureSite } from "../fixtures/site/server";
+import { LOCAL_HOSTS_ENV, startFixtureSite, type FixtureSite } from "../fixtures/site/server";
 import { createDb, migrateDb, type Db } from "../src/lib/db/client";
 import { crawls } from "../src/lib/db/schema";
 import { PROFILES } from "../src/lib/crawl/profiles";
@@ -51,7 +51,7 @@ function startWorker(site: FixtureSite, label: string): { child: ChildProcess; b
     DATABASE_URL: DB_URL,
     CRAWL_QUEUE_NAME: QUEUE,
     ANALYSIS_QUEUE_NAME: `${QUEUE}-analysis`,
-    CRAWLER_LOCAL_HOSTS: "fixture.test=127.0.0.1",
+    CRAWLER_LOCAL_HOSTS: LOCAL_HOSTS_ENV, // fixture.test and its www / alt hosts (the probes ask www.fixture.test)
     CRAWLER_LOCAL_PORTS: String(site.port),
     NODE_ENV: "test", // the loopback mapping above is refused under any other NODE_ENV
   });

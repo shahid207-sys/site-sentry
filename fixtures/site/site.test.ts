@@ -67,7 +67,7 @@ describe("fixture server", () => {
   });
 
   it("hides /js/ links from non-rendering crawlers and redirects /ssrf/ pages to the canary and private ranges", async () => {
-    expect(await (await get("/js/")).text()).not.toMatch(/<a\s/);
+    expect(await (await get("/js/")).text()).not.toMatch(/<a\s[^>]*href="\/js\/p-/); // only the site header's home link
     const r = await get("/ssrf/p-1");
     expect(r.status).toBe(302);
     expect(r.headers.get("location")).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
