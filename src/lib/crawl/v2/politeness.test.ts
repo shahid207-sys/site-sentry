@@ -51,7 +51,7 @@ describe("HostThrottle", () => {
     expect(new HostThrottle({ crawlDelayMs: 3_600_000 }).intervalMs).toBe(MAX_CRAWL_DELAY_MS);
   });
 
-  it("halves concurrency and backs off exponentially on 429/503, honouring a longer Retry-After", async () => {
+  it("halves concurrency and backs off exponentially on 429/503, or for exactly Retry-After when given", async () => {
     const c = clock();
     const th = new HostThrottle({ now: c.now, sleep: c.sleep, ratePerSecond: 1000, baseBackoffMs: 1000 });
     await th.acquire();
@@ -66,7 +66,32 @@ describe("HostThrottle", () => {
     await th.acquire();
     expect(c.now()).toBe(6000);
     th.release({ status: 503, elapsedMs: 10 });
-    expect(th.events.at(-1)).toMatchObject({ pausedForMs: 4000 }); // 1 s → 2 s → 4 s
+    expect(th.events.at(-1)).toMatchObject({ pausedForMs: 2000 }); // 1 s → (Retry-After 5 s) → 2 s
+    await th.acquire();
+    th.release({ status: 429, elapsedMs: 10, retryAfterMs: 0 });
+    expect(th.events.at(-1)).toMatchObject({ pausedForMs: 1000 }); // Retry-After: 0 still waits the 1 s base
+  });
+
+  it("halves the backoff on each normal response", async () => {
+    const c = clock();
+    const th = new HostThrottle({ now: c.now, sleep: c.sleep, ratePerSecond: 1000, baseBackoffMs: 1000 });
+    for (const status of [429, 429, 429]) {
+      await th.acquire();
+      th.release({ status, elapsedMs: 10 });
+    }
+    expect(th.events.map((e) => e.pausedForMs)).toEqual([1000, 2000, 4000]);
+    await th.acquire();
+    th.release({ status: 200, elapsedMs: 10 }); // 4 s → 2 s
+    await th.acquire();
+    th.release({ status: 429, elapsedMs: 10 });
+    expect(th.events.at(-1)).toMatchObject({ pausedForMs: 4000 }); // 2 s doubled, not 8 s
+    for (let i = 0; i < 3; i++) {
+      await th.acquire();
+      th.release({ status: 200, elapsedMs: 10 }); // 4 → 2 → 1 → 0
+    }
+    await th.acquire();
+    th.release({ status: 503, elapsedMs: 10 });
+    expect(th.events.at(-1)).toMatchObject({ pausedForMs: 1000 }); // back to the base
   });
 
   it("caps a host pause at maxBackoffMs, however long Retry-After asks for", async () => {

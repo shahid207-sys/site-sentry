@@ -111,12 +111,25 @@ processes (see known risks).
 **Adaptive throttle.** A 429, a 503, or a p95 response time over 3 s across the last 20 responses each:
 
 - halve the host's concurrency (minimum 1);
-- pause the host for an exponential backoff (1 s, 2 s, 4 s … 60 s), or for `Retry-After` when that is longer.
+- pause the host. With `Retry-After`, the pause is exactly that long (at least 1 s). Without it, the pause is an
+  exponential backoff: 1 s, 2 s, 4 s … 60 s.
 
-Two choices here are not in the spec:
+These choices are not in the spec:
 
 - The pause is capped at 60 s. A `Retry-After` of hours does not stall the crawl.
-- Recovery is additive: concurrency goes up by 1 after 20 consecutive responses that are neither throttled nor slow, and the backoff halves at the same time.
+- Each normal response halves the backoff. A short burst of 429s does not leave the host on a long pause.
+- Concurrency recovers additively: up by 1 after 20 consecutive responses that are neither throttled nor slow.
+
+Timing on the gate run, simulated with this throttle (3 lanes, 5 req/s, 1,000 URLs with the 10 `/slow/` pages
+adjacent):
+
+| `/slow/` behaviour | Simulated total |
+| --- | --- |
+| No slow pages | 200 s |
+| 4 s TTFB on all 10, five answer 429 once (`Retry-After: 1`), one answers 503 (`Retry-After: 3600`) | ~297 s |
+
+A server that keeps answering 429 costs more than that, and correctly so. Persistent `Retry-After: 30` on all 10
+pages simulates to ~1,100 s.
 
 **Retries.** A 429/503 page is requested again after the pause, at most 2 more times (`MAX_THROTTLE_RETRIES`),
 under the same claim. Each extra request is counted in `crawl_urls.attempts` (`recordRetry`), but the budget is

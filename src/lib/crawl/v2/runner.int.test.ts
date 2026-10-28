@@ -229,7 +229,7 @@ describe("runCrawl politeness", () => {
 
   it(`gives up after ${MAX_THROTTLE_RETRIES} retries and files the 429 as the result`, async () => {
     srv.routes.set("/", page(["/busy"]));
-    srv.routes.set("/busy", send("busy", "text/html", 429, { "retry-after": "0" }));
+    srv.routes.set("/busy", send("busy", "text/html", 429)); // no Retry-After: exponential backoff
     const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
     const throttle = new HostThrottle({ ratePerSecond: 1000, baseBackoffMs: 20 });
     expect(await runCrawl(opts({ throttle }), c)).toBe("completed");

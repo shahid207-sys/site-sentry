@@ -2,10 +2,11 @@
 // at most 3 requests in flight per host, at most 5 requests per second, and an adaptive throttle that halves
 // concurrency and backs off exponentially on 429, 503 or a p95 response time over 3 s. Retry-After and
 // robots.txt Crawl-delay are honoured. Not specified by the spec, and chosen here:
-// - Recovery is additive: +1 concurrency after a full window of normal responses, up to the configured maximum.
-// - A host pause (backoff or Retry-After) lasts at most maxBackoffMs (60 s), and Crawl-delay at most 60 s, so one
-//   header cannot stall a crawl for hours. The runner does not retry a URL whose Retry-After is longer than that.
-
+// - With Retry-After, the host pauses for exactly that long (at least the 1 s base). Without it, the pause doubles
+//   from 1 s on each throttling signal and halves on each normal response.
+// - Concurrency recovers additively: +1 after a full window of normal responses, up to the configured maximum.
+// - A host pause lasts at most maxBackoffMs (60 s), and Crawl-delay at most 60 s, so one header cannot stall a crawl
+//   for hours. The runner does not retry a URL whose Retry-After is longer than that.
 
 export const DEFAULT_HOST_CONCURRENCY = 3;
 export const DEFAULT_RATE_PER_SECOND = 5;
@@ -144,8 +145,13 @@ export class HostThrottle {
       o.status === 429 ? "429" : o.status === 503 ? "503" : this.latencies.length >= this.window && p95(this.latencies) > this.slowMs ? "slow_p95" : null;
     if (reason) {
       this.limit = Math.max(1, Math.floor(this.limit / 2));
-      this.backoffMs = this.backoffMs ? Math.min(this.maxBackoff, this.backoffMs * 2) : this.baseBackoff;
-      const pause = Math.min(this.maxBackoff, Math.max(this.backoffMs, o.retryAfterMs ?? 0));
+      let pause: number;
+      if (o.retryAfterMs != null) {
+        pause = Math.min(this.maxBackoff, Math.max(this.baseBackoff, o.retryAfterMs)); // the server said how long
+      } else {
+        this.backoffMs = this.backoffMs ? Math.min(this.maxBackoff, this.backoffMs * 2) : this.baseBackoff;
+        pause = this.backoffMs;
+      }
       this.pausedUntil = Math.max(this.pausedUntil, this.now() + pause);
       this.okStreak = 0;
       if (reason === "slow_p95") this.latencies = []; // judge the slower pace on fresh samples
@@ -156,9 +162,10 @@ export class HostThrottle {
       this.okStreak = 0; // a slow response is not a normal one, even before the window can judge p95
       return;
     }
+    // Each normal response halves the backoff, so a short burst of 429s does not leave the host on a long pause.
+    this.backoffMs = this.backoffMs / 2 < this.baseBackoff ? 0 : this.backoffMs / 2;
     if (++this.okStreak >= this.window) {
       this.okStreak = 0;
-      this.backoffMs = Math.floor(this.backoffMs / 2);
       if (this.limit < this.max) this.limit++;
     }
   }
