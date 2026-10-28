@@ -1,4 +1,4 @@
-import { lookup as dnsLookup, type LookupAddress, type LookupOptions } from "node:dns";
+import type { LookupAddress, LookupOptions } from "node:dns";
 import { lookup as dnsLookupAsync } from "node:dns/promises";
 import { isIP } from "node:net";
 import type { ReadableStream } from "node:stream/web";
@@ -35,8 +35,24 @@ export class SafeFetchError extends Error {
   }
 }
 
+/** Resolve a hostname to every address it has. Injected so tests can point it at a local DNS stub. */
+export type ResolveHost = (hostname: string) => Promise<string[]>;
+
+/** Which targets a fetcher may reach. `DEFAULT_POLICY` is the production policy; tests and the local fixture site widen it. */
+export interface FetchPolicy {
+  resolve: ResolveHost;
+  isBlocked: (ip: string) => boolean;
+  allowedPorts: ReadonlySet<string>;
+  /** Allow single-label and .local/.internal/.localhost names (they still have to resolve to allowed addresses). */
+  allowLocalNames: boolean;
+}
+
+export const systemResolve: ResolveHost = async (hostname) => (await dnsLookupAsync(hostname, { all: true, verbatim: true })).map((a) => a.address);
+
+export const DEFAULT_POLICY: FetchPolicy = { resolve: systemResolve, isBlocked: isBlockedIp, allowedPorts: ALLOWED_PORTS, allowLocalNames: false };
+
 /** Parse and validate user input. Adds https:// when no scheme is given. Pure — no DNS. */
-export function validateTargetUrl(input: string): URL {
+export function validateTargetUrl(input: string, policy: FetchPolicy = DEFAULT_POLICY): URL {
   const trimmed = input.trim();
   if (!trimmed) throw new SafeFetchError("INVALID_URL", "Enter a URL to audit.");
   if (trimmed.length > 2048) throw new SafeFetchError("INVALID_URL", "URLs longer than 2048 characters are not supported.");
@@ -54,38 +70,45 @@ export function validateTargetUrl(input: string): URL {
   if (url.username || url.password) {
     throw new SafeFetchError("INVALID_URL", "URLs containing credentials are not allowed.");
   }
-  if (!ALLOWED_PORTS.has(url.port)) {
+  if (!policy.allowedPorts.has(url.port)) {
     throw new SafeFetchError("BLOCKED_HOST", "Only the standard ports 80 and 443 are allowed.");
   }
   const host = url.hostname.toLowerCase().replace(/\.$/, "");
-  if (!host.includes(".") && !isIP(host.replace(/^\[|\]$/g, ""))) {
-    throw new SafeFetchError("BLOCKED_HOST", "Enter a public domain name (e.g. example.com).");
-  }
-  if (/(^|\.)(localhost|local|internal|localdomain|home\.arpa)$/.test(host)) {
-    throw new SafeFetchError("BLOCKED_HOST", "Local and internal hostnames cannot be audited.");
-  }
   const bareHost = host.replace(/^\[|\]$/g, "");
-  if (isIP(bareHost) && isBlockedIp(bareHost)) throw blockedError(bareHost);
+  if (!policy.allowLocalNames) {
+    if (!host.includes(".") && !isIP(bareHost)) {
+      throw new SafeFetchError("BLOCKED_HOST", "Enter a public domain name (e.g. example.com).");
+    }
+    if (/(^|\.)(localhost|local|internal|localdomain|home\.arpa)$/.test(host)) {
+      throw new SafeFetchError("BLOCKED_HOST", "Local and internal hostnames cannot be audited.");
+    }
+  }
+  if (isIP(bareHost) && policy.isBlocked(bareHost)) throw blockedError(bareHost);
   url.hash = "";
   return url;
 }
 
-/** Resolve the host and reject if ANY resolved address is non-public. */
-async function assertPublicHost(url: URL): Promise<void> {
+/**
+ * Resolve the host once and return the single address the socket will connect to.
+ * Rejects if ANY resolved address is blocked: a name with one private record is treated as hostile,
+ * because we cannot know which record a later connection would get.
+ */
+export async function resolvePinned(url: URL, policy: FetchPolicy = DEFAULT_POLICY): Promise<string> {
   const host = url.hostname.replace(/^\[|\]$/g, "");
   if (isIP(host)) {
-    if (isBlockedIp(host)) throw blockedError(host);
-    return;
+    if (policy.isBlocked(host)) throw blockedError(host);
+    return host;
   }
-  let addrs: LookupAddress[];
+  let addrs: string[];
   try {
-    addrs = await dnsLookupAsync(host, { all: true, verbatim: true });
+    addrs = await policy.resolve(host);
   } catch {
     throw new SafeFetchError("DNS_FAILED", `Could not resolve ${host}.`);
   }
   if (addrs.length === 0) throw new SafeFetchError("DNS_FAILED", `Could not resolve ${host}.`);
-  const bad = addrs.find((a) => isBlockedIp(a.address));
-  if (bad) throw blockedError(host, bad.address);
+  const bad = addrs.find((a) => policy.isBlocked(a));
+  if (bad) throw blockedError(host, bad);
+  return addrs[0];
 }
 
 function blockedError(host: string, ip?: string) {
@@ -94,32 +117,39 @@ function blockedError(host: string, ip?: string) {
 }
 
 /**
- * DNS lookup used for the actual socket connection. Re-checks every address so a
- * DNS answer that changes between our pre-check and connect (DNS rebinding) is still refused.
- * The socket connects to exactly the address validated here, and TLS still verifies the
- * certificate against the URL's hostname.
+ * A dispatcher whose sockets always connect to `ip`, never to a fresh DNS answer, so a DNS response
+ * that changes after validation (rebinding) cannot redirect the connection. The URL keeps its hostname,
+ * so the Host header, SNI and certificate verification still use the name.
  */
-function guardedLookup(
-  hostname: string,
-  options: LookupOptions,
-  callback: (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family?: number) => void,
-) {
-  dnsLookup(hostname, { ...options, verbatim: true }, (err, address, family) => {
-    if (err) return callback(err, "");
-    const list = Array.isArray(address) ? address : [{ address, family }];
-    const bad = list.find((a) => isBlockedIp(a.address));
-    if (bad) return callback(blockedError(hostname, bad.address) as unknown as NodeJS.ErrnoException, "");
-    if (Array.isArray(address)) callback(null, address);
-    else callback(null, address, family);
-  });
+function pinnedLookup(ip: string) {
+  const family = isIP(ip);
+  return (_hostname: string, options: LookupOptions, callback: (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family?: number) => void) => {
+    if (options?.all) callback(null, [{ address: ip, family }]);
+    else callback(null, ip, family);
+  };
 }
 
-export const agent = new Agent({
-  connect: { lookup: guardedLookup, timeout: TIMEOUT_MS },
-  headersTimeout: TIMEOUT_MS,
-  bodyTimeout: TIMEOUT_MS,
-  connections: 8,
-});
+const MAX_PINNED_AGENTS = 256;
+const pinnedAgents = new Map<string, Agent>();
+
+/** One keep-alive agent per (host, pinned address), so repeat requests to a host reuse connections. */
+export function pinnedAgent(hostname: string, ip: string): Agent {
+  const key = `${hostname}\u0000${ip}`;
+  let a = pinnedAgents.get(key);
+  if (a) {
+    pinnedAgents.delete(key); // move to the back: the map doubles as an LRU
+    pinnedAgents.set(key, a);
+    return a;
+  }
+  a = new Agent({ connect: { lookup: pinnedLookup(ip), timeout: TIMEOUT_MS }, headersTimeout: TIMEOUT_MS, bodyTimeout: TIMEOUT_MS, connections: 8 });
+  pinnedAgents.set(key, a);
+  if (pinnedAgents.size > MAX_PINNED_AGENTS) {
+    const [oldKey, old] = pinnedAgents.entries().next().value!;
+    pinnedAgents.delete(oldKey);
+    void old.close().catch(() => undefined);
+  }
+  return a;
+}
 
 /**
  * What the caller is prepared to read:
@@ -184,9 +214,21 @@ const CONTENT_TYPES: Record<FetchAccept, RegExp> = {
 };
 const BYTE_CAP: Record<FetchAccept, number> = { html: MAX_BYTES, xml: MAX_XML_BYTES, robots: MAX_TEXT_BYTES, status: 0 };
 
+/**
+ * Build a fetcher with SSRF guards: every hop (the first request and each redirect) is re-validated, resolved once,
+ * checked against `policy.isBlocked`, and connected to that pinned address. Redirects are followed manually.
+ */
+export function createSafeFetch(policy: FetchPolicy = DEFAULT_POLICY): Fetcher {
+  return (input, opts) => fetchWithPolicy(input, opts, policy);
+}
+
 /** Fetch a public URL with SSRF guards, manual redirect validation, timeout and size cap. */
-export async function safeFetch(input: string, opts: FetchOptions): Promise<FetchResult> {
-  let url = validateTargetUrl(input);
+export function safeFetch(input: string, opts: FetchOptions): Promise<FetchResult> {
+  return fetchWithPolicy(input, opts, DEFAULT_POLICY);
+}
+
+async function fetchWithPolicy(input: string, opts: FetchOptions, policy: FetchPolicy): Promise<FetchResult> {
+  let url = validateTargetUrl(input, policy);
   const requestedUrl = url.toString();
   const redirectChain: RedirectHop[] = [];
   const timeout = AbortSignal.timeout(TIMEOUT_MS);
@@ -195,12 +237,12 @@ export async function safeFetch(input: string, opts: FetchOptions): Promise<Fetc
 
   try {
     for (let hop = 0; ; hop++) {
-      await assertPublicHost(url);
+      const ip = await resolvePinned(url, policy);
       const started = Date.now();
       const res = await fetch(url, {
         method,
         redirect: "manual",
-        dispatcher: agent,
+        dispatcher: pinnedAgent(url.hostname, ip),
         signal,
         headers: { "user-agent": USER_AGENT, accept: ACCEPT_HEADER[opts.accept] },
       });
@@ -211,7 +253,7 @@ export async function safeFetch(input: string, opts: FetchOptions): Promise<Fetc
         if (hop >= MAX_REDIRECTS) {
           throw new SafeFetchError("TOO_MANY_REDIRECTS", `Stopped after ${MAX_REDIRECTS} redirects.`);
         }
-        const next = validateTargetUrl(new URL(res.headers.get("location")!, url).toString());
+        const next = validateTargetUrl(new URL(res.headers.get("location")!, url).toString(), policy);
         if (redirectChain.some((h) => h.url === next.toString())) {
           throw new SafeFetchError("TOO_MANY_REDIRECTS", `Redirect loop detected at ${next.toString()}.`);
         }
