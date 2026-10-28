@@ -400,7 +400,7 @@ describe("runCrawl pause and cancel take effect within 2 s", () => {
     srv.routes.set("/x", page([]));
   };
 
-  it("pause during a Retry-After wait: stops within 2 s, files the 503, and leaves the rest to resume", async () => {
+  it("pause during a Retry-After wait: stops within 2 s and returns the refused URL to the frontier; resume fetches it", async () => {
     heldHost();
     const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
     const run = runCrawl(opts({ throttle: fast() }), c);
@@ -410,10 +410,20 @@ describe("runCrawl pause and cancel take effect within 2 s", () => {
     await setStatus(c, "paused");
     expect(await run).toBe("paused");
     expect(Date.now() - t0).toBeLessThan(2_000);
-    expect(await row(c, "/busy")).toMatchObject({ state: "fetched", reason: "HTTP 503. The crawl was paused before the retry." });
+    expect(await row(c, "/busy")).toMatchObject({ state: "discovered", reason: null });
     expect(srv.hits.get("/busy")).toBe(1);
     expect(srv.hits.has("/x")).toBe(false);
-    expect(await activeCount(db, c)).toMatchObject({ queued: 0, fetching: 0, discovered: 1 }); // /x, for the resume
+    expect(await activeCount(db, c)).toMatchObject({ queued: 0, fetching: 0, discovered: 2 }); // /busy and /x, for the resume
+    const committed = async () => ((await db.execute(sql`select fetches_committed from crawls where id = ${c}::uuid`)).rows[0] as { fetches_committed: number }).fetches_committed;
+    expect(await committed()).toBe(2); // / and /a; the refused /busy was refunded
+
+    // Resume: the server has recovered (and a fresh throttle, so the 50 s host hold is not waited out here).
+    srv.routes.set("/busy", page([]));
+    await setStatus(c, "running");
+    expect(await runCrawl(opts({ throttle: hostThrottle({ ratePerSecond: 1000, keyPrefix: `${keyPrefix}resume:` }) }), c)).toBe("completed");
+    expect(await row(c, "/busy")).toMatchObject({ state: "fetched", reason: "HTTP 200" });
+    expect(srv.hits.get("/busy")).toBe(2);
+    expect(await committed()).toBe(4); // /, /a, /busy, /x: each URL charged once
   });
 
   it("cancel during a Retry-After wait: ends cancelled within 2 s", async () => {
@@ -426,7 +436,7 @@ describe("runCrawl pause and cancel take effect within 2 s", () => {
     await setStatus(c, "cancelling");
     expect(await run).toBe("cancelled");
     expect(Date.now() - t0).toBeLessThan(2_000);
-    expect(await row(c, "/busy")).toMatchObject({ reason: "HTTP 503. The crawl was cancelled before the retry." });
+    expect(await row(c, "/busy")).toMatchObject({ state: "cancelled", reason: "The crawl was cancelled before this URL was fetched." });
     expect(await row(c, "/x")).toMatchObject({ state: "cancelled" });
     expect(((await db.execute(sql`select status from crawls where id = ${c}::uuid`)).rows[0] as { status: string }).status).toBe("cancelled");
   });

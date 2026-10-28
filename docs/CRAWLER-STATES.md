@@ -208,9 +208,10 @@ cancel therefore take effect within about 0.5 s, and within 2 s in every test, e
 - **Cancel** (and worker shutdown). Requests in flight are aborted as well. A request aborted by cancel ends
   `cancelled` with `The crawl was cancelled while this request was in flight; the response was not read.` One
   aborted by worker shutdown ends `interrupted`, as before.
-- **A pause or cancel during a 429/503 retry wait** files the page with the status already received and a note:
-  `HTTP 503. The crawl was paused before the retry.` The page is not requested again on resume. This is the price of
-  stopping promptly: the alternative is to keep the claim open across a pause.
+- **A stop during a 429/503 retry wait** (pause, cancel or worker shutdown) returns the URL to `discovered` and refunds
+  its budget charge (`requeueRefused`; logged as `crawl.requeued`). The server refused the request, so sending it
+  again does not break at-most-once. A resume requests it again, charged once. On cancel, `finalizeUrls` then files
+  it `cancelled` like any other unfetched URL.
 
 ## Profiles
 

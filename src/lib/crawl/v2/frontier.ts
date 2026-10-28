@@ -206,6 +206,22 @@ export async function recordRetry(db: Db, urlId: number, token: string): Promise
   if (!r.rows.length) throw new ClaimLostError(urlId);
 }
 
+/**
+ * The server refused the request (429/503) and the crawl stopped before the retry: give the URL back to the frontier
+ * so a resume requests it again, and refund its budget charge (it produced no page). Safe under at-most-once: the
+ * server answered, and a refused request is retried anyway. Active rows carry no reason (crawl_urls_reason_ck); the
+ * runner logs the requeue.
+ */
+export async function requeueRefused(db: Db, crawlId: string, urlId: number, token: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    const r = await tx.execute(sql`update crawl_urls set state = 'discovered', reason = null, lease_owner = null, lease_until = null,
+        claim_token = null, updated_at = now()
+      where id = ${urlId} and state = 'fetching' and claim_token = ${token} returning id`);
+    if (!r.rows.length) throw new ClaimLostError(urlId);
+    await tx.execute(sql`update crawls set fetches_committed = greatest(0, fetches_committed - 1) where id = ${crawlId}::uuid`);
+  });
+}
+
 /** Step 3: write everything the fetch produced and the URL's terminal state, atomically. */
 export async function recordResult(db: Db, crawlId: string, urlId: number, token: string, result: UrlResult): Promise<void> {
   await db.transaction(async (tx) => {

@@ -23,6 +23,7 @@ import {
   INTERRUPTED_REASON,
   recordResult,
   recordRetry,
+  requeueRefused,
   releaseReservations,
   renewLeases,
   reserve,
@@ -455,7 +456,11 @@ class Run {
         }
         try {
           const result = await this.fetchOne(r, commit.token, slot);
-          await recordResult(this.db, this.crawlId, r.id, commit.token, result);
+          if ("requeue" in result) {
+            await requeueRefused(this.db, this.crawlId, r.id, commit.token);
+            this.log("crawl.requeued", { crawlId: this.crawlId, url: r.url, why: result.requeue });
+          }
+          else await recordResult(this.db, this.crawlId, r.id, commit.token, result);
         } catch (e) {
           if (!(e instanceof ClaimLostError)) throw e;
           this.log("crawl.claim_lost", { crawlId: this.crawlId, url: r.url });
@@ -468,7 +473,7 @@ class Run {
   }
 
   /** Request a committed URL (the caller holds a throttle slot, which this returns) and classify the response. */
-  private async fetchOne(r: ReservedUrl, token: string, slot: string): Promise<UrlResult> {
+  private async fetchOne(r: ReservedUrl, token: string, slot: string): Promise<UrlResult | { requeue: string }> {
     const maxBytes = this.opts.fetchOptions?.maxBytes ?? V2_MAX_HTML_BYTES;
     for (let retries = 0; ; retries++) {
       let res: FetchResult;
@@ -489,8 +494,9 @@ class Run {
         slot = await this.throttle.acquire(this.signal); // waits out the backoff the 429/503 just set
       } catch (e) {
         if (!this.signal.aborted) throw e;
-        const why = this.opts.signal?.aborted ? "The worker stopped" : this.fetchSignal.aborted ? "The crawl was cancelled" : "The crawl was paused";
-        return this.classify(r, res, retries, `${why} before the retry.`);
+        // The server refused this request, so it is safe to send again: back to the frontier for the resume.
+        const why = this.opts.signal?.aborted ? "the worker stopped" : this.fetchSignal.aborted ? "the crawl was cancelled" : "the crawl was paused";
+        return { requeue: `HTTP ${res.status}, and ${why} before the retry; requested again on resume.` };
       }
       try {
         await recordRetry(this.db, r.id, token);
