@@ -26,8 +26,12 @@ const DB_URL = process.env.VALIDATE_DATABASE_URL ?? "postgres://sitesentry:sites
 const SAMPLES = 3;
 /** URL states that mean the URL was requested and answered. */
 const ANSWERED = ["fetched", "analysed", "redirected", "non_html", "oversized"];
-/** States the crawl chose not to request because the site or the audit's scope said so; not counted against coverage. */
-const NOT_OURS = ["blocked_robots", "out_of_scope", "excluded_by_rule"];
+/**
+ * States the site owner or the audit's own rules ruled out; the only ones not counted against coverage. Everything
+ * else found counts, including out_of_scope (reported by reason: another host is usually the site's www/apex twin,
+ * which is a coverage miss, not a choice) and budget_exhausted / depth_exceeded (found but not reached).
+ */
+const NOT_OURS = ["blocked_robots", "excluded_by_rule"];
 
 function args() {
   const a = process.argv.slice(2);
@@ -119,7 +123,18 @@ async function main() {
 
   console.log(`\nCrawl ${outcome} in ${(crawlMs / 1000).toFixed(1)} s; analysis ${analysis.outcome} in ${(analysisMs / 1000).toFixed(1)} s (${analysis.pages} pages, ${analysis.findings} findings).`);
   console.log(`URL states (${total} URLs): ${Object.entries(states).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(", ")}`);
-  console.log(`Coverage: ${answered} answered of ${eligible} eligible URLs = ${eligible ? ((100 * answered) / eligible).toFixed(1) : "n/a"}%`);
+  console.log(`Coverage: ${answered} answered of ${eligible} eligible URLs = ${eligible ? ((100 * answered) / eligible).toFixed(1) : "n/a"}% (eligible = every URL found except blocked_robots and excluded_by_rule)`);
+  const scope = (
+    await db.$client.query<{ kind: string; host: string; n: number }>(
+      `select case when reason like 'Different host%' then 'other host' else 'outside subfolder' end as kind,
+              split_part(split_part(url, '//', 2), '/', 1) as host, count(*)::int as n
+       from crawl_urls where crawl_id = $1 and state = 'out_of_scope' group by 1, 2 order by 3 desc`,
+      [row.id],
+    )
+  ).rows;
+  if (scope.length) console.log(`Out of scope: ${scope.slice(0, 8).map((r) => `${r.kind} ${r.host} ${r.n}`).join("; ")}${scope.length > 8 ? `; … ${scope.length - 8} more hosts` : ""}`);
+  const start = (await db.$client.query<{ state: string; status_code: number | null; redirect_target: string | null }>("select state, status_code, redirect_target from crawl_urls where crawl_id = $1 and 'seed' = any(discovered_via) order by id limit 1", [row.id])).rows[0];
+  if (start?.redirect_target) console.log(`Start URL ${site}/ answered ${start.status_code} → ${start.redirect_target}`);
   console.log(`Raw HTML storage: ${blob.map((b) => `${b.blob_status ?? "no body"} ${b.n}`).join(", ")}`);
   console.log(`robots.txt: ${clip(crawl.robots && { ...(crawl.robots as object), body: undefined }, 300)}`);
   console.log(`Probes: ${clip((crawl.probes as { kind: string; url: string; status: number | null; skipCode?: string; error?: unknown }[]).map((p) => [p.kind, p.url, p.status, p.skipCode ?? (p.error ? "error" : "")]), 1200)}`);
@@ -132,7 +147,7 @@ async function main() {
   }
 
   if (out) {
-    await writeFile(out, JSON.stringify({ site, profile, crawlId: row.id, outcome, crawlMs, analysisMs, states, answered, eligible, blob, robots: crawl.robots, probes: crawl.probes, sitemaps: crawl.sitemaps, runs, findings: f }, null, 2));
+    await writeFile(out, JSON.stringify({ site, profile, crawlId: row.id, outcome, crawlMs, analysisMs, states, answered, eligible, scope, start, blob, robots: crawl.robots, probes: crawl.probes, sitemaps: crawl.sitemaps, runs, findings: f }, null, 2));
     console.log(`\nFull report: ${out}`);
   }
   redis.disconnect();
