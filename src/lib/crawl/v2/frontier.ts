@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import type { Db } from "../../db/client";
 import type { DiscoverySource, TerminalState, UrlState } from "./types";
+import type { ExtractedHtml } from "../../snapshot/types";
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 type Exec = Db | Tx;
@@ -51,6 +52,7 @@ export interface ReservedUrl {
 }
 
 export interface SnapshotRow {
+  requestedUrl: string;
   finalUrl: string;
   statusCode: number;
   contentType: string;
@@ -60,6 +62,11 @@ export interface SnapshotRow {
   elapsedMs: number;
   contentHash: string | null;
   outlinkCount: number;
+  /** Set by the runner after the raw HTML is in the blob store. */
+  rawHtmlKey: string | null;
+  /** Extracted page fields; null when the response had no HTML body (error status, non-HTML). */
+  extracted: ExtractedHtml | null;
+  extractMs: number;
 }
 
 export interface UrlResult {
@@ -71,6 +78,8 @@ export interface UrlResult {
   elapsedMs?: number | null;
   bytes?: number | null;
   snapshot?: SnapshotRow;
+  /** Raw HTML to store before the result is recorded; never written to Postgres. */
+  rawHtml?: string;
   newUrls?: NewUrl[];
   edges?: Edge[];
 }
@@ -242,14 +251,26 @@ export async function recordResult(db: Db, crawlId: string, urlId: number, token
     if (!done.rows.length) throw new ClaimLostError(urlId);
     const s = result.snapshot;
     if (s) {
-      await tx.execute(sql`
-        insert into page_snapshots (crawl_id, url_id, final_url, status_code, content_type, headers, bytes, truncated, elapsed_ms, content_hash, outlink_count, fetched_at)
-        values (${crawlId}::uuid, ${urlId}, ${s.finalUrl}, ${s.statusCode}, ${s.contentType}, ${JSON.stringify(s.headers)}::jsonb, ${s.bytes}, ${s.truncated},
-          ${s.elapsedMs}, ${s.contentHash}, ${s.outlinkCount}, now())`);
+      await insertSnapshot(tx, crawlId, urlId, s);
     }
     if (result.newUrls?.length) await upsertUrls(tx, crawlId, result.newUrls);
     if (result.edges?.length) await insertEdges(tx, crawlId, result.edges);
   });
+}
+
+const json = (v: unknown) => sql`${JSON.stringify(v)}::jsonb`;
+
+async function insertSnapshot(tx: Exec, crawlId: string, urlId: number, s: SnapshotRow): Promise<void> {
+  const x = s.extracted;
+  await tx.execute(sql`
+    insert into page_snapshots (crawl_id, url_id, requested_url, final_url, status_code, content_type, headers, raw_html_key, bytes, truncated,
+      elapsed_ms, content_hash, outlink_count, fetched_at, head, canonicals, robots, title, titles, description, descriptions, outline,
+      main_text, word_count, language, links, images, json_ld, text_hash, simhash, template_fingerprint, timings, facts)
+    values (${crawlId}::uuid, ${urlId}, ${s.requestedUrl}, ${s.finalUrl}, ${s.statusCode}, ${s.contentType}, ${json(s.headers)}, ${s.rawHtmlKey}, ${s.bytes}, ${s.truncated},
+      ${s.elapsedMs}, ${s.contentHash}, ${s.outlinkCount}, now(), ${json(x?.head ?? [])}, ${json(x?.canonicals ?? [])}, ${x ? json(x.robots) : null},
+      ${x?.titles[0] ?? null}, ${json(x?.titles ?? [])}, ${x?.descriptions[0] ?? null}, ${json(x?.descriptions ?? [])}, ${json(x?.outline ?? [])},
+      ${x?.mainText ?? null}, ${x?.wordCount ?? null}, ${x ? json(x.language) : null}, ${json(x?.links ?? [])}, ${json(x?.images ?? [])}, ${json(x?.jsonLd ?? [])},
+      ${x?.textHash ?? null}, ${x?.simhash ?? null}, ${x?.templateFingerprint ?? null}, ${json({ fetchMs: s.elapsedMs, extractMs: s.extractMs })}, ${x ? json(x.facts) : null})`);
 }
 
 /** Return this worker's unsent reservations to the frontier (pause, cancel, shutdown). */

@@ -1,3 +1,5 @@
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
@@ -6,6 +8,8 @@ import { defineConfig } from "vitest/config";
 // They use their own database (created on demand), never the dev database: worker processes started by the tests
 // pick up every unfinished crawl in the database they point at.
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL ?? "postgres://sitesentry:sitesentry@127.0.0.1:5433/sitesentry_test";
+// Raw HTML from test crawls goes to a temporary directory, not the repo's .data/blobs.
+process.env.BLOB_DIR ??= path.join(tmpdir(), "sitesentry-int-blobs");
 
 export default defineConfig({
   resolve: {

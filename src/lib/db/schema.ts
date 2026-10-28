@@ -106,7 +106,10 @@ export const urlEdges = pgTable(
   (t) => [index("url_edges_to_idx").on(t.crawlId, t.toUrl), index("url_edges_from_idx").on(t.crawlId, t.fromUrl)],
 );
 
-/** Phase 1 subset of the spec's page snapshot; Phase 2 adds head tags, headings, text stats and storage keys. */
+/**
+ * One row per fetched URL: the spec's PageSnapshot (src/lib/snapshot/types.ts). Raw HTML lives gzipped in the blob
+ * store; raw_html_key points at it. Extraction fields are null/empty for responses without an HTML body.
+ */
 export const pageSnapshots = pgTable(
   "page_snapshots",
   {
@@ -117,17 +120,42 @@ export const pageSnapshots = pgTable(
     urlId: bigint("url_id", { mode: "number" })
       .notNull()
       .references(() => crawlUrls.id, { onDelete: "cascade" }),
+    requestedUrl: text("requested_url"),
     finalUrl: text("final_url").notNull(),
     statusCode: integer("status_code").notNull(),
     contentType: text("content_type").notNull(),
+    /** Redirect hops that led here, filled by analysis from the redirect edges. */
+    redirectChain: jsonb("redirect_chain").notNull().default(sql`'[]'::jsonb`),
     headers: jsonb("headers").notNull(),
+    rawHtmlKey: text("raw_html_key"),
     bytes: integer("bytes").notNull(),
     truncated: boolean("truncated").notNull(),
     elapsedMs: integer("elapsed_ms").notNull(),
+    head: jsonb("head").notNull().default(sql`'[]'::jsonb`),
+    canonicals: jsonb("canonicals").notNull().default(sql`'[]'::jsonb`),
+    robots: jsonb("robots"),
+    /** First document title (titles[0]), kept as a column for duplicate grouping. */
+    title: text("title"),
+    titles: jsonb("titles").notNull().default(sql`'[]'::jsonb`),
+    description: text("description"),
+    descriptions: jsonb("descriptions").notNull().default(sql`'[]'::jsonb`),
+    outline: jsonb("outline").notNull().default(sql`'[]'::jsonb`),
+    mainText: text("main_text"),
+    wordCount: integer("word_count"),
+    language: jsonb("language"),
+    links: jsonb("links").notNull().default(sql`'[]'::jsonb`),
+    images: jsonb("images").notNull().default(sql`'[]'::jsonb`),
+    jsonLd: jsonb("json_ld").notNull().default(sql`'[]'::jsonb`),
     /** sha256 of the body as read. */
     contentHash: text("content_hash"),
+    /** sha256 of the normalised main-content text (null under 50 words). */
+    textHash: text("text_hash"),
+    simhash: text("simhash"),
+    templateFingerprint: text("template_fingerprint"),
+    timings: jsonb("timings"),
+    facts: jsonb("facts"),
     outlinkCount: integer("outlink_count").notNull().default(0),
     fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
   },
-  (t) => [uniqueIndex("page_snapshots_url_uq").on(t.urlId), index("page_snapshots_crawl_idx").on(t.crawlId)],
+  (t) => [uniqueIndex("page_snapshots_url_uq").on(t.urlId), index("page_snapshots_crawl_idx").on(t.crawlId, t.id)],
 );

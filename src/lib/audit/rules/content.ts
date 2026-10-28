@@ -8,14 +8,27 @@ export type ContentFacts = {
   contentSource: string;
 };
 
-/** Visible main-content words. Strips scripts, styles and common boilerplate regions. */
-export function mainContentWords($: Doc): { words: number; source: string } {
+const BLOCKS = "address, article, aside, blockquote, br, dd, div, dl, dt, figcaption, figure, footer, h1, h2, h3, h4, h5, h6, header, hr, li, main, nav, ol, p, pre, section, table, td, th, tr, ul";
+
+/** Text of a (cloned, disposable) element with block boundaries kept as spaces, so "<h1>A</h1><p>B</p>" reads "A B". */
+export function blockText(root: ReturnType<Doc>): string {
+  root.find(BLOCKS).after(" ");
+  return root.text().replace(/\s+/g, " ").trim();
+}
+
+/** Visible main-content text: <main>, else <article>, else <body>, without scripts, styles and boilerplate regions. */
+export function mainContentText($: Doc): { text: string; source: "main" | "article" | "body" } {
   const pick = $("main").first().length ? "main" : $("article").first().length ? "article" : "body";
   const root = $(pick).first().clone();
   root.find("script, style, noscript, template, svg, nav, header, footer, aside, form").remove();
-  const text = root.text().replace(/\s+/g, " ").trim();
+  return { text: blockText(root), source: pick };
+}
+
+/** Visible main-content words. Strips scripts, styles and common boilerplate regions. */
+export function mainContentWords($: Doc): { words: number; source: string } {
+  const { text, source } = mainContentText($);
   const words = text ? text.split(" ").filter((w) => /[\p{L}\p{N}]/u.test(w)).length : 0;
-  return { words, source: pick };
+  return { words, source };
 }
 
 export const contentEvaluators: Record<string, CriterionEvaluator> = {

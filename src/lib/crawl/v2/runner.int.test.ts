@@ -4,6 +4,10 @@ import { testRedis } from "@/test/redis";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { newCrawl, testDb } from "@/test/db";
 import { send, startLocalServer, type LocalServer } from "@/test/local-server";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { getRawHtml, LocalBlobStore } from "@/lib/snapshot/blob-store";
 import { activeCount, stateCounts } from "./frontier";
 import { HostThrottle, type ThrottleOptions } from "./politeness";
 import { MAX_THROTTLE_RETRIES, runCrawl, V2_USER_AGENT, type RunnerOptions } from "./runner";
@@ -102,6 +106,42 @@ describe("runCrawl", () => {
     expect(crawl.fetches_committed).toBe(pageHits().length);
     const edges = await db.execute(sql`select count(*)::int as n from url_edges where crawl_id = ${c}::uuid and via = 'redirect'`);
     expect((edges.rows[0] as { n: number }).n).toBe(1);
+  });
+
+  it("writes the full page snapshot and gzips the raw HTML to the blob store", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "runner-blobs-"));
+    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Snap</title><meta name="description" content="Desc">
+      <link rel="canonical" href="${srv.origin}/"></head><body><main><h1>Head</h1><p>Body text</p><img src="/i.png" alt="x"></main></body></html>`;
+    srv.routes.set("/", send(html, "text/html; charset=utf-8", 200, { "x-robots-tag": "noarchive" }));
+    srv.routes.set("/gone", send("", "text/html", 404));
+    srv.routes.set("/i.png", send("png", "image/png"));
+    const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued", config: { seeds: [`${srv.origin}/`, `${srv.origin}/gone`] } });
+    const blobs = new LocalBlobStore(dir);
+    try {
+      expect(await runCrawl(opts({ blobs }), c)).toBe("completed");
+      const r = await db.execute(sql`select s.*, u.normalised_url from page_snapshots s join crawl_urls u on u.id = s.url_id where s.crawl_id = ${c}::uuid order by s.status_code`);
+      const [home, gone] = r.rows as Record<string, unknown>[];
+      expect(home).toMatchObject({
+        requested_url: `${srv.origin}/`,
+        status_code: 200,
+        title: "Snap",
+        titles: ["Snap"],
+        description: "Desc",
+        outline: [{ level: 1, text: "Head" }],
+        main_text: "Head Body text",
+        word_count: 3,
+        canonicals: [{ resolved: `${srv.origin}/`, location: "head", absolute: true }],
+        images: [{ resolved: `${srv.origin}/i.png`, alt: "x" }],
+        robots: { noindex: { meta: false, header: false } },
+      });
+      expect((home.timings as { extractMs: number }).extractMs).toBeGreaterThanOrEqual(0);
+      expect(home.raw_html_key).toBe(`crawls/${c}/html/${home.url_id}.html.gz`);
+      expect(await getRawHtml(blobs, home.raw_html_key as string)).toBe(html);
+      // A 404 has no body: its snapshot keeps the response, with no extraction and no blob.
+      expect(gone).toMatchObject({ status_code: 404, raw_html_key: null, title: null, facts: null, titles: [] });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("stops at the budget and files the rest as budget_exhausted", async () => {

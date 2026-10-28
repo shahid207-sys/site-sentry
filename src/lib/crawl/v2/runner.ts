@@ -8,6 +8,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import type { Redis } from "ioredis";
 import { parseHtml } from "../../audit/parse";
+import { blobStoreFromEnv, putRawHtml, type BlobStore } from "../../snapshot/blob-store";
+import { extractHtml } from "../../snapshot/extract";
 import type { Db } from "../../db/client";
 import { SafeFetchError, type FetchOptions, type FetchResult, type Fetcher } from "../../fetch/safe-fetch";
 import { normaliseUrl } from "../normalise";
@@ -32,6 +34,7 @@ import {
   type Edge,
   type NewUrl,
   type ReservedUrl,
+  type SnapshotRow,
   type UrlResult,
 } from "./frontier";
 import { HostThrottle, parseRetryAfter, type ThrottleOptions } from "./politeness";
@@ -104,6 +107,8 @@ export interface RunnerOptions {
   fetchOptions?: Pick<FetchOptions, "timeoutMs" | "maxBytes" | "userAgent">;
   signal?: AbortSignal;
   log?: (event: string, data?: Record<string, unknown>) => void;
+  /** Where raw HTML is stored gzipped. Default: blobStoreFromEnv() (BLOB_DIR, else .data/blobs). */
+  blobs?: BlobStore;
 }
 
 interface CrawlRow {
@@ -194,6 +199,11 @@ class Run {
 
   private get db() {
     return this.opts.db;
+  }
+
+  private _blobs: BlobStore | null = null;
+  private get blobs(): BlobStore {
+    return (this._blobs ??= this.opts.blobs ?? blobStoreFromEnv());
   }
 
   async execute(): Promise<RunOutcome> {
@@ -464,7 +474,10 @@ class Run {
             await requeueRefused(this.db, this.crawlId, r.id, commit.token);
             this.log("crawl.requeued", { crawlId: this.crawlId, url: r.url, why: result.requeue });
           }
-          else await recordResult(this.db, this.crawlId, r.id, commit.token, result);
+          else {
+            if (result.rawHtml && result.snapshot) result.snapshot.rawHtmlKey = await this.storeHtml(r, result.rawHtml);
+            await recordResult(this.db, this.crawlId, r.id, commit.token, result);
+          }
         } catch (e) {
           if (!(e instanceof ClaimLostError)) throw e;
           this.log("crawl.claim_lost", { crawlId: this.crawlId, url: r.url });
@@ -474,6 +487,16 @@ class Run {
     await Promise.all(Array.from({ length: Math.min(this.throttle.max, batch.length) }, lane));
     if (failed) throw failed;
     return halted;
+  }
+
+  /** Gzip the raw HTML to the blob store before the result is recorded. A storage failure is logged and the snapshot keeps no key. */
+  private async storeHtml(r: ReservedUrl, html: string): Promise<string | null> {
+    try {
+      return await putRawHtml(this.blobs, this.crawlId, r.id, html);
+    } catch (e) {
+      this.log("crawl.blob_error", { crawlId: this.crawlId, url: r.url, message: (e as Error)?.message ?? String(e) });
+      return null;
+    }
   }
 
   /** Request a committed URL (the caller holds a throttle slot, which this returns) and classify the response. */
@@ -526,7 +549,8 @@ class Run {
       return { ...base, state: "redirected", reason: `HTTP ${res.status} → ${target.url}`, redirectTarget: target.url, newUrls: [next], edges: [edge] };
     }
 
-    const snapshot = {
+    const snapshot: SnapshotRow = {
+      requestedUrl: r.url,
       finalUrl: res.finalUrl,
       statusCode: res.status,
       contentType: res.contentType,
@@ -536,6 +560,9 @@ class Run {
       elapsedMs: res.elapsedMs,
       contentHash: res.body ? createHash("sha256").update(res.body).digest("hex") : null,
       outlinkCount: 0,
+      rawHtmlKey: null,
+      extracted: null,
+      extractMs: 0,
     };
     const ok = res.status >= 200 && res.status < 300;
     if (ok && !res.contentTypeAccepted) {
@@ -546,15 +573,19 @@ class Run {
       return { ...base, state: "fetched", reason: `HTTP ${res.status}${tries}${note ? `. ${note}` : ""}`, snapshot };
     }
 
-    const out = extractOutlinks(parseHtml(res.body), res.finalUrl);
+    const $ = parseHtml(res.body);
+    const out = extractOutlinks($, res.finalUrl);
+    const started = performance.now();
+    snapshot.extracted = extractHtml({ $, html: res.body, pageUrl: res.finalUrl, headers: res.headers, bytes: res.bytes, outlinks: out.links });
+    snapshot.extractMs = Math.round((performance.now() - started) * 100) / 100;
     const childDepth = (r.depth ?? 0) + 1; // a sitemap-only page counts as depth 0 for its children
     const newUrls = out.links.map((l) => this.newUrl(l.url, l.original, l.via, childDepth));
     const edges: Edge[] = out.links.map((l) => ({ fromUrl: r.url, toUrl: l.url, via: l.via, anchor: l.anchor, rel: l.rel || null, location: l.location, nofollow: l.nofollow }));
     snapshot.outlinkCount = out.links.length;
     if (res.truncated) {
-      return { ...base, state: "oversized", reason: `HTML larger than the ${res.bytes}-byte cap; the first ${res.bytes} bytes were read.`, snapshot, newUrls, edges };
+      return { ...base, state: "oversized", reason: `HTML larger than the ${res.bytes}-byte cap; the first ${res.bytes} bytes were read.`, snapshot, rawHtml: res.body, newUrls, edges };
     }
-    return { ...base, state: "fetched", reason: `HTTP ${res.status}`, snapshot, newUrls, edges };
+    return { ...base, state: "fetched", reason: `HTTP ${res.status}`, snapshot, rawHtml: res.body, newUrls, edges };
   }
 
   // ---------- endings ----------
