@@ -13,6 +13,7 @@ import { SafeFetchError, type FetchOptions, type FetchResult, type Fetcher } fro
 import { normaliseUrl } from "../normalise";
 import type { ScopeRules } from "../profiles";
 import { crawlDelayFor, isAllowed, parseRobots, type ParsedRobots } from "../robots";
+import { compileRules } from "../scope-rules";
 import { discoverSitemaps, extractOutlinks, type SitemapDocRecord } from "./discovery";
 import {
   ClaimLostError,
@@ -203,8 +204,7 @@ class Run {
     this.origin = new URL(crawl.site_origin).origin;
     this.throttle = this.opts.throttle ?? new HostThrottle(this.opts.redis, this.host, this.opts.politeness);
     const scope = crawl.config?.scope;
-    const compile = (list: string[] = []) => list.map((s): [string, RegExp] => [s, new RegExp(s)]);
-    this.scope = { include: compile(scope?.include), exclude: compile(scope?.exclude), subfolder: scope?.subfolder ?? null };
+    this.scope = { include: compileRules(scope?.include), exclude: compileRules(scope?.exclude), subfolder: scope?.subfolder ?? null };
     if (crawl.config?.auth) {
       const key = secretKey();
       if (!key) throw new Error("This crawl uses basic auth, but CRAWLER_SECRET_KEY is not set on the worker.");

@@ -2,7 +2,8 @@ import "server-only";
 import { z } from "zod";
 import { RULE_CATEGORIES, type RuleCategory } from "@/lib/audit/types";
 import { clampToLegacyEngine, createAudit, LIMITS } from "@/lib/crawl/engine";
-import { MAX_RULE_LENGTH, MAX_SCOPE_RULES, normaliseSubfolder, PROFILE_IDS, regexProblem, resolveProfile, type ScopeRules } from "@/lib/crawl/profiles";
+import { MAX_SCOPE_RULES, normaliseSubfolder, PROFILE_IDS, resolveProfile, type ScopeRules } from "@/lib/crawl/profiles";
+import { regexProblem } from "@/lib/crawl/scope-rules";
 import { crawlerV2Enabled, getCrawlQueue, startCrawl, type CrawlAuthInput } from "@/lib/crawl/v2/audit-bridge";
 import { secretKey } from "@/lib/crawl/v2/secrets";
 import { getDb } from "@/lib/db/client";
@@ -12,7 +13,8 @@ import { getDeps, getStore } from "@/lib/workspace";
 
 export const CATEGORY_IDS = RULE_CATEGORIES.map((c) => c.id) as [RuleCategory, ...RuleCategory[]];
 
-const Rules = z.array(z.string().max(MAX_RULE_LENGTH)).max(MAX_SCOPE_RULES).default([]);
+// Length and safety are checked by regexProblem in scopeFrom, which names the rule; this only bounds the payload.
+const Rules = z.array(z.string().max(10_000)).max(MAX_SCOPE_RULES).default([]);
 
 export const AuditRequest = z.object({
   siteId: z.string().min(1).max(80),

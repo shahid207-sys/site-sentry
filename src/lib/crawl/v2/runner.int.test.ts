@@ -319,7 +319,8 @@ describe("runCrawl Custom profile scope and auth", () => {
   it("with include rules, crawls only matching URLs (tested against the normalised URL)", async () => {
     srv.routes.set("/", page(["/en/a", "/en/b", "/fr/a"]));
     for (const p of ["/en/a", "/en/b"]) srv.routes.set(p, page([]));
-    const include = [`^${srv.origin.replace(/\./g, "\.")}/(en/.*)?$`];
+    // "/" or anything under /en/. Written as an alternation: (en/.*)? would be refused (an optional group around .*).
+    const include = [`^${srv.origin.replace(/\./g, "\\.")}/($|en/)`];
     const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued", config: { scope: { include, exclude: [] } } });
     expect(await runCrawl(opts({ throttle: fast() }), c)).toBe("completed");
     const s = await urlStates(c);
@@ -365,6 +366,12 @@ describe("runCrawl Custom profile scope and auth", () => {
     expect(seen.get("other/sitemap.xml")).toBeUndefined(); // credentials never left the crawl's origin
     const row = (await db.execute(sql`select config::text as c from crawls where id = ${id}::uuid`)).rows[0] as { c: string };
     expect(row.c).not.toContain("s3cret");
+  });
+
+  it("refuses to run an unsafe scope rule that reached the database without API validation", async () => {
+    const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued", config: { scope: { include: [], exclude: ["(a+)+$"] } } });
+    await expect(runCrawl(opts({ throttle: fast() }), c)).rejects.toThrow('Scope rule "(a+)+$" is unusable: Refused:');
+    expect(srv.hits.size).toBe(0);
   });
 
   it("fails the crawl with a clear error when the worker has no CRAWLER_SECRET_KEY", async () => {

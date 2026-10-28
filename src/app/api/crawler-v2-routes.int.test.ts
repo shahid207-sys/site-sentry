@@ -148,6 +148,10 @@ describe("audit API crawl profiles", () => {
     await expect(call(create({ siteId: "s3", profile: "quick", budget: 500 }))).rejects.toThrow("fixed budget of 25");
     await expect(call(create({ siteId: "s3", profile: "standard", scope: { include: ["/a"], exclude: [] } }))).rejects.toThrow("part of the Custom profile");
     await expect(call(create({ siteId: "s3", profile: "custom", scope: { include: ["("], exclude: [] } }))).rejects.toThrow("Include rule 1:");
+    await expect(call(create({ siteId: "s3", profile: "custom", scope: { include: [], exclude: ["/ok/", "(a+)+$"] } }))).rejects.toThrow(
+      "Exclude rule 2: Refused: this pattern can take exponential time",
+    );
+    await expect(call(create({ siteId: "s3", profile: "custom", scope: { include: ["a".repeat(201)], exclude: [] } }))).rejects.toThrow("Include rule 1: Longer than 200 characters.");
     await expect(call(create({ siteId: "s3", profile: "custom", scope: { include: [], exclude: [], subfolder: "blog" } }))).rejects.toThrow("subfolder must be a path");
   });
 

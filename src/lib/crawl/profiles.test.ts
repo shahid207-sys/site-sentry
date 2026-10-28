@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeLimits, MAX_BUDGET, normaliseSubfolder, PROFILES, regexProblem, resolveProfile } from "./profiles";
+import { describeLimits, MAX_BUDGET, normaliseSubfolder, PROFILES, resolveProfile } from "./profiles";
 
 describe("crawl profiles", () => {
   it("match the spec table", () => {
@@ -26,13 +26,6 @@ describe("crawl profiles", () => {
     expect(() => resolveProfile({ profile: "full", budget: MAX_BUDGET + 1 })).toThrow("Budget must be");
     expect(() => resolveProfile({ profile: "custom", maxDepth: -1 })).toThrow("Depth must be");
     expect(() => resolveProfile({ profile: "custom", budget: 2.5 })).toThrow("Budget must be");
-  });
-
-  it("validates include/exclude patterns", () => {
-    expect(regexProblem("^https://a\\.test/blog/")).toBeNull();
-    expect(regexProblem("(")).toMatch(/Unterminated group|Invalid regular expression/);
-    expect(regexProblem("")).toBe("Empty pattern.");
-    expect(regexProblem("a".repeat(501))).toBe("Longer than 500 characters.");
   });
 
   it("normalises a subfolder to a /prefix/", () => {

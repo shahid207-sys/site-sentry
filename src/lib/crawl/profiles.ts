@@ -29,7 +29,8 @@ export const PROFILES: Record<ProfileId, CrawlProfile> = {
 export const MAX_BUDGET = 1_000_000;
 export const MAX_DEPTH = 100;
 export const MAX_SCOPE_RULES = 20;
-export const MAX_RULE_LENGTH = 500;
+/** Longest include/exclude regex accepted (src/lib/crawl/scope-rules.ts validates the rest). */
+export const MAX_RULE_LENGTH = 200;
 
 /** Spec "Collaboration and accounts": the public hero form runs Quick only, 5 audits per IP per hour. */
 export const HERO_PROFILE: ProfileId = "quick";
@@ -70,18 +71,6 @@ export function resolveProfile(req: ProfileRequest): { profile: ProfileId; budge
   if (!Number.isInteger(budget) || budget < 1 || budget > MAX_BUDGET) throw new Error(`Budget must be 1–${MAX_BUDGET.toLocaleString("en")} URLs.`);
   if (maxDepth !== null && (!Number.isInteger(maxDepth) || maxDepth < 0 || maxDepth > MAX_DEPTH)) throw new Error(`Depth must be 0–${MAX_DEPTH}, or unlimited.`);
   return { profile: req.profile, budget, maxDepth };
-}
-
-/** Why a regex is unusable, or null. Patterns are compiled without flags, so matching is case-sensitive. */
-export function regexProblem(source: string): string | null {
-  if (!source) return "Empty pattern.";
-  if (source.length > MAX_RULE_LENGTH) return `Longer than ${MAX_RULE_LENGTH} characters.`;
-  try {
-    new RegExp(source);
-    return null;
-  } catch (e) {
-    return (e as Error).message;
-  }
 }
 
 /** "/blog" → "/blog/". Null when it is not a usable path prefix. */

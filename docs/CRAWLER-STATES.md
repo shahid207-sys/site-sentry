@@ -218,6 +218,16 @@ form and the methodology page.
 
 - Scope checks run in this order: subfolder (`out_of_scope`), exclude rules, then include rules (both `excluded_by_rule`).
   Rules are case-sensitive and tested against the normalised URL. The reason quotes the rule that matched.
+- **Rule safety** (`src/lib/crawl/scope-rules.ts`). JavaScript regexes backtrack, so one rule such as `(a+)+$` could
+  stall a worker on a single URL. The rules are checked twice: by the API, which names the rule, and again by the
+  runner before it starts, for rows written without the API. The checks:
+  - at most 20 rules of at most 200 characters each;
+  - each rule must compile;
+  - each rule must pass `safe-regex2`'s star-height check: no repeated group inside another repetition.
+
+  That check counts `?` as a repetition, so `(en/.*)?` is refused although it is harmless. The error suggests
+  `($|en/)` instead. It also misses overlapping alternation such as `^(a|a)*$`. A linear-time engine (RE2) would
+  close that gap, but it is a native dependency.
 - Basic auth is sent only to the crawl's own origin, never across a redirect to another origin. The password is encrypted
   with AES-256-GCM under `CRAWLER_SECRET_KEY`, bound to the crawl id as associated data, before the crawl row is written.
   The audit stores only the username. Without the key, the API refuses basic auth before creating the audit.
