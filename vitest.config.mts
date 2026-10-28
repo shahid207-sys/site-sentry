@@ -12,6 +12,8 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],
+    // Postgres/Redis integration tests run separately: npm run test:int
+    exclude: ["src/**/*.int.test.ts", "node_modules/**"],
     testTimeout: 20_000,
   },
 });
