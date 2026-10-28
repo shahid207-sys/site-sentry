@@ -225,6 +225,7 @@ class Run {
     renew.unref();
     const unwatch = this.watchStatus();
     try {
+      await this.throttle.attach(this.crawlId);
       if (!(await this.loadRobots())) return (await this.checkStop()) ?? "shutdown";
       const stop = await this.checkStop();
       if (stop) return stop;
@@ -238,6 +239,9 @@ class Run {
       unwatch();
       clearInterval(renew);
       await releaseReservations(this.db, this.owner).catch(() => {});
+      // Prune the host's shared throttle state if no other crawl uses it; a TTL covers a worker killed before this.
+      const pruned = await this.throttle.detach(this.crawlId).catch(() => "error" as const);
+      this.log("crawl.throttle_detached", { crawlId: this.crawlId, host: this.host, pruned });
     }
   }
 

@@ -173,6 +173,23 @@ describe("runCrawl politeness", () => {
     return r.rows[0] as { state: string; reason: string; status_code: number; attempts: number };
   }
 
+  it("prunes the host's throttle state from Redis when the crawl ends", async () => {
+    srv.routes.set("/", page(["/a", "/b"]));
+    srv.routes.set("/a", page([]));
+    srv.routes.set("/b", page([]));
+    const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
+    const throttle = hostThrottle({ ratePerSecond: 1000 }); // 1 ms spacing, so nothing holds the host at the end
+    expect(await runCrawl(opts({ throttle }), c)).toBe("completed");
+    expect(await redis.keys(`${keyPrefix}*`)).toEqual([]);
+
+    // A crawl that is still running on the host keeps the state for itself.
+    await throttle.attach("another-crawl");
+    const c2 = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
+    expect(await runCrawl(opts({ throttle }), c2)).toBe("completed");
+    expect(await redis.smembers(throttle.redisKeys[3])).toEqual(["another-crawl"]);
+    expect(await redis.pttl(throttle.redisKeys[0])).toBeGreaterThan(0);
+  });
+
   it("keeps at most 3 requests in flight per host and sends the spec user-agent", async () => {
     let inFlight = 0;
     let peak = 0;

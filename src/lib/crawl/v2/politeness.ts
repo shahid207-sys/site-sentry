@@ -22,6 +22,10 @@ export const SLOW_P95_MS = 3000;
 export const MAX_CRAWL_DELAY_MS = 60_000;
 /** A slot not released within this long is presumed lost (worker killed) and freed. Above the 30 s request timeout. */
 export const DEFAULT_SLOT_LEASE_MS = 60_000;
+/** A host's Redis state expires this long after its last write, even if no crawl detached (a killed worker). */
+export const DEFAULT_STATE_TTL_MS = 3_600_000;
+/** HostThrottle.events keeps at most this many slow-downs. */
+export const MAX_EVENTS = 100;
 /** How often a lane blocked on the concurrency cap re-checks Redis for a slot freed by another process. */
 const POLL_MS = 50;
 
@@ -35,6 +39,8 @@ export interface ThrottleOptions {
   baseBackoffMs?: number;
   maxBackoffMs?: number;
   leaseMs?: number;
+  /** Idle TTL of the host's Redis keys. */
+  stateTtlMs?: number;
   /** Redis key prefix (tests isolate themselves with their own). */
   keyPrefix?: string;
   /** A fake clock for tests. Without it the throttle uses Redis's clock. */
@@ -69,7 +75,9 @@ const defaultSleep = (ms: number, signal?: AbortSignal) =>
     signal?.addEventListener("abort", abort, { once: true });
   });
 
-// KEYS: 1 state hash, 2 slot leases (zset scored by expiry), 3 latency samples (list). ARGV[1]: now, or -1 for Redis TIME.
+// KEYS: 1 state hash, 2 slot leases (zset scored by expiry), 3 latency samples (list), 4 crawls using the host (set).
+// ARGV[1]: now, or -1 for Redis TIME. ARGV[2]: idle TTL ms. Every write refreshes the TTL on all four keys (done), so
+// the state of a host nobody crawls any more disappears on its own even if no crawl ever detached cleanly.
 const PRELUDE = `
 local function clock(a)
   local n = tonumber(a)
@@ -82,29 +90,33 @@ local function num(field, default)
   if v then return tonumber(v) end
   return default
 end
+local function done(r)
+  for i = 1, 4 do redis.call('PEXPIRE', KEYS[i], ARGV[2]) end
+  return r
+end
 local now = clock(ARGV[1])
 `;
 
-// ARGV: now, max, rate interval ms, lease id, lease ms. Returns {1, 0} with the slot taken, else {0, wait ms} (-1: full).
+// ARGV: now, ttl, max, rate interval ms, lease id, lease ms. Returns {1, 0} with the slot taken, else {0, wait ms} (-1: full).
 const ACQUIRE = `${PRELUDE}
-local max = tonumber(ARGV[2])
+local max = tonumber(ARGV[3])
 redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now)
 local limit = math.min(num('limit', max), max)
 if redis.call('ZCARD', KEYS[2]) >= limit then return {0, -1} end
 local wait = math.max(num('nextAt', 0), num('pausedUntil', 0)) - now
 if wait > 0 then return {0, math.ceil(wait)} end
-redis.call('ZADD', KEYS[2], now + tonumber(ARGV[5]), ARGV[4])
-redis.call('HSET', KEYS[1], 'nextAt', now + math.max(tonumber(ARGV[3]), num('crawlDelay', 0)), 'limit', limit)
-return {1, 0}
+redis.call('ZADD', KEYS[2], now + tonumber(ARGV[6]), ARGV[5])
+redis.call('HSET', KEYS[1], 'nextAt', now + math.max(tonumber(ARGV[4]), num('crawlDelay', 0)), 'limit', limit)
+return done({1, 0})
 `;
 
-// ARGV: now, max, lease id, status (-1: no request sent), elapsed (-1), retry-after (-1), slow ms, window, base, max backoff.
-// Returns {0} or {1, reason, new limit, pause ms, now} when the host was slowed down.
+// ARGV: now, ttl, max, lease id, status (-1: no request sent), elapsed (-1), retry-after (-1), slow ms, window, base,
+// max backoff. Returns {0} or {1, reason, new limit, pause ms, now} when the host was slowed down.
 const RELEASE = `${PRELUDE}
-local max = tonumber(ARGV[2])
-redis.call('ZREM', KEYS[2], ARGV[3])
-local status, elapsed, ra = tonumber(ARGV[4]), tonumber(ARGV[5]), tonumber(ARGV[6])
-local slow, window, base, maxb = tonumber(ARGV[7]), tonumber(ARGV[8]), tonumber(ARGV[9]), tonumber(ARGV[10])
+local max = tonumber(ARGV[3])
+redis.call('ZREM', KEYS[2], ARGV[4])
+local status, elapsed, ra = tonumber(ARGV[5]), tonumber(ARGV[6]), tonumber(ARGV[7])
+local slow, window, base, maxb = tonumber(ARGV[8]), tonumber(ARGV[9]), tonumber(ARGV[10]), tonumber(ARGV[11])
 if status < 0 then return {0} end
 if elapsed >= 0 then
   redis.call('RPUSH', KEYS[3], elapsed)
@@ -133,11 +145,11 @@ if reason then
   end
   redis.call('HSET', KEYS[1], 'limit', limit, 'backoff', backoff, 'okStreak', 0, 'pausedUntil', math.max(num('pausedUntil', 0), now + pause))
   if reason == 'slow_p95' then redis.call('DEL', KEYS[3]) end -- judge the slower pace on fresh samples
-  return {1, reason, limit, pause, now}
+  return done({1, reason, limit, pause, now})
 end
 if elapsed > slow then
   redis.call('HSET', KEYS[1], 'okStreak', 0) -- a slow response is not a normal one, even before p95 can judge
-  return {0}
+  return done({0})
 end
 -- Each normal response halves the backoff, so a short burst of 429s does not leave the host on a long pause.
 if backoff / 2 < base then backoff = 0 else backoff = backoff / 2 end
@@ -147,19 +159,41 @@ if streak >= window then
   if limit < max then limit = limit + 1 end
 end
 redis.call('HSET', KEYS[1], 'limit', limit, 'backoff', backoff, 'okStreak', streak)
-return {0}
+return done({0})
 `;
 
-// ARGV: now, crawl-delay ms.
+// ARGV: now, ttl, crawl-delay ms.
 const CRAWL_DELAY = `${PRELUDE}
-redis.call('HSET', KEYS[1], 'crawlDelay', ARGV[2])
-return 1
+redis.call('HSET', KEYS[1], 'crawlDelay', ARGV[3])
+return done(1)
 `;
 
-// ARGV: now, max. Returns {slots in flight, limit, paused until, backoff}.
+// ARGV: now, ttl, crawl id.
+const ATTACH = `${PRELUDE}
+redis.call('SADD', KEYS[4], ARGV[3])
+return done(1)
+`;
+
+// ARGV: now, ttl, crawl id. When no other crawl uses the host and no slot is held, the state is deleted, or, while
+// the host is still paused or spaced (backoff, Retry-After, Crawl-delay), set to expire exactly when that hold ends.
+// Returns {0, -1} still in use, {1, 0} deleted, {2, ms} expires in ms.
+const DETACH = `${PRELUDE}
+redis.call('SREM', KEYS[4], ARGV[3])
+redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now)
+if redis.call('SCARD', KEYS[4]) > 0 or redis.call('ZCARD', KEYS[2]) > 0 then return done({0, -1}) end
+local hold = math.ceil(math.max(num('nextAt', 0), num('pausedUntil', 0)) - now)
+if hold <= 0 then
+  redis.call('DEL', KEYS[1], KEYS[2], KEYS[3], KEYS[4])
+  return {1, 0}
+end
+for i = 1, 4 do redis.call('PEXPIRE', KEYS[i], hold) end
+return {2, hold}
+`;
+
+// ARGV: now, ttl, max. Returns {slots in flight, limit, paused until, backoff}. Read-only: does not refresh the TTL.
 const SNAPSHOT = `${PRELUDE}
 redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now)
-local max = tonumber(ARGV[2])
+local max = tonumber(ARGV[3])
 return {redis.call('ZCARD', KEYS[2]), math.min(num('limit', max), max), num('pausedUntil', 0), num('backoff', 0)}
 `;
 
@@ -168,15 +202,19 @@ type ThrottleRedis = Redis & {
   throttleRelease(...args: (string | number)[]): Promise<[0] | [1, ThrottleEvent["reason"], number, number, number]>;
   throttleCrawlDelay(...args: (string | number)[]): Promise<number>;
   throttleSnapshot(...args: (string | number)[]): Promise<[number, number, number, number]>;
+  throttleAttach(...args: (string | number)[]): Promise<number>;
+  throttleDetach(...args: (string | number)[]): Promise<[0 | 1 | 2, number]>;
 };
 
 const scripted = new WeakSet<Redis>();
 function withScripts(redis: Redis): ThrottleRedis {
   if (!scripted.has(redis)) {
-    redis.defineCommand("throttleAcquire", { numberOfKeys: 3, lua: ACQUIRE });
-    redis.defineCommand("throttleRelease", { numberOfKeys: 3, lua: RELEASE });
-    redis.defineCommand("throttleCrawlDelay", { numberOfKeys: 3, lua: CRAWL_DELAY });
-    redis.defineCommand("throttleSnapshot", { numberOfKeys: 3, lua: SNAPSHOT });
+    redis.defineCommand("throttleAcquire", { numberOfKeys: 4, lua: ACQUIRE });
+    redis.defineCommand("throttleRelease", { numberOfKeys: 4, lua: RELEASE });
+    redis.defineCommand("throttleCrawlDelay", { numberOfKeys: 4, lua: CRAWL_DELAY });
+    redis.defineCommand("throttleSnapshot", { numberOfKeys: 4, lua: SNAPSHOT });
+    redis.defineCommand("throttleAttach", { numberOfKeys: 4, lua: ATTACH });
+    redis.defineCommand("throttleDetach", { numberOfKeys: 4, lua: DETACH });
     scripted.add(redis);
   }
   return redis as ThrottleRedis;
@@ -192,20 +230,21 @@ export class HostThrottle {
   readonly events: ThrottleEvent[] = [];
   private crawlDelayMs: number;
   private readonly redis: ThrottleRedis;
-  private readonly keys: [string, string, string];
+  private readonly keys: [string, string, string, string];
   private readonly rate: number;
   private readonly slowMs: number;
   private readonly window: number;
   private readonly baseBackoff: number;
   private readonly maxBackoff: number;
   private readonly leaseMs: number;
+  private readonly ttlMs: number;
   private readonly now: (() => number) | null;
   private readonly sleep: NonNullable<ThrottleOptions["sleep"]>;
 
   constructor(redis: Redis, host: string, opts: ThrottleOptions = {}) {
     this.redis = withScripts(redis);
     const base = `${opts.keyPrefix ?? "crawl:host:"}{${host}}`;
-    this.keys = [`${base}:state`, `${base}:slots`, `${base}:latency`];
+    this.keys = [`${base}:state`, `${base}:slots`, `${base}:latency`, `${base}:crawls`];
     this.max = opts.maxConcurrency ?? DEFAULT_HOST_CONCURRENCY;
     this.rate = opts.ratePerSecond ?? DEFAULT_RATE_PER_SECOND;
     this.crawlDelayMs = Math.min(MAX_CRAWL_DELAY_MS, opts.crawlDelayMs ?? 0);
@@ -214,6 +253,7 @@ export class HostThrottle {
     this.baseBackoff = opts.baseBackoffMs ?? 1000;
     this.maxBackoff = opts.maxBackoffMs ?? 60_000;
     this.leaseMs = opts.leaseMs ?? DEFAULT_SLOT_LEASE_MS;
+    this.ttlMs = opts.stateTtlMs ?? DEFAULT_STATE_TTL_MS;
     this.now = opts.now ?? null;
     this.sleep = opts.sleep ?? defaultSleep;
   }
@@ -230,7 +270,7 @@ export class HostThrottle {
   /** Set the host's robots.txt Crawl-delay (shared with every other crawler of the host). */
   async setCrawlDelay(ms: number | null): Promise<void> {
     this.crawlDelayMs = Math.min(MAX_CRAWL_DELAY_MS, ms ?? 0);
-    await this.redis.throttleCrawlDelay(...this.keys, this.clock, this.crawlDelayMs);
+    await this.redis.throttleCrawlDelay(...this.keys, this.clock, this.ttlMs, this.crawlDelayMs);
   }
 
   /** Wait for a request slot and return it. Rejects with the signal's reason if aborted while waiting. */
@@ -238,7 +278,7 @@ export class HostThrottle {
     const slot = randomUUID();
     for (;;) {
       signal?.throwIfAborted();
-      const pending = this.redis.throttleAcquire(...this.keys, this.clock, this.max, 1000 / this.rate, slot, this.leaseMs);
+      const pending = this.redis.throttleAcquire(...this.keys, this.clock, this.ttlMs, this.max, 1000 / this.rate, slot, this.leaseMs);
       let got: [number, number];
       try {
         got = await abortable(pending, signal);
@@ -260,6 +300,7 @@ export class HostThrottle {
       const r = await this.redis.throttleRelease(
         ...this.keys,
         this.clock,
+        this.ttlMs,
         this.max,
         slot,
         o.status ?? -1,
@@ -270,15 +311,37 @@ export class HostThrottle {
         this.baseBackoff,
         this.maxBackoff,
       );
-      if (r[0] === 1) this.events.push({ at: r[4], reason: r[1], concurrency: r[2], pausedForMs: r[3] });
+      if (r[0] === 1) {
+        this.events.push({ at: r[4], reason: r[1], concurrency: r[2], pausedForMs: r[3] });
+        if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS);
+      }
     } finally {
       for (const wake of waiting.get(this.keys[1]) ?? []) wake();
     }
   }
 
+  /** Record that a crawl is using the host, so another crawl ending does not prune state this one relies on. */
+  async attach(crawlId: string): Promise<void> {
+    await this.redis.throttleAttach(...this.keys, this.clock, this.ttlMs, crawlId);
+  }
+
+  /**
+   * A crawl stopped using the host. If it was the last one and no slot is held, the host's state is deleted, or set to
+   * expire when its current pause or spacing ends.
+   */
+  async detach(crawlId: string): Promise<"in_use" | "deleted" | "expiring"> {
+    const [r] = await this.redis.throttleDetach(...this.keys, this.clock, this.ttlMs, crawlId);
+    return r === 0 ? "in_use" : r === 1 ? "deleted" : "expiring";
+  }
+
+  /** The host's Redis keys, for tests and diagnostics. */
+  get redisKeys(): readonly string[] {
+    return this.keys;
+  }
+
   /** The host's shared state, for tests and diagnostics. */
   async snapshot(): Promise<{ inFlight: number; limit: number; pausedUntil: number; backoffMs: number }> {
-    const [inFlight, limit, pausedUntil, backoffMs] = await this.redis.throttleSnapshot(...this.keys, this.clock, this.max);
+    const [inFlight, limit, pausedUntil, backoffMs] = await this.redis.throttleSnapshot(...this.keys, this.clock, this.ttlMs, this.max);
     return { inFlight, limit, pausedUntil, backoffMs };
   }
 

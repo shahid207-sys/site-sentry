@@ -120,7 +120,7 @@ Every request a crawl makes goes through the host throttle: robots.txt, sitemaps
 *before* `commitToSend`, so a committed URL is never left waiting out a backoff unsent.
 
 **Shared across workers.** The throttle state for a host lives in Redis (`crawl:host:{host}:state`, `:slots`,
-`:latency`; prefix `CRAWLER_THROTTLE_PREFIX`), and every decision is one atomic Lua script. Every crawl of the host
+`:latency`, `:crawls`; prefix `CRAWLER_THROTTLE_PREFIX`), and every decision is one atomic Lua script. Every crawl of the host
 in every worker process draws from the same 3 slots, the same rate spacing, the same backoff and the same
 Crawl-delay. Details:
 
@@ -132,6 +132,15 @@ Crawl-delay. Details:
   polls at a moment one is free.
 - While Redis is unreachable, throttle calls wait for it (`maxRetriesPerRequest: null`), so requests stop. The crawl
   never runs unthrottled.
+- **Pruning.** A run adds its crawl ID to `:crawls` when it starts and removes it when it stops (completed,
+  cancelled, failed, paused or shut down). If no other crawl is listed and no slot is held, the host's keys are
+  deleted. If the host is still on a pause or spacing (backoff, `Retry-After`, Crawl-delay), the keys are instead set
+  to expire exactly when it ends, so a crawl that starts right after does not skip it. Another crawl still running on
+  the host keeps the state.
+- **TTL.** Every write refreshes a 1 h idle TTL on all four keys (`DEFAULT_STATE_TTL_MS`). State left by a worker that
+  was killed before it could detach disappears on its own. A crawl paused for over an hour starts its host from fresh
+  state, and robots.txt is read again on every run, so Crawl-delay is restored.
+- `HostThrottle.events` (the in-process log of slow-downs) keeps the last 100.
 - The rate spacing applies to slot grants. Each request is sent after one Postgres commit, so gaps observed at the
   server vary by that commit's latency (tens of ms).
 - `src/worker/crawl-worker.int.test.ts` runs two crawls of one host in two worker processes. With shared keys, at

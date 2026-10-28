@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Redis } from "ioredis";
 import { afterAll, describe, expect, it } from "vitest";
-import { HostThrottle, MAX_CRAWL_DELAY_MS, type ThrottleOptions } from "./politeness";
+import { HostThrottle, MAX_CRAWL_DELAY_MS, MAX_EVENTS, type ThrottleOptions } from "./politeness";
 
 const url = process.env.REDIS_URL ?? "redis://127.0.0.1:6379";
 const redis = new Redis(url);
@@ -174,6 +174,53 @@ describe("HostThrottle (Redis)", () => {
     const t0 = Date.now();
     await th.acquire();
     expect(Date.now() - t0).toBeGreaterThanOrEqual(400);
+  });
+
+  it("keeps the host's keys on an idle TTL while in use", async () => {
+    const th = throttle({ ratePerSecond: 1000, stateTtlMs: 600_000 });
+    await th.attach("crawl-a");
+    await th.release(await th.acquire(), { status: 200, elapsedMs: 5 });
+    for (const key of th.redisKeys) {
+      const ttl = await redis.pttl(key);
+      if (key.endsWith(":slots")) expect(ttl).toBe(-2); // empty zset: Redis drops it
+      else expect(ttl).toBeGreaterThan(590_000);
+    }
+  });
+
+  it("deletes the host's state when the last crawl detaches, but not while another crawl uses the host", async () => {
+    const keyPrefix = prefix();
+    const a = new HostThrottle(redis, "prune.test", { keyPrefix, ratePerSecond: 1000 });
+    const b = new HostThrottle(other, "prune.test", { keyPrefix, ratePerSecond: 1000 });
+    await a.attach("crawl-a");
+    await b.attach("crawl-b");
+    await a.release(await a.acquire(), { status: 429, elapsedMs: 5, retryAfterMs: 0 }); // 1 s pause, limit 1
+    expect(await a.detach("crawl-a")).toBe("in_use");
+    expect(await b.snapshot()).toMatchObject({ limit: 1 }); // crawl B still sees the slow-down
+    expect(await redis.exists(...a.redisKeys)).toBeGreaterThan(0);
+    await new Promise((r) => setTimeout(r, 1_050)); // the pause is over
+    const held = await b.acquire();
+    expect(await b.detach("crawl-b")).toBe("in_use"); // a slot is still held
+    await b.release(held);
+    await new Promise((r) => setTimeout(r, 5)); // past the 1 ms rate spacing
+    expect(await b.detach("crawl-b")).toBe("deleted");
+    expect(await redis.exists(...a.redisKeys)).toBe(0);
+  });
+
+  it("lets state expire when its pause ends, rather than deleting a pause another crawl would then skip", async () => {
+    const th = throttle({ ratePerSecond: 1000 });
+    await th.attach("crawl-a");
+    await th.release(await th.acquire(), { status: 503, retryAfterMs: 5_000 });
+    expect(await th.detach("crawl-a")).toBe("expiring");
+    const ttl = await redis.pttl(th.redisKeys[0]);
+    expect(ttl).toBeGreaterThan(4_000);
+    expect(ttl).toBeLessThanOrEqual(5_000);
+  });
+
+  it("keeps at most MAX_EVENTS slow-downs in memory", async () => {
+    const c = clock();
+    const th = throttle({ now: c.now, sleep: c.sleep, ratePerSecond: 1000, baseBackoffMs: 1 });
+    for (let i = 0; i < MAX_EVENTS + 5; i++) await th.release(await th.acquire(), { status: 429, retryAfterMs: 0 });
+    expect(th.events).toHaveLength(MAX_EVENTS);
   });
 
   it("stops waiting when the signal aborts, and holds no slot afterwards", async () => {
