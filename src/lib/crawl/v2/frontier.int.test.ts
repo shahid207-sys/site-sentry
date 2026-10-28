@@ -229,3 +229,31 @@ describe("recovery and finalisation", () => {
     expect(await stateCounts(db, c)).toEqual({ cancelled: 2 });
   });
 });
+
+describe("recordResult under concurrency", () => {
+  it("does not deadlock when pages that link to each other are recorded at the same time", async () => {
+    const c = await newCrawl(db);
+    const N = 30;
+    const paths = Array.from({ length: N }, (_, i) => `/nav/${i}`);
+    await upsertUrls(db, c, paths.map((p) => u(p, "seed", 0)));
+    const batch = await reserve(db, c, "w", N, null);
+    const tokens = new Map<number, string>();
+    for (const r of batch) {
+      const k = await commitToSend(db, c, r.id, "w");
+      if (!k.ok) throw new Error("commit failed");
+      tokens.set(r.id, k.token);
+    }
+    // Every page links to every other page, as a site-wide navigation does; all results are written at once.
+    await Promise.all(
+      batch.map((r) =>
+        recordResult(db, c, r.id, tokens.get(r.id)!, {
+          state: "fetched",
+          reason: "HTTP 200",
+          newUrls: paths.map((p) => u(p, "link", 1)),
+          edges: paths.map((p) => ({ fromUrl: r.url, toUrl: `https://example.test${p}`, via: "link" as const, anchor: null, rel: null, location: "nav", nofollow: false })),
+        }),
+      ),
+    );
+    expect(await stateCounts(db, c)).toEqual({ fetched: N });
+  });
+});

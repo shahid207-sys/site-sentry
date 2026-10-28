@@ -202,6 +202,13 @@ export async function recordRetry(db: Db, urlId: number, token: string): Promise
 /** Step 3: write everything the fetch produced and the URL's terminal state, atomically. */
 export async function recordResult(db: Db, crawlId: string, urlId: number, token: string, result: UrlResult): Promise<void> {
   await db.transaction(async (tx) => {
+    // Lock this URL's row and every existing row it links to in one global order (by URL) before writing any of
+    // them. Otherwise two pages that link to each other, recorded at once, each hold their own row and wait for
+    // the other's: a deadlock. New rows are inserted in the same order by upsertUrls.
+    const linked = [...new Set((result.newUrls ?? []).map((u) => u.url))];
+    await tx.execute(sql`select id from crawl_urls
+      where id = ${urlId} or (crawl_id = ${crawlId}::uuid and normalised_url = any(${arr(linked)}::text[]))
+      order by normalised_url for update`);
     const done = await tx.execute(sql`
       update crawl_urls set state = ${result.state}, reason = ${result.reason}, status_code = ${result.statusCode ?? null},
         content_type = ${result.contentType ?? null}, redirect_target = ${result.redirectTarget ?? null},
