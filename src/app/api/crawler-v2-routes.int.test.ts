@@ -197,8 +197,8 @@ describe("audit API crawl profiles", () => {
     const sixth = await quick();
     expect(sixth.status).toBe(429);
     expect((await sixth.json()).error.message).toMatch(/limited to 5 an hour from one address\. Try again in \d+ min\./);
-    const other = await r.quick.POST(post("/api/live/audits/quick", { siteId: "s5", url: `${origin}/` }, { "x-forwarded-for": `${ip}, 2001:db8::1` }), ctx({}));
-    expect(other.status).not.toBe(429); // the rightmost entry is the client; a different one has its own window
+    const other = await r.quick.POST(post("/api/live/audits/quick", { siteId: "s5", url: `${origin}/` }, { "x-forwarded-for": `${ip}, ${randomIp()}` }), ctx({}));
+    expect(other.status).not.toBe(429); // the rightmost entry is the client (a fresh one here); the limited ip on its left is ignored
   });
 
   it("with CRAWLER_V2 off, clamps a profile to the in-request engine and says so on the audit", async () => {
