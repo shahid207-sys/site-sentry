@@ -3,6 +3,7 @@
 import { hostname } from "node:os";
 import { Worker } from "bullmq";
 import { sql } from "drizzle-orm";
+import { Redis } from "ioredis";
 import { createDb } from "../lib/db/client";
 import { createSafeFetch } from "../lib/fetch/safe-fetch";
 import { workerFetchPolicy } from "../lib/crawl/v2/fetch-policy";
@@ -28,6 +29,9 @@ async function main() {
   const owner = `${hostname()}-${process.pid}`;
   const connection = redisConnection();
   const queue = createCrawlQueue(connection);
+  // Per-host politeness state, shared with every other worker. maxRetriesPerRequest null: while Redis is down,
+  // throttle calls wait for it to come back (requests stop) rather than fail or run unthrottled.
+  const redis = new Redis({ ...connection, maxRetriesPerRequest: null });
   const fetch = createSafeFetch(workerFetchPolicy());
   const leaseMs = numEnv("CRAWLER_LEASE_MS", 60_000);
   const shutdown = new AbortController();
@@ -45,7 +49,7 @@ async function main() {
       const crawlId = job.data.crawlId;
       log("crawl.start", { crawlId });
       try {
-        const run = () => runCrawl({ db, fetch, owner, leaseMs, politeness: { maxConcurrency: numEnv("CRAWLER_HOST_CONCURRENCY", 3), ratePerSecond: numEnv("CRAWLER_HOST_RATE", 5) }, signal: shutdown.signal, log }, crawlId);
+        const run = () => runCrawl({ db, redis, fetch, owner, leaseMs, politeness: { maxConcurrency: numEnv("CRAWLER_HOST_CONCURRENCY", 3), ratePerSecond: numEnv("CRAWLER_HOST_RATE", 5), keyPrefix: process.env.CRAWLER_THROTTLE_PREFIX || undefined }, signal: shutdown.signal, log }, crawlId);
         let outcome = await run();
         // A resume that arrived while this job was still winding down from a pause could not enqueue a new job
         // (same job id), so pick it up here.
@@ -82,6 +86,7 @@ async function main() {
     shutdown.abort();
     await worker.close();
     await queue.close();
+    redis.disconnect();
     await db.$client.end();
     process.exit(0);
   };

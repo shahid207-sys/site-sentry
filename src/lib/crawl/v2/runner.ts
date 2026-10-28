@@ -6,6 +6,7 @@
 // that crawl's claims immediately (forced sweep) instead of waiting for leases to expire.
 import { createHash, randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
+import type { Redis } from "ioredis";
 import { parseHtml } from "../../audit/parse";
 import type { Db } from "../../db/client";
 import { SafeFetchError, type FetchOptions, type FetchResult, type Fetcher } from "../../fetch/safe-fetch";
@@ -31,7 +32,7 @@ import {
   type ReservedUrl,
   type UrlResult,
 } from "./frontier";
-import { parseRetryAfter, throttleFor, type HostThrottle, type ThrottleOptions } from "./politeness";
+import { HostThrottle, parseRetryAfter, type ThrottleOptions } from "./politeness";
 import { crawlSecretScope, decryptSecret, secretKey } from "./secrets";
 import type { TerminalState } from "./types";
 
@@ -89,9 +90,11 @@ export interface RunnerOptions {
   owner: string;
   leaseMs?: number;
   batchSize?: number;
-  /** Per-host limits for the process-wide throttle (the first crawl of a host sets them). Defaults: 3 in flight, 5 req/s. */
-  politeness?: Pick<ThrottleOptions, "maxConcurrency" | "ratePerSecond">;
-  /** A throttle to use instead of the process-wide one for the crawl's host (tests). */
+  /** Holds the per-host politeness state shared by every worker (politeness.ts). */
+  redis: Redis;
+  /** Per-host limits. Defaults: 3 in flight, 5 req/s. */
+  politeness?: Pick<ThrottleOptions, "maxConcurrency" | "ratePerSecond" | "keyPrefix">;
+  /** A throttle to use instead of the default one for the crawl's host (tests). */
   throttle?: HostThrottle;
   /** Overrides for the spec defaults (V2_TOTAL_TIMEOUT_MS, V2_MAX_HTML_BYTES, V2_USER_AGENT). */
   fetchOptions?: Pick<FetchOptions, "timeoutMs" | "maxBytes" | "userAgent">;
@@ -172,7 +175,7 @@ class Run {
     this.crawl = crawl;
     this.host = new URL(crawl.site_origin).host;
     this.origin = new URL(crawl.site_origin).origin;
-    this.throttle = this.opts.throttle ?? throttleFor(this.host, this.opts.politeness);
+    this.throttle = this.opts.throttle ?? new HostThrottle(this.opts.redis, this.host, this.opts.politeness);
     const scope = crawl.config?.scope;
     const compile = (list: string[] = []) => list.map((s): [string, RegExp] => [s, new RegExp(s)]);
     this.scope = { include: compile(scope?.include), exclude: compile(scope?.exclude), subfolder: scope?.subfolder ?? null };
@@ -219,8 +222,8 @@ class Run {
   }
 
   /** Every request this crawl makes: inside a host throttle slot, with the v2 timeout and user-agent. */
-  private async request(url: string, o: Omit<FetchOptions, "signal" | "timeoutMs" | "userAgent">, slotHeld = false): Promise<FetchResult> {
-    if (!slotHeld) await this.throttle.acquire(this.opts.signal);
+  private async request(url: string, o: Omit<FetchOptions, "signal" | "timeoutMs" | "userAgent">, held?: string): Promise<FetchResult> {
+    const slot = held ?? (await this.throttle.acquire(this.opts.signal));
     try {
       const res = await this.opts.fetch(url, {
         ...o,
@@ -230,11 +233,11 @@ class Run {
         timeoutMs: this.timeoutMs,
         userAgent: this.opts.fetchOptions?.userAgent ?? V2_USER_AGENT,
       });
-      this.throttle.release({ status: res.status, elapsedMs: res.elapsedMs, retryAfterMs: parseRetryAfter(res.headers["retry-after"]) });
+      await this.throttle.release(slot, { status: res.status, elapsedMs: res.elapsedMs, retryAfterMs: parseRetryAfter(res.headers["retry-after"]) });
       return res;
     } catch (e) {
       // A timeout is the slowest possible response; other failures say nothing about the server's pace.
-      this.throttle.release(e instanceof SafeFetchError && e.code === "TIMEOUT" ? { status: 0, elapsedMs: this.timeoutMs } : {});
+      await this.throttle.release(slot, e instanceof SafeFetchError && e.code === "TIMEOUT" ? { status: 0, elapsedMs: this.timeoutMs } : {});
       throw e;
     }
   }
@@ -243,7 +246,7 @@ class Run {
   private async loadRobots(): Promise<boolean> {
     let rec = this.crawl.robots;
     if (rec?.outcome) {
-      this.applyRobots(rec);
+      await this.applyRobots(rec);
       return true;
     }
     const url = new URL("/robots.txt", this.crawl.site_origin).toString();
@@ -267,7 +270,7 @@ class Run {
       Object.assign(rec, { error: err, outcome: "disallow_all", reason: `robots.txt could not be fetched (${err.message}); treated as a full disallow (RFC 9309 §2.3.1.4).`, sitemaps: [] });
     }
     await this.saveRobots(rec);
-    this.applyRobots(rec);
+    await this.applyRobots(rec);
     return true;
   }
 
@@ -275,11 +278,11 @@ class Run {
     await this.db.execute(sql`update crawls set robots = ${JSON.stringify(rec)}::jsonb where id = ${this.crawlId}::uuid`);
   }
 
-  private applyRobots(rec: RobotsRecord) {
+  private async applyRobots(rec: RobotsRecord) {
     this.robotsRecord = rec;
     this.robots = rec.outcome === "parsed" ? parseRobots(rec.body ?? "") : null;
     const delay = this.robots ? crawlDelayFor(this.robots, ROBOTS_TOKEN) : null;
-    this.throttle.setCrawlDelay(delay === null ? null : delay * 1000);
+    await this.throttle.setCrawlDelay(delay === null ? null : delay * 1000);
   }
 
   // ---------- scope and classification ----------
@@ -401,23 +404,25 @@ class Run {
         }
         const r = batch[next++];
         // Take the host slot before committing, so a committed URL never waits out a backoff unsent.
+        let slot: string;
         try {
-          await this.throttle.acquire(this.opts.signal);
-        } catch {
+          slot = await this.throttle.acquire(this.opts.signal);
+        } catch (e) {
+          if (!this.opts.signal?.aborted) throw e;
           halted = "stopped"; // aborted while waiting; the reservation is released
           return;
         }
-        const commit = await commitToSend(this.db, this.crawlId, r.id, this.owner, this.leaseMs).catch((e) => {
-          this.throttle.release();
+        const commit = await commitToSend(this.db, this.crawlId, r.id, this.owner, this.leaseMs).catch(async (e) => {
+          await this.throttle.release(slot);
           throw e;
         });
         if (!commit.ok) {
-          this.throttle.release();
+          await this.throttle.release(slot);
           if (commit.why !== "lost") halted = commit.why;
           continue;
         }
         try {
-          const result = await this.fetchOne(r, commit.token);
+          const result = await this.fetchOne(r, commit.token, slot);
           await recordResult(this.db, this.crawlId, r.id, commit.token, result);
         } catch (e) {
           if (!(e instanceof ClaimLostError)) throw e;
@@ -431,12 +436,12 @@ class Run {
   }
 
   /** Request a committed URL (the caller holds a throttle slot, which this returns) and classify the response. */
-  private async fetchOne(r: ReservedUrl, token: string): Promise<UrlResult> {
+  private async fetchOne(r: ReservedUrl, token: string, slot: string): Promise<UrlResult> {
     const maxBytes = this.opts.fetchOptions?.maxBytes ?? V2_MAX_HTML_BYTES;
     for (let retries = 0; ; retries++) {
       let res: FetchResult;
       try {
-        res = await this.request(r.url, { accept: "html", followRedirects: false, maxBytes }, true);
+        res = await this.request(r.url, { accept: "html", followRedirects: false, maxBytes }, slot);
       } catch (e) {
         // Shutting down mid-request: it may have reached the server, so it is not retried.
         if (this.opts.signal?.aborted) return { state: "interrupted", reason: INTERRUPTED_REASON };
@@ -448,14 +453,15 @@ class Run {
         return this.classify(r, res, retries, `Retry-After asks for ${Math.round(wait / 1000)} s, longer than the ${RETRY_WAIT_CAP_MS / 1000} s this crawl waits; not retried.`);
       }
       try {
-        await this.throttle.acquire(this.opts.signal); // waits out the backoff the 429/503 just set
-      } catch {
+        slot = await this.throttle.acquire(this.opts.signal); // waits out the backoff the 429/503 just set
+      } catch (e) {
+        if (!this.opts.signal?.aborted) throw e;
         return this.classify(r, res, retries, "The worker stopped before the retry.");
       }
       try {
         await recordRetry(this.db, r.id, token);
       } catch (e) {
-        this.throttle.release();
+        await this.throttle.release(slot);
         throw e;
       }
     }

@@ -1,5 +1,7 @@
 // Gate check "a killed worker resumes with no duplicate fetches": real worker processes, a hard kill mid-crawl.
 import { spawn, type ChildProcess } from "node:child_process";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -31,7 +33,7 @@ afterAll(async () => {
   await db.$client.end();
 });
 
-function startWorker(): { child: ChildProcess; output: () => string; exited: Promise<number | null> } {
+function startWorker(extra: Record<string, string> = {}): { child: ChildProcess; output: () => string; exited: Promise<number | null> } {
   let out = "";
   const child = spawn(process.execPath, ["--import", "tsx", "src/worker/crawl-worker.ts"], {
     env: {
@@ -43,6 +45,7 @@ function startWorker(): { child: ChildProcess; output: () => string; exited: Pro
       // Well above the 5 req/s default, so requests overlap and the kill lands while some are in flight.
       CRAWLER_HOST_RATE: "1000",
       CRAWL_JOB_LOCK_MS: "2000",
+      ...extra,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -110,5 +113,90 @@ describe("crawl worker", () => {
     expect(committed - pageHits().length).toBeLessThanOrEqual(interrupted); // committed, killed before it was sent
     expect(w2.output()).toMatch(/"event":"crawl.recovered".*"interrupted":[1-9]/);
     console.log(JSON.stringify({ hitsAtKill, stateCounts: counts, totalPageHits: pageHits().length }));
+  });
+});
+
+describe("crawl workers sharing a host", () => {
+  // Two crawls of one host in two worker processes. Every response takes 200 ms, and the rate cap is lifted, so
+  // concurrency is the only limit: without a shared budget each worker would keep 3 requests in flight (6 in all).
+  const PER_CRAWL = 30;
+  let inFlight = 0;
+  let peak = 0;
+  const bySection = { a: 0, b: 0 };
+  let overlap = false;
+  let total = 0;
+  const host = createServer((req, res) => {
+    const section = req.url?.startsWith("/a/") ? "a" : req.url?.startsWith("/b/") ? "b" : null;
+    total++;
+    inFlight++;
+    peak = Math.max(peak, inFlight);
+    if (section) bySection[section]++;
+    if (bySection.a > 0 && bySection.b > 0) overlap = true;
+    setTimeout(() => {
+      inFlight--;
+      if (section) bySection[section]--;
+      const m = /^\/([ab])\/$/.exec(req.url ?? "");
+      if (m) return void res.writeHead(200, { "content-type": "text/html" }).end(Array.from({ length: PER_CRAWL - 1 }, (_, i) => `<a href="/${m[1]}/p-${i}">${i}</a>`).join(""));
+      if (section) return void res.writeHead(200, { "content-type": "text/html" }).end("<title>page</title>");
+      res.writeHead(404, { "content-type": "text/plain" }).end("not found"); // robots.txt, sitemaps
+    }, 200);
+  });
+  let port = 0;
+  beforeAll(async () => {
+    await new Promise<void>((r) => host.listen(0, "127.0.0.1", r));
+    port = (host.address() as AddressInfo).port;
+  });
+  afterAll(() => new Promise<void>((r) => host.close(() => r())));
+
+  /** Run one crawl of /a/ and one of /b/ on the same host, one per worker; return the peak requests in flight. */
+  async function runPair(prefixes: [string, string]) {
+    inFlight = peak = total = 0;
+    overlap = false;
+    // A queue of its own: a job left stalled by the kill test above would otherwise be redelivered to these workers.
+    const queueName = `crawl-test-${randomUUID()}`;
+    process.env.CRAWL_QUEUE_NAME = queueName;
+    const env = (prefix: string) => ({
+      CRAWL_QUEUE_NAME: queueName,
+      CRAWLER_LOCAL_HOSTS: "shared.test=127.0.0.1",
+      CRAWLER_LOCAL_PORTS: String(port),
+      CRAWLER_HOST_RATE: "1000",
+      CRAWL_WORKER_CONCURRENCY: "1",
+      CRAWLER_THROTTLE_PREFIX: prefix,
+    });
+    const workers = prefixes.map((p) => startWorker(env(p)));
+    const queue = createCrawlQueue();
+    try {
+      await until(() => workers.every((w) => w.output().includes('"event":"worker.boot"')), 60_000, "both workers to boot");
+      const origin = `http://shared.test:${port}`;
+      const crawls: string[] = [];
+      for (const subfolder of ["/a/", "/b/"]) {
+        const c = await newCrawl(db, { siteOrigin: origin, status: "queued", config: { scope: { include: [], exclude: [], subfolder } } });
+        crawls.push(c);
+        await enqueueCrawl(queue, c);
+      }
+      const done = async () =>
+        ((await db.execute(sql`select count(*)::int as n from crawls where id = any(${`{${crawls.join(",")}}`}::uuid[]) and status = 'completed'`)).rows[0] as { n: number }).n === 2;
+      await until(done, 90_000, "both crawls to complete");
+      // One crawl per worker, so the two crawls really ran in two processes.
+      for (const w of workers) expect(w.output().match(/"event":"crawl.start"/g), w.output()).toHaveLength(1);
+      return { peak, overlap, total };
+    } finally {
+      for (const w of workers) w.child.kill("SIGKILL");
+      await Promise.all(workers.map((w) => w.exited));
+      await queue.close();
+    }
+  }
+
+  it("never has more than 3 requests in flight to one host across two workers", async () => {
+    const shared = `test:shared:${randomUUID()}:`;
+    const r = await runPair([shared, shared]);
+    expect(r.total).toBeGreaterThanOrEqual(2 * PER_CRAWL);
+    expect(r.overlap).toBe(true); // both crawls had requests in flight at the same moment
+    expect(r.peak).toBe(3); // reached the cap, never above it
+
+    // Control: the same two crawls with a budget per worker (separate keys) go over the cap, so the check above can fail.
+    const control = await runPair([`test:solo:${randomUUID()}:`, `test:solo:${randomUUID()}:`]);
+    expect(control.peak).toBeGreaterThan(3);
+    console.log(JSON.stringify({ shared: r, control }));
   });
 });

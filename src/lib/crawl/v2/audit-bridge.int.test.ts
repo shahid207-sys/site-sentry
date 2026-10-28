@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { testDb } from "@/test/db";
+import { testRedis, testThrottlePrefix } from "@/test/redis";
 import { send, startLocalServer, type LocalServer } from "@/test/local-server";
 import { createAudit } from "../engine";
 import { emptyStore, MemoryStore } from "../../store/store";
@@ -11,6 +12,9 @@ import { createCrawlQueue } from "./queue";
 import { runCrawl } from "./runner";
 
 const db = testDb();
+const redis = testRedis();
+const throttlePrefix = testThrottlePrefix();
+afterAll(() => redis.quit());
 process.env.CRAWL_QUEUE_NAME = `crawl-bridge-${randomUUID()}`;
 const queue = createCrawlQueue();
 let srv: LocalServer;
@@ -45,7 +49,7 @@ beforeEach(async () => {
 afterEach(() => srv.hits.clear());
 
 const crawlIdOf = async () => (await store.read()).audits[auditId].crawler!.crawlId;
-const run = async () => runCrawl({ db, fetch: srv.fetch, owner: "bridge-test" }, await crawlIdOf());
+const run = async () => runCrawl({ db, redis, politeness: { keyPrefix: throttlePrefix }, fetch: srv.fetch, owner: "bridge-test" }, await crawlIdOf());
 
 describe("crawler v2 audit bridge", () => {
   it("only applies to the live workspace, and only with CRAWLER_V2=true", () => {

@@ -8,6 +8,7 @@ import { sql } from "drizzle-orm";
 import { NextRequest } from "next/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { testDb } from "@/test/db";
+import { testRedis, testThrottlePrefix } from "@/test/redis";
 import { send, startLocalServer, type LocalServer } from "@/test/local-server";
 import { workerFetchPolicy } from "@/lib/crawl/v2/fetch-policy";
 import { createSafeFetch } from "@/lib/fetch/safe-fetch";
@@ -15,6 +16,9 @@ import { runCrawl } from "@/lib/crawl/v2/runner";
 import type { AuditSummary } from "@/lib/views";
 
 const db = testDb();
+const redis = testRedis();
+const throttlePrefix = testThrottlePrefix();
+afterAll(() => redis.quit());
 let srv: LocalServer;
 let dataDir: string;
 let origin: string;
@@ -98,7 +102,7 @@ describe("audit API with CRAWLER_V2=true", () => {
     expect(before).toMatchObject({ busy: true, audit: { status: "running", phase: "robots" } });
     expect(srv.hits.size).toBe(0); // the web request did not crawl anything itself
 
-    expect(await runCrawl({ db, fetch: fetcher(), owner: "routes-test" }, crawlId)).toBe("completed");
+    expect(await runCrawl({ db, redis, politeness: { keyPrefix: throttlePrefix }, fetch: fetcher(), owner: "routes-test" }, crawlId)).toBe("completed");
     const after = await step(audit.id);
     expect(after.audit).toMatchObject({
       status: "completed",
@@ -119,10 +123,10 @@ describe("audit API with CRAWLER_V2=true", () => {
       call<{ audit: AuditSummary }>(r[name].POST(post(`/api/live/audits/${audit.id}/${name}`), ctx({ id: audit.id })));
 
     expect((await act("pause")).audit.crawler!.status).toBe("paused");
-    expect(await runCrawl({ db, fetch: fetcher(), owner: "routes-test" }, crawlId)).toBe("paused");
+    expect(await runCrawl({ db, redis, politeness: { keyPrefix: throttlePrefix }, fetch: fetcher(), owner: "routes-test" }, crawlId)).toBe("paused");
     expect((await act("resume")).audit.crawler!.status).toBe("running");
     expect((await act("cancel")).audit.crawler!.status).toBe("cancelling");
-    expect(await runCrawl({ db, fetch: fetcher(), owner: "routes-test" }, crawlId)).toBe("cancelled");
+    expect(await runCrawl({ db, redis, politeness: { keyPrefix: throttlePrefix }, fetch: fetcher(), owner: "routes-test" }, crawlId)).toBe("cancelled");
     expect((await step(audit.id)).audit).toMatchObject({ status: "cancelled", phase: "done", crawler: { status: "cancelled" } });
   });
 });

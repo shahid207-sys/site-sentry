@@ -1,13 +1,19 @@
+import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
+import { testRedis } from "@/test/redis";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { newCrawl, testDb } from "@/test/db";
 import { send, startLocalServer, type LocalServer } from "@/test/local-server";
 import { activeCount, stateCounts } from "./frontier";
-import { HostThrottle } from "./politeness";
+import { HostThrottle, type ThrottleOptions } from "./politeness";
 import { MAX_THROTTLE_RETRIES, runCrawl, V2_USER_AGENT, type RunnerOptions } from "./runner";
 
 const db = testDb();
-afterAll(() => db.$client.end());
+const redis = testRedis();
+afterAll(async () => {
+  await db.$client.end();
+  await redis.quit();
+});
 
 let srv: LocalServer;
 beforeEach(async () => {
@@ -20,8 +26,14 @@ afterEach(async () => {
 const page = (links: string[], title = "page") => send(`<!doctype html><html><head><title>${title}</title></head><body><main>${links.map((l) => `<a href="${l}">${l}</a>`).join("")}</main></body></html>`);
 const urlset = (urls: string[]) => `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map((u) => `<url><loc>${u}</loc></url>`).join("")}</urlset>`;
 
-const opts = (over: Partial<RunnerOptions> = {}): RunnerOptions => ({ db, fetch: srv.fetch, owner: "test", leaseMs: 30_000, ...over });
-const oneAtATime = () => new HostThrottle({ maxConcurrency: 1, ratePerSecond: 1000 });
+// Each test gets its own Redis keys, so host state left by another test (same port, earlier run) cannot leak in.
+let keyPrefix = "";
+beforeEach(() => {
+  keyPrefix = `test:runner:${randomUUID()}:`;
+});
+const opts = (over: Partial<RunnerOptions> = {}): RunnerOptions => ({ db, redis, politeness: { keyPrefix }, fetch: srv.fetch, owner: "test", leaseMs: 30_000, ...over });
+const hostThrottle = (o: ThrottleOptions) => new HostThrottle(redis, new URL(srv.origin).host, { keyPrefix, ...o });
+const oneAtATime = () => hostThrottle({ maxConcurrency: 1, ratePerSecond: 1000 });
 
 async function urlStates(crawlId: string) {
   const r = await db.execute(sql`select normalised_url as url, state, reason, depth, discovered_via from crawl_urls where crawl_id = ${crawlId}::uuid order by id`);
@@ -180,7 +192,7 @@ describe("runCrawl politeness", () => {
     }
     const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
     // A fast rate so the in-flight cap, not the 5 req/s spacing, is what limits this crawl.
-    expect(await runCrawl(opts({ throttle: new HostThrottle({ ratePerSecond: 1000 }) }), c)).toBe("completed");
+    expect(await runCrawl(opts({ throttle: hostThrottle({ ratePerSecond: 1000 }) }), c)).toBe("completed");
     expect(peak).toBe(3);
     expect([...agents]).toEqual([V2_USER_AGENT]);
     expectNoDuplicateFetches();
@@ -203,12 +215,14 @@ describe("runCrawl politeness", () => {
     srv.routes.set("/", (req, res) => (starts.push(Date.now()), page(["/a", "/b"])(req, res)));
     for (const k of ["/a", "/b"]) srv.routes.set(k, (req, res) => (starts.push(Date.now()), page([])(req, res)));
     const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
-    const throttle = new HostThrottle({ ratePerSecond: 1000 });
+    const throttle = hostThrottle({ ratePerSecond: 1000 });
     expect(await runCrawl(opts({ throttle }), c)).toBe("completed");
     expect(throttle.intervalMs).toBe(600);
     const gaps = starts.slice(1).map((t, i) => t - starts[i]);
     expect(gaps).toHaveLength(2);
-    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(590);
+    // The throttle spaces slot grants exactly (politeness.int.test.ts); each request then waits one Postgres commit
+    // before it is sent, so the gaps seen by the server vary by that commit's latency.
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(500);
   });
 
   it("retries a 429 after its Retry-After, slows the host down, and counts both requests", async () => {
@@ -220,7 +234,7 @@ describe("runCrawl politeness", () => {
       page([])(req, res);
     });
     const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
-    const throttle = new HostThrottle({ ratePerSecond: 1000, baseBackoffMs: 100 });
+    const throttle = hostThrottle({ ratePerSecond: 1000, baseBackoffMs: 100 });
     expect(await runCrawl(opts({ throttle }), c)).toBe("completed");
     expect(await urlRow(c, "/busy")).toMatchObject({ state: "fetched", status_code: 200, reason: "HTTP 200", attempts: 2 });
     expect(starts[1] - starts[0]).toBeGreaterThanOrEqual(990); // Retry-After: 1, longer than the 100 ms backoff
@@ -231,7 +245,7 @@ describe("runCrawl politeness", () => {
     srv.routes.set("/", page(["/busy"]));
     srv.routes.set("/busy", send("busy", "text/html", 429)); // no Retry-After: exponential backoff
     const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
-    const throttle = new HostThrottle({ ratePerSecond: 1000, baseBackoffMs: 20 });
+    const throttle = hostThrottle({ ratePerSecond: 1000, baseBackoffMs: 20 });
     expect(await runCrawl(opts({ throttle }), c)).toBe("completed");
     expect(await urlRow(c, "/busy")).toMatchObject({ state: "fetched", status_code: 429, reason: "HTTP 429 after 3 requests", attempts: 3 });
     expect(srv.hits.get("/busy")).toBe(MAX_THROTTLE_RETRIES + 1);
@@ -243,7 +257,7 @@ describe("runCrawl politeness", () => {
     srv.routes.set("/down", send("maintenance", "text/html", 503, { "retry-after": "3600" }));
     const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
     // The host pause is capped at maxBackoffMs (60 s by default; 50 ms here to keep the test fast).
-    const throttle = new HostThrottle({ ratePerSecond: 1000, baseBackoffMs: 20, maxBackoffMs: 50 });
+    const throttle = hostThrottle({ ratePerSecond: 1000, baseBackoffMs: 20, maxBackoffMs: 50 });
     expect(await runCrawl(opts({ throttle }), c)).toBe("completed");
     const row = await urlRow(c, "/down");
     expect(row).toMatchObject({ state: "fetched", status_code: 503, attempts: 1 });
@@ -258,7 +272,7 @@ describe("runCrawl politeness", () => {
     for (const k of kids) srv.routes.set(k, (req, res) => void setTimeout(() => page([])(req, res), 60));
     const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
     // Thresholds scaled down (3 s → 30 ms, window 20 → 4) so the test runs in milliseconds, not minutes.
-    const throttle = new HostThrottle({ ratePerSecond: 1000, slowP95Ms: 30, window: 4, baseBackoffMs: 10 });
+    const throttle = hostThrottle({ ratePerSecond: 1000, slowP95Ms: 30, window: 4, baseBackoffMs: 10 });
     expect(await runCrawl(opts({ throttle }), c)).toBe("completed");
     expect(throttle.events.map((e) => e.reason)).toContain("slow_p95");
     expect(throttle.events[0].concurrency).toBe(1);
@@ -267,7 +281,7 @@ describe("runCrawl politeness", () => {
 });
 
 describe("runCrawl Custom profile scope and auth", () => {
-  const fast = () => new HostThrottle({ ratePerSecond: 1000 });
+  const fast = () => hostThrottle({ ratePerSecond: 1000 });
 
   it("keeps to the subfolder (out_of_scope) and applies exclude rules (excluded_by_rule)", async () => {
     srv.routes.set("/blog/", page(["/blog/a", "/blog/drafts/x", "/shop/", "/"]));

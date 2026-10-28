@@ -7,12 +7,23 @@
 // - Concurrency recovers additively: +1 after a full window of normal responses, up to the configured maximum.
 // - A host pause lasts at most maxBackoffMs (60 s), and Crawl-delay at most 60 s, so one header cannot stall a crawl
 //   for hours. The runner does not retry a URL whose Retry-After is longer than that.
+//
+// The state lives in Redis, so every worker process (and every crawl) hitting one host shares one budget. Each
+// decision is one Lua script, atomic in Redis. A slot is a lease in a sorted set, scored by its expiry, so a slot
+// held by a killed worker comes back after `leaseMs` instead of leaking. Time is Redis's clock (TIME), so clock skew
+// between worker machines cannot break the spacing; tests pass their own clock instead.
+import { randomUUID } from "node:crypto";
+import type { Redis } from "ioredis";
 
 export const DEFAULT_HOST_CONCURRENCY = 3;
 export const DEFAULT_RATE_PER_SECOND = 5;
 export const SLOW_P95_MS = 3000;
 /** Crawl-delay values above this are capped so a hostile robots.txt cannot stall a crawl indefinitely. */
 export const MAX_CRAWL_DELAY_MS = 60_000;
+/** A slot not released within this long is presumed lost (worker killed) and freed. Above the 30 s request timeout. */
+export const DEFAULT_SLOT_LEASE_MS = 60_000;
+/** How often a lane blocked on the concurrency cap re-checks Redis for a slot freed by another process. */
+const POLL_MS = 50;
 
 export interface ThrottleOptions {
   maxConcurrency?: number;
@@ -23,6 +34,10 @@ export interface ThrottleOptions {
   window?: number;
   baseBackoffMs?: number;
   maxBackoffMs?: number;
+  leaseMs?: number;
+  /** Redis key prefix (tests isolate themselves with their own). */
+  keyPrefix?: string;
+  /** A fake clock for tests. Without it the throttle uses Redis's clock. */
   now?: () => number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
@@ -54,43 +69,157 @@ const defaultSleep = (ms: number, signal?: AbortSignal) =>
     signal?.addEventListener("abort", abort, { once: true });
   });
 
-export function p95(samples: number[]): number {
-  if (!samples.length) return 0;
-  const sorted = [...samples].sort((a, b) => a - b);
-  return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1)];
+// KEYS: 1 state hash, 2 slot leases (zset scored by expiry), 3 latency samples (list). ARGV[1]: now, or -1 for Redis TIME.
+const PRELUDE = `
+local function clock(a)
+  local n = tonumber(a)
+  if n >= 0 then return n end
+  local t = redis.call('TIME')
+  return tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+end
+local function num(field, default)
+  local v = redis.call('HGET', KEYS[1], field)
+  if v then return tonumber(v) end
+  return default
+end
+local now = clock(ARGV[1])
+`;
+
+// ARGV: now, max, rate interval ms, lease id, lease ms. Returns {1, 0} with the slot taken, else {0, wait ms} (-1: full).
+const ACQUIRE = `${PRELUDE}
+local max = tonumber(ARGV[2])
+redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now)
+local limit = math.min(num('limit', max), max)
+if redis.call('ZCARD', KEYS[2]) >= limit then return {0, -1} end
+local wait = math.max(num('nextAt', 0), num('pausedUntil', 0)) - now
+if wait > 0 then return {0, math.ceil(wait)} end
+redis.call('ZADD', KEYS[2], now + tonumber(ARGV[5]), ARGV[4])
+redis.call('HSET', KEYS[1], 'nextAt', now + math.max(tonumber(ARGV[3]), num('crawlDelay', 0)), 'limit', limit)
+return {1, 0}
+`;
+
+// ARGV: now, max, lease id, status (-1: no request sent), elapsed (-1), retry-after (-1), slow ms, window, base, max backoff.
+// Returns {0} or {1, reason, new limit, pause ms, now} when the host was slowed down.
+const RELEASE = `${PRELUDE}
+local max = tonumber(ARGV[2])
+redis.call('ZREM', KEYS[2], ARGV[3])
+local status, elapsed, ra = tonumber(ARGV[4]), tonumber(ARGV[5]), tonumber(ARGV[6])
+local slow, window, base, maxb = tonumber(ARGV[7]), tonumber(ARGV[8]), tonumber(ARGV[9]), tonumber(ARGV[10])
+if status < 0 then return {0} end
+if elapsed >= 0 then
+  redis.call('RPUSH', KEYS[3], elapsed)
+  redis.call('LTRIM', KEYS[3], -window, -1)
+end
+local reason = false
+if status == 429 then reason = '429' elseif status == 503 then reason = '503' else
+  local lats = redis.call('LRANGE', KEYS[3], 0, -1)
+  if #lats >= window then
+    local s = {}
+    for i, v in ipairs(lats) do s[i] = tonumber(v) end
+    table.sort(s)
+    if s[math.min(#s, math.ceil(#s * 0.95))] > slow then reason = 'slow_p95' end
+  end
+end
+local limit = math.min(num('limit', max), max)
+local backoff, streak = num('backoff', 0), num('okStreak', 0)
+if reason then
+  limit = math.max(1, math.floor(limit / 2))
+  local pause
+  if ra >= 0 then
+    pause = math.min(maxb, math.max(base, ra)) -- the server said how long
+  else
+    if backoff > 0 then backoff = math.min(maxb, backoff * 2) else backoff = base end
+    pause = backoff
+  end
+  redis.call('HSET', KEYS[1], 'limit', limit, 'backoff', backoff, 'okStreak', 0, 'pausedUntil', math.max(num('pausedUntil', 0), now + pause))
+  if reason == 'slow_p95' then redis.call('DEL', KEYS[3]) end -- judge the slower pace on fresh samples
+  return {1, reason, limit, pause, now}
+end
+if elapsed > slow then
+  redis.call('HSET', KEYS[1], 'okStreak', 0) -- a slow response is not a normal one, even before p95 can judge
+  return {0}
+end
+-- Each normal response halves the backoff, so a short burst of 429s does not leave the host on a long pause.
+if backoff / 2 < base then backoff = 0 else backoff = backoff / 2 end
+streak = streak + 1
+if streak >= window then
+  streak = 0
+  if limit < max then limit = limit + 1 end
+end
+redis.call('HSET', KEYS[1], 'limit', limit, 'backoff', backoff, 'okStreak', streak)
+return {0}
+`;
+
+// ARGV: now, crawl-delay ms.
+const CRAWL_DELAY = `${PRELUDE}
+redis.call('HSET', KEYS[1], 'crawlDelay', ARGV[2])
+return 1
+`;
+
+// ARGV: now, max. Returns {slots in flight, limit, paused until, backoff}.
+const SNAPSHOT = `${PRELUDE}
+redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now)
+local max = tonumber(ARGV[2])
+return {redis.call('ZCARD', KEYS[2]), math.min(num('limit', max), max), num('pausedUntil', 0), num('backoff', 0)}
+`;
+
+type ThrottleRedis = Redis & {
+  throttleAcquire(...args: (string | number)[]): Promise<[number, number]>;
+  throttleRelease(...args: (string | number)[]): Promise<[0] | [1, ThrottleEvent["reason"], number, number, number]>;
+  throttleCrawlDelay(...args: (string | number)[]): Promise<number>;
+  throttleSnapshot(...args: (string | number)[]): Promise<[number, number, number, number]>;
+};
+
+const scripted = new WeakSet<Redis>();
+function withScripts(redis: Redis): ThrottleRedis {
+  if (!scripted.has(redis)) {
+    redis.defineCommand("throttleAcquire", { numberOfKeys: 3, lua: ACQUIRE });
+    redis.defineCommand("throttleRelease", { numberOfKeys: 3, lua: RELEASE });
+    redis.defineCommand("throttleCrawlDelay", { numberOfKeys: 3, lua: CRAWL_DELAY });
+    redis.defineCommand("throttleSnapshot", { numberOfKeys: 3, lua: SNAPSHOT });
+    scripted.add(redis);
+  }
+  return redis as ThrottleRedis;
 }
 
+/** Lanes in this process waiting for a slot on a host; a release here wakes them at once (others poll). */
+const waiting = new Map<string, Set<() => void>>();
+
+/** A host's shared politeness budget. Cheap to create; all instances for one host (in any process) share state. */
 export class HostThrottle {
   readonly max: number;
-  limit: number;
-  inFlight = 0;
+  /** Slow-downs this instance caused, newest last (capped). */
   readonly events: ThrottleEvent[] = [];
   private crawlDelayMs: number;
+  private readonly redis: ThrottleRedis;
+  private readonly keys: [string, string, string];
   private readonly rate: number;
   private readonly slowMs: number;
   private readonly window: number;
   private readonly baseBackoff: number;
   private readonly maxBackoff: number;
-  private readonly now: () => number;
+  private readonly leaseMs: number;
+  private readonly now: (() => number) | null;
   private readonly sleep: NonNullable<ThrottleOptions["sleep"]>;
-  private nextAt = 0;
-  private pausedUntil = 0;
-  private backoffMs = 0;
-  private okStreak = 0;
-  private latencies: number[] = [];
-  private waiters: (() => void)[] = [];
 
-  constructor(opts: ThrottleOptions = {}) {
+  constructor(redis: Redis, host: string, opts: ThrottleOptions = {}) {
+    this.redis = withScripts(redis);
+    const base = `${opts.keyPrefix ?? "crawl:host:"}{${host}}`;
+    this.keys = [`${base}:state`, `${base}:slots`, `${base}:latency`];
     this.max = opts.maxConcurrency ?? DEFAULT_HOST_CONCURRENCY;
-    this.limit = this.max;
     this.rate = opts.ratePerSecond ?? DEFAULT_RATE_PER_SECOND;
     this.crawlDelayMs = Math.min(MAX_CRAWL_DELAY_MS, opts.crawlDelayMs ?? 0);
     this.slowMs = opts.slowP95Ms ?? SLOW_P95_MS;
     this.window = opts.window ?? 20;
     this.baseBackoff = opts.baseBackoffMs ?? 1000;
     this.maxBackoff = opts.maxBackoffMs ?? 60_000;
-    this.now = opts.now ?? Date.now;
+    this.leaseMs = opts.leaseMs ?? DEFAULT_SLOT_LEASE_MS;
+    this.now = opts.now ?? null;
     this.sleep = opts.sleep ?? defaultSleep;
+  }
+
+  private get clock() {
+    return this.now ? this.now() : -1;
   }
 
   /** Minimum gap between request starts: the rate cap or Crawl-delay, whichever is longer. */
@@ -98,77 +227,92 @@ export class HostThrottle {
     return Math.max(1000 / this.rate, this.crawlDelayMs);
   }
 
-  setCrawlDelay(ms: number | null) {
+  /** Set the host's robots.txt Crawl-delay (shared with every other crawler of the host). */
+  async setCrawlDelay(ms: number | null): Promise<void> {
     this.crawlDelayMs = Math.min(MAX_CRAWL_DELAY_MS, ms ?? 0);
+    await this.redis.throttleCrawlDelay(...this.keys, this.clock, this.crawlDelayMs);
   }
 
-  /** Wait for a request slot. Rejects with the signal's reason if aborted while waiting. */
-  async acquire(signal?: AbortSignal): Promise<void> {
+  /** Wait for a request slot and return it. Rejects with the signal's reason if aborted while waiting. */
+  async acquire(signal?: AbortSignal): Promise<string> {
+    const slot = randomUUID();
     for (;;) {
       signal?.throwIfAborted();
-      const now = this.now();
-      const wait = Math.max(this.nextAt, this.pausedUntil) - now;
-      if (this.inFlight < this.limit && wait <= 0) {
-        this.inFlight++;
-        this.nextAt = now + this.intervalMs;
-        return;
+      const pending = this.redis.throttleAcquire(...this.keys, this.clock, this.max, 1000 / this.rate, slot, this.leaseMs);
+      let got: [number, number];
+      try {
+        got = await abortable(pending, signal);
+      } catch (e) {
+        // Aborted while Redis was answering: if the slot was granted after all, give it back.
+        void pending.then(([ok]) => (ok ? this.release(slot) : undefined)).catch(() => {});
+        throw e;
       }
-      if (this.inFlight >= this.limit) {
-        await new Promise<void>((resolve, reject) => {
-          const onAbort = () => reject(signal!.reason);
-          signal?.addEventListener("abort", onAbort, { once: true });
-          this.waiters.push(() => {
-            signal?.removeEventListener("abort", onAbort);
-            resolve();
-          });
-        });
-      } else {
-        await this.sleep(wait, signal);
-      }
+      const [ok, wait] = got;
+      if (ok) return slot;
+      if (wait < 0) await this.untilReleased(signal);
+      else await this.sleep(wait, signal);
     }
   }
 
   /** Return a slot. Pass the response (or nothing, if no request was sent) so the throttle can adapt. */
-  release(o: ThrottleOutcome = {}): void {
-    this.inFlight = Math.max(0, this.inFlight - 1);
-    this.adapt(o);
-    this.waiters.shift()?.();
+  async release(slot: string, o: ThrottleOutcome = {}): Promise<void> {
+    try {
+      const r = await this.redis.throttleRelease(
+        ...this.keys,
+        this.clock,
+        this.max,
+        slot,
+        o.status ?? -1,
+        o.elapsedMs ?? -1,
+        o.retryAfterMs ?? -1,
+        this.slowMs,
+        this.window,
+        this.baseBackoff,
+        this.maxBackoff,
+      );
+      if (r[0] === 1) this.events.push({ at: r[4], reason: r[1], concurrency: r[2], pausedForMs: r[3] });
+    } finally {
+      for (const wake of waiting.get(this.keys[1]) ?? []) wake();
+    }
   }
 
-  private adapt(o: ThrottleOutcome) {
-    if (o.status == null) return;
-    if (o.elapsedMs != null) {
-      this.latencies.push(o.elapsedMs);
-      if (this.latencies.length > this.window) this.latencies.shift();
-    }
-    const reason: ThrottleEvent["reason"] | null =
-      o.status === 429 ? "429" : o.status === 503 ? "503" : this.latencies.length >= this.window && p95(this.latencies) > this.slowMs ? "slow_p95" : null;
-    if (reason) {
-      this.limit = Math.max(1, Math.floor(this.limit / 2));
-      let pause: number;
-      if (o.retryAfterMs != null) {
-        pause = Math.min(this.maxBackoff, Math.max(this.baseBackoff, o.retryAfterMs)); // the server said how long
-      } else {
-        this.backoffMs = this.backoffMs ? Math.min(this.maxBackoff, this.backoffMs * 2) : this.baseBackoff;
-        pause = this.backoffMs;
-      }
-      this.pausedUntil = Math.max(this.pausedUntil, this.now() + pause);
-      this.okStreak = 0;
-      if (reason === "slow_p95") this.latencies = []; // judge the slower pace on fresh samples
-      this.events.push({ at: this.now(), reason, concurrency: this.limit, pausedForMs: pause });
-      return;
-    }
-    if (o.elapsedMs != null && o.elapsedMs > this.slowMs) {
-      this.okStreak = 0; // a slow response is not a normal one, even before the window can judge p95
-      return;
-    }
-    // Each normal response halves the backoff, so a short burst of 429s does not leave the host on a long pause.
-    this.backoffMs = this.backoffMs / 2 < this.baseBackoff ? 0 : this.backoffMs / 2;
-    if (++this.okStreak >= this.window) {
-      this.okStreak = 0;
-      if (this.limit < this.max) this.limit++;
-    }
+  /** The host's shared state, for tests and diagnostics. */
+  async snapshot(): Promise<{ inFlight: number; limit: number; pausedUntil: number; backoffMs: number }> {
+    const [inFlight, limit, pausedUntil, backoffMs] = await this.redis.throttleSnapshot(...this.keys, this.clock, this.max);
+    return { inFlight, limit, pausedUntil, backoffMs };
   }
+
+  /** Wait until a slot is released in this process, or POLL_MS for one released elsewhere. */
+  private untilReleased(signal?: AbortSignal): Promise<void> {
+    const key = this.keys[1];
+    return new Promise<void>((resolve, reject) => {
+      const set = waiting.get(key) ?? new Set();
+      waiting.set(key, set);
+      const done = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        set.delete(done);
+        if (!set.size) waiting.delete(key);
+      };
+      const wake = () => (done(), resolve());
+      const onAbort = () => (done(), reject(signal!.reason));
+      const timer = setTimeout(wake, POLL_MS);
+      set.add(wake);
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+}
+
+function abortable<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return p;
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    p.then(
+      (v) => (signal.removeEventListener("abort", onAbort), resolve(v)),
+      (e) => (signal.removeEventListener("abort", onAbort), reject(e)),
+    );
+  });
 }
 
 /** Retry-After as milliseconds from now: delta-seconds or an HTTP date. Null when absent or unparseable. */
@@ -178,18 +322,4 @@ export function parseRetryAfter(value: string | null | undefined, now = Date.now
   if (/^\d+$/.test(v)) return Number(v) * 1000;
   const at = Date.parse(v);
   return Number.isNaN(at) ? null : Math.max(0, at - now);
-}
-
-const throttles = new Map<string, HostThrottle>();
-
-/** One throttle per host per process, shared by every crawl this worker runs against that host. */
-export function throttleFor(host: string, opts: ThrottleOptions = {}): HostThrottle {
-  let t = throttles.get(host);
-  if (!t) {
-    t = new HostThrottle(opts);
-    throttles.set(host, t);
-  } else if (opts.crawlDelayMs !== undefined) {
-    t.setCrawlDelay(opts.crawlDelayMs);
-  }
-  return t;
 }

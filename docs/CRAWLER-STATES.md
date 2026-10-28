@@ -117,9 +117,26 @@ Code: `src/lib/crawl/v2/politeness.ts` (throttle), `src/lib/crawl/v2/runner.ts` 
 | HTML size | 5 MB; larger pages end `oversized` | `V2_MAX_HTML_BYTES` |
 
 Every request a crawl makes goes through the host throttle: robots.txt, sitemaps and pages. A lane takes a slot
-*before* `commitToSend`, so a committed URL is never left waiting out a backoff unsent. There is one throttle per
-host per worker process, shared by all crawls of that host on that worker. It is not shared across worker
-processes (see known risks).
+*before* `commitToSend`, so a committed URL is never left waiting out a backoff unsent.
+
+**Shared across workers.** The throttle state for a host lives in Redis (`crawl:host:{host}:state`, `:slots`,
+`:latency`; prefix `CRAWLER_THROTTLE_PREFIX`), and every decision is one atomic Lua script. Every crawl of the host
+in every worker process draws from the same 3 slots, the same rate spacing, the same backoff and the same
+Crawl-delay. Details:
+
+- A slot is a lease scored by its expiry (60 s, above the 30 s request timeout). A slot held by a killed worker
+  comes back when its lease expires.
+- Time comes from Redis (`TIME`), so clock skew between worker machines cannot shorten the spacing.
+- A lane waiting on a full host is woken at once by a release in its own process. Slots freed by another process
+  are noticed by polling every 50 ms. There is no fairness between processes; a waiting worker gets a slot only when it
+  polls at a moment one is free.
+- While Redis is unreachable, throttle calls wait for it (`maxRetriesPerRequest: null`), so requests stop. The crawl
+  never runs unthrottled.
+- The rate spacing applies to slot grants. Each request is sent after one Postgres commit, so gaps observed at the
+  server vary by that commit's latency (tens of ms).
+- `src/worker/crawl-worker.int.test.ts` runs two crawls of one host in two worker processes. With shared keys, at
+  most 3 requests were in flight, and both crawls had requests in flight at once. In a control run with a separate
+  budget per worker, the peak reached 6.
 
 **Adaptive throttle.** A 429, a 503, or a p95 response time over 3 s across the last 20 responses each:
 
