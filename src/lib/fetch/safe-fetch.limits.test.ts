@@ -1,23 +1,19 @@
 // Spec "Crawler engine → Politeness and speed" fetch limits: TLS failures get their own code, undici timeouts are
 // timeouts, and a request's own total timeout (30 s for crawler v2) is not cut short by the agent's socket timeouts.
-import { readFileSync } from "node:fs";
-import { createServer } from "node:https";
+import { createServer, type Server } from "node:https";
 import type { AddressInfo } from "node:net";
-import path from "node:path";
+import { generate } from "selfsigned";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startLocalServer } from "@/test/local-server";
 import { isBlockedIp } from "./ip-guard";
 import { classifyTransportError, createSafeFetch, SafeFetchError } from "./safe-fetch";
 
-// Self-signed for CN/SAN tls.test, valid until 2126; test-only, generated with
-// `openssl req -x509 -newkey rsa:2048 -nodes -days 36500 -subj /CN=tls.test -addext subjectAltName=DNS:tls.test`.
-const fixtures = path.join(process.cwd(), "src/test/fixtures/tls");
-const tls = createServer(
-  { key: readFileSync(path.join(fixtures, "self-signed.key.pem")), cert: readFileSync(path.join(fixtures, "self-signed.cert.pem")) },
-  (_req, res) => res.writeHead(200, { "content-type": "text/html" }).end("<title>secret</title>"),
-);
+let tls: Server;
 let port = 0;
 beforeAll(async () => {
+  // A throwaway self-signed certificate for tls.test, made per run so no private key is kept in the repo.
+  const pems = await generate([{ name: "commonName", value: "tls.test" }], { keyType: "ec", algorithm: "sha256" });
+  tls = createServer({ key: pems.private, cert: pems.cert }, (_req, res) => res.writeHead(200, { "content-type": "text/html" }).end("<title>secret</title>"));
   await new Promise<void>((r) => tls.listen(0, "127.0.0.1", r));
   port = (tls.address() as AddressInfo).port;
 });
