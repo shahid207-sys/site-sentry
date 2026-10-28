@@ -39,6 +39,7 @@ function startWorker(extra: Record<string, string> = {}): { child: ChildProcess;
     env: {
       ...process.env,
       CRAWL_QUEUE_NAME: queueName,
+      ANALYSIS_QUEUE_NAME: `${queueName}-analysis`,
       CRAWLER_LOCAL_HOSTS: "kill.test=127.0.0.1",
       CRAWLER_LOCAL_PORTS: String(srv.port),
       CRAWLER_HOST_CONCURRENCY: String(CONCURRENCY),
@@ -157,6 +158,7 @@ describe("crawl workers sharing a host", () => {
     process.env.CRAWL_QUEUE_NAME = queueName;
     const env = (prefix: string) => ({
       CRAWL_QUEUE_NAME: queueName,
+      ANALYSIS_QUEUE_NAME: `${queueName}-analysis`,
       CRAWLER_LOCAL_HOSTS: "shared.test=127.0.0.1",
       CRAWLER_LOCAL_PORTS: String(port),
       CRAWLER_HOST_RATE: "1000",

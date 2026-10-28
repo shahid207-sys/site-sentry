@@ -10,6 +10,7 @@ import { workerFetchPolicy } from "../lib/crawl/v2/fetch-policy";
 import { finalizeUrls, sweep } from "../lib/crawl/v2/frontier";
 import { createCrawlQueue, crawlQueueName, enqueueCrawl, redisConnection, type CrawlJob } from "../lib/crawl/v2/queue";
 import { runCrawl } from "../lib/crawl/v2/runner";
+import { createAnalysisQueue, enqueueAnalysis, startAnalysisWorker, unanalysedCrawls } from "../lib/rules/queue";
 
 const numEnv = (name: string, fallback: number) => {
   const v = Number(process.env[name]);
@@ -35,13 +36,18 @@ async function main() {
   const fetch = createSafeFetch(workerFetchPolicy());
   const leaseMs = numEnv("CRAWLER_LEASE_MS", 60_000);
   const shutdown = new AbortController();
+  const analysisQueue = createAnalysisQueue(connection);
+  // Analysis runs in this process by default; ANALYSIS_WORKER=off leaves it to `npm run worker:analysis`.
+  const analysisWorker = process.env.ANALYSIS_WORKER === "off" ? null : startAnalysisWorker({ db, connection, concurrency: numEnv("ANALYSIS_CONCURRENCY", 1), log });
 
   // Boot reconcile: recover expired claims everywhere, then make sure every unfinished crawl has a job.
   // Runners force-sweep their own crawl once they hold its lock, so a crash is recovered as soon as it is re-run.
   const swept = await sweep(db);
   const open = await db.execute(sql`select id from crawls where status in ('queued', 'running', 'cancelling') order by created_at`);
   for (const row of open.rows as { id: string }[]) await enqueueCrawl(queue, row.id);
-  log("worker.boot", { owner, queue: crawlQueueName(), swept, reenqueued: open.rows.length });
+  const unanalysed = await unanalysedCrawls(db);
+  for (const id of unanalysed) await enqueueAnalysis(analysisQueue, id);
+  log("worker.boot", { owner, queue: crawlQueueName(), swept, reenqueued: open.rows.length, analysisEnqueued: unanalysed.length });
 
   const worker = new Worker<CrawlJob>(
     crawlQueueName(),
@@ -55,6 +61,7 @@ async function main() {
         // (same job id), so pick it up here.
         while (outcome === "paused" && !shutdown.signal.aborted && (await crawlStatus(crawlId)) === "running") outcome = await run();
         log("crawl.end", { crawlId, outcome });
+        if (outcome === "completed" || outcome === "cancelled") await enqueueAnalysis(analysisQueue, crawlId);
         return outcome;
       } catch (e) {
         const error = { message: (e as Error)?.message ?? String(e), at: new Date().toISOString() };
@@ -85,7 +92,9 @@ async function main() {
     log("worker.stopping", { signal });
     shutdown.abort();
     await worker.close();
+    await analysisWorker?.close();
     await queue.close();
+    await analysisQueue.close();
     redis.disconnect();
     await db.$client.end();
     process.exit(0);

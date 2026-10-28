@@ -47,8 +47,9 @@ export interface CrawlRow {
   robots: RobotsRecord | null;
   sitemaps: (SitemapDocRecord | { started: string })[];
   probes: ProbeRecord[];
-  started_at: Date | null;
-  created_at: Date;
+  /** Raw `execute` returns timestamps as strings; Drizzle selects return Dates. */
+  started_at: Date | string | null;
+  created_at: Date | string;
 }
 
 /** First canonical search engines read (head or Link header), normalised like crawled URLs; body canonicals are ignored. */
@@ -65,7 +66,7 @@ export function crawlView(row: CrawlRow): CrawlView {
   return {
     id: row.id,
     origin: row.site_origin,
-    startedAt: (row.started_at ?? row.created_at).toISOString(),
+    startedAt: new Date(row.started_at ?? row.created_at).toISOString(),
     intent: { aiCrawlers: row.config?.aiCrawlers ?? null },
     robots: row.robots,
     robotsAllows: (url, agent) => (parsed ? isAllowed(parsed, agent, url).allowed : outcome === "allow_all" ? true : outcome === "disallow_all" ? false : null),

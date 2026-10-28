@@ -50,6 +50,7 @@ function startWorker(site: FixtureSite, label: string): { child: ChildProcess; b
   Object.assign(env, {
     DATABASE_URL: DB_URL,
     CRAWL_QUEUE_NAME: QUEUE,
+    ANALYSIS_QUEUE_NAME: `${QUEUE}-analysis`,
     CRAWLER_LOCAL_HOSTS: "fixture.test=127.0.0.1",
     CRAWLER_LOCAL_PORTS: String(site.port),
     NODE_ENV: "test", // the loopback mapping above is refused under any other NODE_ENV
