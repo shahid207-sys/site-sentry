@@ -13,7 +13,8 @@
     "test:int": "vitest run --config vitest.integration.config.mts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/lib/db/migrate-cli.ts",
-    "worker": "tsx src/worker/crawl-worker.ts"
+    "worker": "tsx src/worker/crawl-worker.ts",
+    "gate:p1": "tsx scripts/gate-p1.ts"
   },
   "dependencies": {
     "bullmq": "6.3.14",
