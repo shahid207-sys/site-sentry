@@ -66,6 +66,8 @@ export interface AuditConfig {
   scope?: ScopeRules;
   /** Custom profile: the crawl sends basic auth as this user (the password is not stored on the audit). */
   authUser?: string;
+  /** Whether AI crawlers should be allowed (AIS-002, crawler v2). Unset: the rule reports that it needs this setting. */
+  aiCrawlers?: "allow" | "block";
   categories: RuleCategory[];
   /** Check the status of internal link and image targets that were not crawled (bounded). */
   checkLinks: boolean;

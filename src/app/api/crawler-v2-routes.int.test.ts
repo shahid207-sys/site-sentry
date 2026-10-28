@@ -61,7 +61,7 @@ beforeAll(async () => {
   const { getStore } = await import("@/lib/workspace");
   await getStore("live").update((d) => {
     // One site per test below: a site with a running audit gets that audit back instead of a new one.
-    for (const id of ["s1", "s2", "s3", "s4", "s5", "s6"]) d.sites[id] = { id, name: `Local ${id}`, origin, createdAt: new Date().toISOString() };
+    for (const id of ["s1", "s2", "s3", "s4", "s5", "s6", "s7"]) d.sites[id] = { id, name: `Local ${id}`, origin, createdAt: new Date().toISOString() };
   });
 });
 afterAll(async () => {
@@ -158,6 +158,13 @@ describe("audit API crawl profiles", () => {
   it("Full-site takes a budget and no depth limit", async () => {
     const { audit } = await call<{ audit: AuditSummary }>(create({ siteId: "s3", profile: "full", budget: 120_000 }));
     expect(await crawlRow(audit.crawler!.crawlId)).toMatchObject({ profile: "full", budget: 120_000, max_depth: null });
+  });
+
+  it("stores the AI crawler intent on the audit and the crawl config, and rejects other values", async () => {
+    const { audit } = await call<{ audit: AuditSummary }>(create({ siteId: "s7", profile: "quick", aiCrawlers: "allow" }));
+    expect(audit.config).toMatchObject({ aiCrawlers: "allow" });
+    expect((await crawlRow(audit.crawler!.crawlId)).config).toMatchObject({ aiCrawlers: "allow" });
+    await expect(call(create({ siteId: "s7", profile: "quick", aiCrawlers: "maybe" }))).rejects.toThrow();
   });
 
   it("stores Custom basic auth encrypted: the password is not in the response, the audit or the crawl row", async () => {

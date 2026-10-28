@@ -33,6 +33,8 @@ export const AuditRequest = z.object({
       password: z.string().min(1).max(500),
     })
     .optional(),
+  /** Intent for AI crawlers (AIS-002); omitted = not set. */
+  aiCrawlers: z.enum(["allow", "block"]).optional(),
   categories: z.array(z.enum(CATEGORY_IDS)).min(1, "Choose at least one check category."),
   checkLinks: z.boolean(),
   includeImportant: z.boolean(),
@@ -90,6 +92,7 @@ export async function launchAudit(ws: Workspace, input: AuditRequest): Promise<{
     maxDepth: limits.maxDepth,
     ...(scope ? { scope } : {}),
     ...(input.auth ? { authUser: input.auth.username } : {}),
+    ...(v2 && input.aiCrawlers ? { aiCrawlers: input.aiCrawlers } : {}),
     categories,
     checkLinks,
     includeImportant,

@@ -310,6 +310,7 @@ function NewAuditForm({ requestedSite }: { requestedSite: string }) {
   const [categories, setCategories] = useState<RuleCategory[]>(RULE_CATEGORIES.map((c) => c.id));
   const [checkLinks, setCheckLinks] = useState(true);
   const [includeImportant, setIncludeImportant] = useState(true);
+  const [aiCrawlers, setAiCrawlers] = useState<"" | "allow" | "block">("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -367,6 +368,7 @@ function NewAuditForm({ requestedSite }: { requestedSite: string }) {
           categories,
           checkLinks,
           includeImportant,
+          ...(v2 && aiCrawlers ? { aiCrawlers } : {}),
         },
       });
       if (r.reused) toast({ tone: "info", title: "An audit is already running for this site", detail: "Showing its progress instead of starting a second one." });
@@ -487,6 +489,15 @@ function NewAuditForm({ requestedSite }: { requestedSite: string }) {
                 checked={includeImportant}
                 onChange={setIncludeImportant}
               />
+              {v2 ? (
+                <Field label="AI crawlers" htmlFor="na-ai" hint="Should AI search crawlers (GPTBot, ClaudeBot, PerplexityBot…) be able to read this site? Used to judge robots.txt.">
+                  <Select id="na-ai" value={aiCrawlers} onChange={(e) => setAiCrawlers(e.target.value as "" | "allow" | "block")}>
+                    <option value="">Not set</option>
+                    <option value="allow">Allow</option>
+                    <option value="block">Block</option>
+                  </Select>
+                </Field>
+              ) : null}
             </div>
           </Panel>
 

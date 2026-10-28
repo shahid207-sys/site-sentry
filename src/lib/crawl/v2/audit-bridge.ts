@@ -57,6 +57,7 @@ export async function startCrawl(
     sitemaps: audit.config.sitemapUrl ? [audit.config.sitemapUrl] : undefined,
     scope: audit.config.scope,
     auth,
+    aiCrawlers: audit.config.aiCrawlers,
   };
   const [row] = await db
     .insert(crawls)
