@@ -178,7 +178,7 @@ describe("at-most-once fetch accounting", () => {
     const attempt = recordResult(db, c, r.id, "not-the-token", {
       state: "fetched",
       reason: "HTTP 200",
-      snapshot: { requestedUrl: "x", finalUrl: "x", statusCode: 200, contentType: "text/html", headers: {}, bytes: 1, truncated: false, elapsedMs: 1, contentHash: null, outlinkCount: 1, rawHtmlKey: null, extracted: null, extractMs: 0 },
+      snapshot: { requestedUrl: "x", finalUrl: "x", statusCode: 200, contentType: "text/html", headers: {}, bytes: 1, truncated: false, elapsedMs: 1, contentHash: null, outlinkCount: 1, rawHtmlKey: null, blobStatus: null, extracted: null, extractMs: 0 },
       newUrls: [u("/child", "link", 1)],
       edges: [{ fromUrl: r.url, toUrl: "https://example.test/child", via: "link", anchor: null, rel: null, location: "main", nofollow: false }],
     });

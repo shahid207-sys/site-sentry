@@ -29,6 +29,13 @@
       "when": 1793208699449,
       "tag": "0003_findings_outcome",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793209440034,
+      "tag": "0004_snapshot_blob_status",
+      "breakpoints": true
     }
   ]
 }

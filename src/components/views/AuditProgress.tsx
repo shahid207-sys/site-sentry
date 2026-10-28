@@ -363,6 +363,11 @@ export function AuditProgressView() {
       />
 
       {a.crawler ? <UrlStates states={a.crawler.states} /> : null}
+      {a.crawler?.blobMissing ? (
+        <Notice tone="warn" title={`Raw HTML missing for ${plural(a.crawler.blobMissing, "page")}`}>
+          These pages were fetched and checked, but their HTML could not be saved to storage after a retry (blob_missing), so it cannot be viewed or re-analysed later.
+        </Notice>
+      ) : null}
 
       <Panel title="Audit steps" description="What the crawler does, in order. Steps outside this audit's scope are marked." flush>
         <ol className="divide-y divide-line-subtle">

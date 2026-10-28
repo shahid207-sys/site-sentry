@@ -111,9 +111,12 @@ describe("audit API with CRAWLER_V2=true", () => {
     expect(after.audit).toMatchObject({
       status: "completed",
       phase: "done",
-      crawler: { status: "completed", states: { fetched: 3, blocked_robots: 1 } },
+      crawler: { status: "completed", states: { fetched: 3, blocked_robots: 1 }, blobMissing: 0 },
       progress: { planned: 4, done: 4, inspected: 3, skipped: 1, failed: 0 },
     });
+    // A page whose raw HTML could not be stored is counted on the audit, not hidden.
+    await db.execute(sql`update page_snapshots set blob_status = 'blob_missing', raw_html_key = null where id = (select min(id) from page_snapshots where crawl_id = ${crawlId}::uuid)`);
+    expect((await step(audit.id)).audit.crawler).toMatchObject({ blobMissing: 1 });
 
     await call(r.audit.DELETE(new NextRequest(`http://localhost/api/live/audits/${audit.id}`, { method: "DELETE" }), ctx({ id: audit.id })));
     const gone = await db.execute(sql`select count(*)::int as n from crawls where id = ${crawlId}::uuid`);

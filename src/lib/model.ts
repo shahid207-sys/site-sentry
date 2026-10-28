@@ -211,6 +211,8 @@ export interface CrawlerV2Ref {
   status: "queued" | "running" | "paused" | "cancelling" | "completed" | "cancelled" | "failed";
   /** URL counts per state (docs/CRAWLER-STATES.md). */
   states: Record<string, number>;
+  /** Fetched HTML pages whose raw HTML could not be stored (page_snapshots.blob_status = 'blob_missing'). */
+  blobMissing?: number;
   syncedAt: string;
 }
 

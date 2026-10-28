@@ -9,7 +9,8 @@ import { isBlockedIp } from "@/lib/fetch/ip-guard";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { getRawHtml, LocalBlobStore } from "@/lib/snapshot/blob-store";
+import { getRawHtml, LocalBlobStore, type BlobStore } from "@/lib/snapshot/blob-store";
+import { gunzipSync } from "node:zlib";
 import { activeCount, stateCounts } from "./frontier";
 import { HostThrottle, type ThrottleOptions } from "./politeness";
 import { MAX_THROTTLE_RETRIES, runCrawl, V2_USER_AGENT, type RunnerOptions } from "./runner";
@@ -142,9 +143,48 @@ describe("runCrawl", () => {
       });
       expect((home.timings as { extractMs: number }).extractMs).toBeGreaterThanOrEqual(0);
       expect(home.raw_html_key).toBe(`crawls/${c}/html/${home.url_id}.html.gz`);
+      expect(home.blob_status).toBe("stored");
       expect(await getRawHtml(blobs, home.raw_html_key as string)).toBe(html);
       // A 404 has no body: its snapshot keeps the response, with no extraction and no blob.
-      expect(gone).toMatchObject({ status_code: 404, raw_html_key: null, title: null, facts: null, titles: [] });
+      expect(gone).toMatchObject({ status_code: 404, raw_html_key: null, blob_status: null, title: null, facts: null, titles: [] });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("retries a failed blob write once; a second failure leaves the snapshot blob_missing, never a silent null", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "runner-blobs-"));
+    const real = new LocalBlobStore(dir);
+    // /flaky fails its first write only; /broken fails every write.
+    const failures = new Map<string, number>(); // write attempts per tagged page
+    const blobs: BlobStore = {
+      getObject: (k) => real.getObject(k),
+      headObject: (k) => real.headObject(k),
+      deleteObject: (k) => real.deleteObject(k),
+      putObject: async (input) => {
+        const html = gunzipSync(input.Body as Buffer).toString();
+        const tag = html.includes("<title>broken</title>") ? "broken" : html.includes("<title>flaky</title>") ? "flaky" : null;
+        const n = tag ? (failures.get(tag) ?? 0) + 1 : 0;
+        if (tag) failures.set(tag, n);
+        if (tag === "broken" || (tag === "flaky" && n === 1)) throw new Error(`disk full (${tag}, write ${n})`);
+        return real.putObject(input);
+      },
+    };
+    srv.routes.set("/", page(["/flaky", "/broken"], "home"));
+    srv.routes.set("/flaky", page([], "flaky"));
+    srv.routes.set("/broken", page([], "broken"));
+    const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
+    try {
+      expect(await runCrawl(opts({ blobs }), c)).toBe("completed");
+      const rows = (await db.execute(sql`select s.title, s.raw_html_key, s.blob_status from page_snapshots s where s.crawl_id = ${c}::uuid order by s.title`)).rows;
+      expect(rows).toEqual([
+        { title: "broken", raw_html_key: null, blob_status: "blob_missing" },
+        { title: "flaky", raw_html_key: expect.stringMatching(/\.html\.gz$/), blob_status: "stored" },
+        { title: "home", raw_html_key: expect.stringMatching(/\.html\.gz$/), blob_status: "stored" },
+      ]);
+      expect(Object.fromEntries(failures)).toEqual({ flaky: 2, broken: 2 }); // write attempts: the first and one retry, never a third
+      // The page itself is still recorded and checked as fetched.
+      expect((await stateCounts(db, c)).fetched).toBe(3);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

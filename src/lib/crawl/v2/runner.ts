@@ -480,7 +480,10 @@ class Run {
             this.log("crawl.requeued", { crawlId: this.crawlId, url: r.url, why: result.requeue });
           }
           else {
-            if (result.rawHtml && result.snapshot) result.snapshot.rawHtmlKey = await this.storeHtml(r, result.rawHtml);
+            if (result.rawHtml && result.snapshot) {
+              result.snapshot.rawHtmlKey = await this.storeHtml(r, result.rawHtml);
+              result.snapshot.blobStatus = result.snapshot.rawHtmlKey ? "stored" : "blob_missing";
+            }
             await recordResult(this.db, this.crawlId, r.id, commit.token, result);
           }
         } catch (e) {
@@ -494,13 +497,18 @@ class Run {
     return halted;
   }
 
-  /** Gzip the raw HTML to the blob store before the result is recorded. A storage failure is logged and the snapshot keeps no key. */
+  /**
+   * Gzip the raw HTML to the blob store before the result is recorded. A failed write is retried once; a second failure
+   * is logged and returns null, which the snapshot records as blob_status "blob_missing".
+   */
   private async storeHtml(r: ReservedUrl, html: string): Promise<string | null> {
-    try {
-      return await putRawHtml(this.blobs, this.crawlId, r.id, html);
-    } catch (e) {
-      this.log("crawl.blob_error", { crawlId: this.crawlId, url: r.url, message: (e as Error)?.message ?? String(e) });
-      return null;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await putRawHtml(this.blobs, this.crawlId, r.id, html);
+      } catch (e) {
+        this.log("crawl.blob_error", { crawlId: this.crawlId, url: r.url, attempt, message: (e as Error)?.message ?? String(e) });
+        if (attempt === 2) return null;
+      }
     }
   }
 
@@ -566,6 +574,7 @@ class Run {
       contentHash: res.body ? createHash("sha256").update(res.body).digest("hex") : null,
       outlinkCount: 0,
       rawHtmlKey: null,
+      blobStatus: null,
       extracted: null,
       extractMs: 0,
     };

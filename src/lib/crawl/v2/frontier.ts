@@ -64,6 +64,8 @@ export interface SnapshotRow {
   outlinkCount: number;
   /** Set by the runner after the raw HTML is in the blob store. */
   rawHtmlKey: string | null;
+  /** "stored", or "blob_missing" when the write failed after one retry; null when there was no HTML to store. */
+  blobStatus: BlobStatus | null;
   /** Extracted page fields; null when the response had no HTML body (error status, non-HTML). */
   extracted: ExtractedHtml | null;
   extractMs: number;
@@ -260,13 +262,15 @@ export async function recordResult(db: Db, crawlId: string, urlId: number, token
 
 const json = (v: unknown) => sql`${JSON.stringify(v)}::jsonb`;
 
+export type BlobStatus = "stored" | "blob_missing";
+
 async function insertSnapshot(tx: Exec, crawlId: string, urlId: number, s: SnapshotRow): Promise<void> {
   const x = s.extracted;
   await tx.execute(sql`
-    insert into page_snapshots (crawl_id, url_id, requested_url, final_url, status_code, content_type, headers, raw_html_key, bytes, truncated,
+    insert into page_snapshots (crawl_id, url_id, requested_url, final_url, status_code, content_type, headers, raw_html_key, blob_status, bytes, truncated,
       elapsed_ms, content_hash, outlink_count, fetched_at, head, canonicals, robots, title, titles, description, descriptions, outline,
       main_text, word_count, language, links, images, json_ld, text_hash, simhash, template_fingerprint, timings, facts)
-    values (${crawlId}::uuid, ${urlId}, ${s.requestedUrl}, ${s.finalUrl}, ${s.statusCode}, ${s.contentType}, ${json(s.headers)}, ${s.rawHtmlKey}, ${s.bytes}, ${s.truncated},
+    values (${crawlId}::uuid, ${urlId}, ${s.requestedUrl}, ${s.finalUrl}, ${s.statusCode}, ${s.contentType}, ${json(s.headers)}, ${s.rawHtmlKey}, ${s.blobStatus}, ${s.bytes}, ${s.truncated},
       ${s.elapsedMs}, ${s.contentHash}, ${s.outlinkCount}, now(), ${json(x?.head ?? [])}, ${json(x?.canonicals ?? [])}, ${x ? json(x.robots) : null},
       ${x?.titles[0] ?? null}, ${json(x?.titles ?? [])}, ${x?.descriptions[0] ?? null}, ${json(x?.descriptions ?? [])}, ${json(x?.outline ?? [])},
       ${x?.mainText ?? null}, ${x?.wordCount ?? null}, ${x ? json(x.language) : null}, ${json(x?.links ?? [])}, ${json(x?.images ?? [])}, ${json(x?.jsonLd ?? [])},

@@ -132,6 +132,8 @@ export const pageSnapshots = pgTable(
     redirectChain: jsonb("redirect_chain").notNull().default(sql`'[]'::jsonb`),
     headers: jsonb("headers").notNull(),
     rawHtmlKey: text("raw_html_key"),
+    /** "stored" when raw_html_key points at the HTML, "blob_missing" when the write failed twice; null without an HTML body. */
+    blobStatus: text("blob_status"),
     bytes: integer("bytes").notNull(),
     truncated: boolean("truncated").notNull(),
     elapsedMs: integer("elapsed_ms").notNull(),

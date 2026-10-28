@@ -102,11 +102,13 @@ export async function syncAudit(db: Db, store: Store, auditId: string): Promise<
   const states = (await stateCounts(db, crawlId)) as Record<string, number>;
   const sum = (keys: string[]) => keys.reduce((n, k) => n + (states[k] ?? 0), 0);
   const total = Object.values(states).reduce((a, b) => a + b, 0);
+  const missing = await db.execute(sql`select count(*)::int as n from page_snapshots where crawl_id = ${crawlId}::uuid and blob_status = 'blob_missing'`);
+  const blobMissing = (missing.rows[0] as { n: number }).n;
 
   return store.update((d) => {
     const a = d.audits[auditId];
     if (!a?.crawler) throw new WorkflowError("NOT_FOUND", "Audit not found.");
-    a.crawler = { ...a.crawler, status: row.status, states, syncedAt: new Date().toISOString() };
+    a.crawler = { ...a.crawler, status: row.status, states, blobMissing, syncedAt: new Date().toISOString() };
     a.progress = { ...a.progress, planned: total, done: total - sum(ACTIVE), inspected: sum(INSPECTED), failed: sum(FAILED), skipped: sum(SKIPPED) };
     a.heartbeatAt = new Date().toISOString();
     const finished: Partial<Record<CrawlerV2Ref["status"], AuditStatus>> = { completed: "completed", cancelled: "cancelled", failed: "failed" };
