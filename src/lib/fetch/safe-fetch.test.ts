@@ -154,6 +154,28 @@ describe("safe fetch with a DNS stub", () => {
     expect(hits.map((h) => h.path)).toEqual(["/"]);
   });
 
+  describe("fallback between validated addresses", () => {
+    // 127.0.0.2 and 127.0.0.3 pass this policy but nothing listens there, so connecting is refused.
+    const DEAD = ["127.0.0.2", "127.0.0.3"];
+    const fallbackPolicy = (): FetchPolicy => ({ ...policy(), isBlocked: (ip) => (ip === TEST_PUBLIC_IP || DEAD.includes(ip) ? false : isBlockedIp(ip)) });
+
+    it("connects to the next validated address from the same answer when the first is dead", async () => {
+      dns.set("two.test", [DEAD[0], TEST_PUBLIC_IP]);
+      const res = await createSafeFetch(fallbackPolicy())(`http://two.test:${port}/fallback`, { accept: "html" });
+      expect(res.status).toBe(200);
+      expect(hits).toEqual([{ host: `two.test:${port}`, path: "/fallback" }]);
+      expect(dns.queries.get("two.test")).toBe(2); // one A + one AAAA: no re-resolution on fallback
+    });
+
+    it("fails with NETWORK when every validated address is dead, still after a single lookup", async () => {
+      dns.set("dead.test", DEAD);
+      const e = await failure(createSafeFetch(fallbackPolicy())(`http://dead.test:${port}/`, { accept: "html" }));
+      expect(e.code).toBe("NETWORK");
+      expect(dns.queries.get("dead.test")).toBe(2);
+      expect(hits).toHaveLength(0);
+    });
+  });
+
   it("the production policy refuses the test server's loopback address", async () => {
     dns.set("site.test", [TEST_PUBLIC_IP]);
     const e = await failure(createSafeFetch({ ...policy(), isBlocked: isBlockedIp })(`http://site.test:${port}/`, { accept: "html" }));
@@ -180,7 +202,7 @@ describe("validateTargetUrl with the production policy", () => {
     ["short IPv4", "http://127.1/"],
     ["bracketed IPv4-mapped IPv6", "http://[::ffff:169.254.169.254]/"],
     ["IPv6 loopback", "http://[::1]/"],
-    ["non-standard port", "http://example.com:8080/"],
+    ["non-standard port", "http://example.com:8081/"],
     ["localhost name", "http://localhost/"],
     ["trailing-dot localhost", "http://localhost./"],
     [".internal name", "http://metadata.google.internal/"],

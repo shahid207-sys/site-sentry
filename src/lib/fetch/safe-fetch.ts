@@ -11,7 +11,8 @@ export const MAX_BYTES = 2 * 1024 * 1024; // 2 MB of HTML is plenty for head-lev
 export const MAX_XML_BYTES = 5 * 1024 * 1024; // sitemaps can be larger
 export const MAX_TEXT_BYTES = 512 * 1024; // robots.txt (Google reads the first 500 KiB)
 export const TIMEOUT_MS = 10_000;
-const ALLOWED_PORTS = new Set(["", "80", "443"]);
+// Spec "Crawler engine → Security": http(s) on 80, 443, 8080 and 8443 unless an admin overrides the policy.
+const ALLOWED_PORTS = new Set(["", "80", "443", "8080", "8443"]);
 export const USER_AGENT = "SiteSentryBot/0.2 (+technical SEO audit; respects robots.txt)";
 
 export type SafeFetchErrorCode =
@@ -71,7 +72,7 @@ export function validateTargetUrl(input: string, policy: FetchPolicy = DEFAULT_P
     throw new SafeFetchError("INVALID_URL", "URLs containing credentials are not allowed.");
   }
   if (!policy.allowedPorts.has(url.port)) {
-    throw new SafeFetchError("BLOCKED_HOST", "Only the standard ports 80 and 443 are allowed.");
+    throw new SafeFetchError("BLOCKED_HOST", "Only ports 80, 443, 8080 and 8443 are allowed.");
   }
   const host = url.hostname.toLowerCase().replace(/\.$/, "");
   const bareHost = host.replace(/^\[|\]$/g, "");
@@ -89,15 +90,15 @@ export function validateTargetUrl(input: string, policy: FetchPolicy = DEFAULT_P
 }
 
 /**
- * Resolve the host once and return the single address the socket will connect to.
+ * Resolve the host once and return the validated addresses, in answer order, that the socket may connect to.
  * Rejects if ANY resolved address is blocked: a name with one private record is treated as hostile,
  * because we cannot know which record a later connection would get.
  */
-export async function resolvePinned(url: URL, policy: FetchPolicy = DEFAULT_POLICY): Promise<string> {
+export async function resolvePinned(url: URL, policy: FetchPolicy = DEFAULT_POLICY): Promise<string[]> {
   const host = url.hostname.replace(/^\[|\]$/g, "");
   if (isIP(host)) {
     if (policy.isBlocked(host)) throw blockedError(host);
-    return host;
+    return [host];
   }
   let addrs: string[];
   try {
@@ -108,7 +109,20 @@ export async function resolvePinned(url: URL, policy: FetchPolicy = DEFAULT_POLI
   if (addrs.length === 0) throw new SafeFetchError("DNS_FAILED", `Could not resolve ${host}.`);
   const bad = addrs.find((a) => policy.isBlocked(a));
   if (bad) throw blockedError(host, bad);
-  return addrs[0];
+  return [...new Set(addrs)];
+}
+
+const CONNECT_ERROR_CODES = new Set(["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "EADDRNOTAVAIL", "UND_ERR_CONNECT_TIMEOUT"]);
+
+/** True when the request failed while opening the socket, i.e. before any request bytes were sent. */
+function isConnectError(e: unknown): boolean {
+  let cur: unknown = e;
+  for (let i = 0; i < 5 && cur; i++) {
+    const code = (cur as { code?: string }).code;
+    if (code && CONNECT_ERROR_CODES.has(code)) return true;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 function blockedError(host: string, ip?: string) {
@@ -237,15 +251,25 @@ async function fetchWithPolicy(input: string, opts: FetchOptions, policy: FetchP
 
   try {
     for (let hop = 0; ; hop++) {
-      const ip = await resolvePinned(url, policy);
-      const started = Date.now();
-      const res = await fetch(url, {
-        method,
-        redirect: "manual",
-        dispatcher: pinnedAgent(url.hostname, ip),
-        signal,
-        headers: { "user-agent": USER_AGENT, accept: ACCEPT_HEADER[opts.accept] },
-      });
+      // One lookup per hop. If a validated address refuses the connection, try the next one from the
+      // same answer; never re-resolve mid-hop, so a changed DNS answer cannot slip in.
+      const ips = await resolvePinned(url, policy);
+      let started = Date.now();
+      let res: Awaited<ReturnType<typeof fetch>> | undefined;
+      for (let i = 0; !res; i++) {
+        started = Date.now();
+        try {
+          res = await fetch(url, {
+            method,
+            redirect: "manual",
+            dispatcher: pinnedAgent(url.hostname, ips[i]),
+            signal,
+            headers: { "user-agent": USER_AGENT, accept: ACCEPT_HEADER[opts.accept] },
+          });
+        } catch (e) {
+          if (i + 1 >= ips.length || !isConnectError(e) || signal.aborted) throw e;
+        }
+      }
 
       if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
         await res.body?.cancel();
