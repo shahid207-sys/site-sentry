@@ -9,7 +9,7 @@
 // Run: npx tsx scripts/validate-site.ts https://example.com [--profile standard] [--out report.json]
 //      (needs `docker compose up -d`; uses its own database, sitesentry_validate, and keeps earlier runs)
 import { randomUUID } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { appendFile, writeFile } from "node:fs/promises";
 import { Redis } from "ioredis";
 import { Client } from "pg";
 import { PROFILES, type ProfileId } from "../src/lib/crawl/profiles";
@@ -24,6 +24,10 @@ import { analyseCrawl } from "../src/lib/rules/analyse";
 
 const DB_URL = process.env.VALIDATE_DATABASE_URL ?? "postgres://sitesentry:sitesentry@127.0.0.1:5433/sitesentry_validate";
 const SAMPLES = 3;
+/** Memory is sampled every 10 s; past this RSS the crawl is stopped (as a pause) so the machine never runs out. */
+const MEMORY_SAMPLE_MS = 10_000;
+const MAX_RSS_BYTES = 1.5 * 1024 ** 3;
+const mb = (n: number) => `${Math.round(n / 1024 ** 2)} MB`;
 /** URL states that mean the URL was requested and answered. */
 const ANSWERED = ["fetched", "analysed", "redirected", "non_html", "oversized"];
 /**
@@ -83,6 +87,26 @@ async function main() {
   console.log(`Crawling ${site}: profile ${profile} (budget ${budget}, depth ${maxDepth}), user agent "${V2_USER_AGENT}", default politeness. Crawl ${row.id} in ${new URL(DB_URL).pathname.slice(1)}.`);
 
   const t0 = Date.now();
+  // Memory: process RSS and V8 heap every 10 s to <out>.memory.log (or stdout), with the peak in the report.
+  const memLog = out ? `${out.replace(/\.json$/, "")}.memory.log` : null;
+  const peak = { rss: 0, heapUsed: 0, at: 0 };
+  const stopper = new AbortController();
+  let memoryStop: string | null = null;
+  const sample = async () => {
+    const m = process.memoryUsage();
+    if (m.rss > peak.rss) Object.assign(peak, { rss: m.rss, at: Math.round((Date.now() - t0) / 1000) });
+    peak.heapUsed = Math.max(peak.heapUsed, m.heapUsed);
+    const c = (await stateCounts(db, row.id).catch(() => ({}))) as Record<string, number>;
+    const line = `${new Date().toISOString()} t=${Math.round((Date.now() - t0) / 1000)}s rss=${mb(m.rss)} heapUsed=${mb(m.heapUsed)} heapTotal=${mb(m.heapTotal)} external=${mb(m.external)} arrayBuffers=${mb(m.arrayBuffers)} urls=${JSON.stringify(c)}`;
+    if (memLog) await appendFile(memLog, line + "\n");
+    else console.log(`  mem ${line}`);
+    if (m.rss > MAX_RSS_BYTES && !memoryStop) {
+      memoryStop = `RSS ${mb(m.rss)} passed the ${mb(MAX_RSS_BYTES)} limit at ${Math.round((Date.now() - t0) / 1000)} s`;
+      console.log(`  STOPPING: ${memoryStop}`);
+      stopper.abort();
+    }
+  };
+  const memTimer = setInterval(() => void sample(), MEMORY_SAMPLE_MS);
   const progress = setInterval(() => {
     void stateCounts(db, row.id).then((c) => console.log(`  … ${((Date.now() - t0) / 1000).toFixed(0)} s: ${Object.entries(c).map(([k, n]) => `${k} ${n}`).join(", ")}`));
   }, 30_000);
@@ -92,6 +116,7 @@ async function main() {
       redis,
       fetch: createSafeFetch(policy),
       owner: `validate-${process.pid}`,
+      signal: stopper.signal,
       log: (event, data) => {
         if (/error|failed|refused|halt|throttle|requeued/.test(event)) console.log(`  ${event} ${clip(data, 300)}`);
       },
@@ -100,9 +125,19 @@ async function main() {
   );
   clearInterval(progress);
   const crawlMs = Date.now() - t0;
+  if (memoryStop) {
+    clearInterval(memTimer);
+    await sample();
+    console.log(`\nStopped for memory: ${memoryStop}. Peak RSS ${mb(peak.rss)} at ${peak.at} s, peak heap ${mb(peak.heapUsed)}. Crawl left as ${outcome}; no analysis was run.${memLog ? ` Samples: ${memLog}` : ""}`);
+    redis.disconnect();
+    await db.$client.end();
+    process.exit(2);
+  }
   const t1 = Date.now();
   const analysis = await analyseCrawl(db, row.id);
   const analysisMs = Date.now() - t1;
+  clearInterval(memTimer);
+  await sample();
 
   const states = (await stateCounts(db, row.id)) as Record<string, number>;
   const total = Object.values(states).reduce((a, b) => a + b, 0);
@@ -122,6 +157,7 @@ async function main() {
   }
 
   console.log(`\nCrawl ${outcome} in ${(crawlMs / 1000).toFixed(1)} s; analysis ${analysis.outcome} in ${(analysisMs / 1000).toFixed(1)} s (${analysis.pages} pages, ${analysis.findings} findings).`);
+  console.log(`Memory: peak RSS ${mb(peak.rss)} at ${peak.at} s, peak V8 heap ${mb(peak.heapUsed)} (limit ${mb(MAX_RSS_BYTES)})${memLog ? `; samples every 10 s in ${memLog}` : ""}`);
   console.log(`URL states (${total} URLs): ${Object.entries(states).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(", ")}`);
   console.log(`Coverage: ${answered} answered of ${eligible} eligible URLs = ${eligible ? ((100 * answered) / eligible).toFixed(1) : "n/a"}% (eligible = every URL found except blocked_robots and excluded_by_rule)`);
   const scope = (
@@ -147,7 +183,7 @@ async function main() {
   }
 
   if (out) {
-    await writeFile(out, JSON.stringify({ site, profile, crawlId: row.id, outcome, crawlMs, analysisMs, states, answered, eligible, scope, start, blob, robots: crawl.robots, probes: crawl.probes, sitemaps: crawl.sitemaps, runs, findings: f }, null, 2));
+    await writeFile(out, JSON.stringify({ site, profile, crawlId: row.id, outcome, crawlMs, analysisMs, states, answered, eligible, scope, start, peakMemory: peak, blob, robots: crawl.robots, probes: crawl.probes, sitemaps: crawl.sitemaps, runs, findings: f }, null, 2));
     console.log(`\nFull report: ${out}`);
   }
   redis.disconnect();
