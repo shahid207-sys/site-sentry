@@ -103,12 +103,13 @@ describe("crawl worker", () => {
     expect(await activeCount(db, c)).toEqual({ discovered: 0, queued: 0, fetching: 0 });
     expect(interrupted).toBeGreaterThan(0);
     expect(interrupted).toBeLessThanOrEqual(CONCURRENCY);
-    // Every known URL was committed exactly once and ended fetched, or interrupted if it was in flight at the kill.
+    // Every known URL was committed exactly once and ended fetched (or analysed), or interrupted if it was in flight at the kill.
     // Links on an interrupted page are never read, so pages reachable only through it stay undiscovered (here there
     // is no sitemap); see docs/CRAWLER-STATES.md.
     const rows = Object.values(counts).reduce((a, b) => a + b, 0);
     const committed = ((await db.execute(sql`select fetches_committed as n from crawls where id = ${c}::uuid`)).rows[0] as { n: number }).n;
-    expect((counts.fetched ?? 0) + interrupted).toBe(rows);
+    // The in-process analysis worker may already have moved fetched rows to analysed.
+    expect((counts.fetched ?? 0) + (counts.analysed ?? 0) + interrupted).toBe(rows);
     expect(committed).toBe(rows);
     expect(pageHits().length).toBeLessThanOrEqual(committed);
     expect(committed - pageHits().length).toBeLessThanOrEqual(interrupted); // committed, killed before it was sent
