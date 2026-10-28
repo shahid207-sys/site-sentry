@@ -178,7 +178,7 @@ async function main() {
     const fromHits = site.hits.length;
     // /slow/p-1..6 are excluded (their 429/503 retries are a separate behaviour); /slow/ and p-7..9 answer after 4 s,
     // which gives the kill a request to land in the middle of.
-    const kc = await newCrawl(db, site, "custom", 400, 10, { scope: { include: [], exclude: ["^http://fixture\.test:\d+/slow/p-[1-6]$"] } });
+    const kc = await newCrawl(db, site, "custom", 400, 10, { scope: { include: [], exclude: [String.raw`^http://fixture\.test:\d+/slow/p-[1-6]$`] } });
     const w1 = startWorker(site, "worker-1");
     await w1.booted;
     await enqueueCrawl(q, kc);
@@ -210,6 +210,8 @@ async function main() {
     check("Resumed crawl completes", ks.status === "completed", `status ${ks.status} after ${((Date.now() - resumedAt) / 1000).toFixed(1)} s on worker 2`);
     check("No URL requested twice across the kill", dupes.length === 0, `${kHits.length} requests for ${hitCounts(kHits).size} paths${dupes.length ? `; repeated: ${dupes.slice(0, 10).map(([p, n]) => `${p} ×${n}`).join(", ")}` : ""}`);
     const cut = inFlight.map((p) => `${p} ${k.get(abs(p))?.state} (${k.get(abs(p))?.reason ?? "no reason"})`);
+    const ruled = [1, 2, 3, 4, 5, 6].map((i) => k.get(abs(`/slow/p-${i}`)));
+    check("Custom exclude rule applies (/slow/p-1..6)", ruled.every((x) => x?.state === "excluded_by_rule"), histogram(ruled.filter((x) => !!x)));
     check("URLs cut off by the kill end interrupted, not refetched", inFlight.every((p) => k.get(abs(p))?.state === "interrupted"), cut.join("; "));
     info(`states: ${histogram(k.values())}; fetches committed ${ks.fetches_committed}`);
     w2.child.kill("SIGKILL");

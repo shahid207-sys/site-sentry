@@ -91,8 +91,10 @@ cause a second fetch.
   over and beyond the depth limit end as `depth_exceeded`, and all other leftovers as `budget_exhausted`.
 - Sitemap-only rows wait: `reserve` claims a null-depth row only when no eligible row with a known link depth is still
   `discovered`. Otherwise one large batch of sitemap pages, fetched before the start page's links are recorded, would
-  give their children depth 1 and `LEAST` would keep that wrong depth. The cost: lanes can idle briefly between the
-  last link-depth batch and the first sitemap-only one.
+  give their children depth 1 and `LEAST` would keep that wrong depth. The cost: lanes idle while the last link-depth
+  rows are in flight, before the first sitemap-only batch can be claimed (not measured separately).
+- Depth is still not exact. A sitemap-only page counts as depth 0 for its children, so one fetched after the
+  link crawl can lower the depth of a page that links also reach. Click-depth rules (Phase 2) must allow for this.
 
 ## Politeness
 
