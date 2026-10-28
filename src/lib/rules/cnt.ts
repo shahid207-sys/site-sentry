@@ -8,8 +8,10 @@ const site = (r: Omit<SiteRule, "scope" | "category">): SiteRule => ({ scope: "s
 
 /** CNT-005 threshold (main-content words); the spec allows it to be configured, this is the default. */
 export const THIN_WORDS = 200;
-/** CNT-007: SimHash similarity at or above this is a near duplicate. */
-export const NEAR_DUPLICATE = 0.9;
+/** CNT-007: SimHash similarity of the main-content text at or above this is a near duplicate. */
+export const NEAR_DUPLICATE = 0.92;
+/** CNT-007 compares only pages with at least this many main-content words: short pages share too much by chance. */
+export const NEAR_DUPLICATE_MIN_WORDS = 100;
 /** CNT-008: boilerplate share above this is flagged, on pages with at least BOILERPLATE_MIN_CHARS of body text. */
 export const BOILERPLATE_MAX = 0.8;
 export const BOILERPLATE_MIN_CHARS = 200;
@@ -147,20 +149,20 @@ function nearDuplicatePairs(pages: UrlFacts[]): Map<UrlFacts, { url: string; sim
 
 const CNT007 = site({
   id: "CNT-007",
-  version: 1,
+  version: 2,
   confidence: "heuristic",
   impact: 3,
   needs: ["graph"],
   evaluate({ site: s }) {
-    const pages = s.urls.filter((u) => isIndexable(u) && u.page!.simhash);
+    const pages = s.urls.filter((u) => isIndexable(u) && u.page!.simhash && u.page!.wordCount >= NEAR_DUPLICATE_MIN_WORDS);
     const out: Finding[] = [];
     for (const [u, matches] of nearDuplicatePairs(pages)) {
       matches.sort((a, b) => b.similarity - a.similarity || a.url.localeCompare(b.url));
-      out.push(finding(CNT007, u.url, `Main content is at least ${Math.round(NEAR_DUPLICATE * 100)}% similar to ${matches.length} other indexable page(s).`, { matches: matches.slice(0, 10).map((m) => ({ url: m.url, similarity: Math.round(m.similarity * 1000) / 1000 })), count: matches.length }));
+      out.push(finding(CNT007, u.url, `Main content is at least ${Math.round(NEAR_DUPLICATE * 100)}% similar to ${matches.length} other indexable page(s) (main content, boilerplate excluded).`, { matches: matches.slice(0, 10).map((m) => ({ url: m.url, similarity: Math.round(m.similarity * 1000) / 1000 })), count: matches.length }));
     }
     return out;
   },
-  explain: { why: "Near-identical pages compete with each other and dilute ranking signals.", fix: "Differentiate the pages or consolidate them with a canonical or redirect.", acceptance: `No other indexable page is ${Math.round(NEAR_DUPLICATE * 100)}% or more similar.` },
+  explain: { why: "Near-identical pages compete with each other and dilute ranking signals.", fix: "Differentiate the pages or consolidate them with a canonical or redirect.", acceptance: `No other indexable page with ${NEAR_DUPLICATE_MIN_WORDS}+ main-content words is ${Math.round(NEAR_DUPLICATE * 100)}% or more similar.` },
 });
 
 const CNT008 = page({

@@ -16,11 +16,15 @@ export function blockText(root: ReturnType<Doc>): string {
   return root.text().replace(/\s+/g, " ").trim();
 }
 
+/** Regions that are page furniture, not content: by element, or by ARIA landmark role (page builders often use <div role="navigation">). */
+const BOILERPLATE =
+  'script, style, noscript, template, svg, nav, header, footer, aside, form, [role="navigation"], [role="banner"], [role="contentinfo"], [role="complementary"], [role="search"]';
+
 /** Visible main-content text: <main>, else <article>, else <body>, without scripts, styles and boilerplate regions. */
 export function mainContentText($: Doc): { text: string; source: "main" | "article" | "body" } {
-  const pick = $("main").first().length ? "main" : $("article").first().length ? "article" : "body";
-  const root = $(pick).first().clone();
-  root.find("script, style, noscript, template, svg, nav, header, footer, aside, form").remove();
+  const pick = $("main, [role=main]").first().length ? "main" : $("article").first().length ? "article" : "body";
+  const root = $(pick === "main" ? "main, [role=main]" : pick).first().clone();
+  root.find(BOILERPLATE).remove();
   return { text: blockText(root), source: pick };
 }
 

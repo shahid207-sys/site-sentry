@@ -11,6 +11,9 @@ import { NeedsConfig, type CrawlView, type Finding, type PageView, type Rule, ty
 import { LEGACY_TO_CATALOG } from "./legacy-map";
 import type { ProbeRecord } from "./probe-types";
 import { DEFERRED_RULES, RULES, RULES_BY_ID } from "./registry";
+import { NEAR_DUPLICATE, NEAR_DUPLICATE_MIN_WORDS } from "./cnt";
+import { simhash, simhashSimilarity } from "../snapshot/text";
+import { paragraph } from "../../../fixtures/site/text";
 
 const ORIGIN = "https://a.test";
 const U = (path: string) => new URL(path, ORIGIN).toString();
@@ -395,6 +398,39 @@ describe("details", () => {
 
   it("CNT-007 does not report exact duplicates (those are CNT-006)", () => {
     expect(run("CNT-007", cleanSite(pageFrom("/d1/", { title: "<title>Duplicate one garden page</title>" }), pageFrom("/d2/", { title: "<title>Duplicate two garden page</title>" })))).toEqual([]);
+  });
+
+  it("CNT-007 compares main content only: shared landmark boilerplate does not make distinct pages near duplicates", () => {
+    // A page builder's layout: no <main>, furniture in <div role=...>. About 2,400 shared words, ~120 distinct ones each.
+    const shell = (key: string) => ({
+      title: `<title>${key} garden page title</title>`,
+      h1: `<h1>${key} heading</h1>`,
+      body: `<div role="navigation">${paragraph("shared-nav", 1500)}</div><div class="content"><p>${paragraph(`main:${key}`, 120)}</p></div><div role="contentinfo">${paragraph("shared-footer", 900)}</div>`,
+    });
+    const a = pageFrom("/b1/", shell("first"));
+    const b = pageFrom("/b2/", shell("second"));
+    expect(a.wordCount).toBeGreaterThanOrEqual(NEAR_DUPLICATE_MIN_WORDS);
+    expect(a.wordCount).toBeLessThan(200); // the landmarks were stripped from the main text
+    // With the furniture left in, the two pages would be near duplicates; on main content they are not.
+    const whole = (p: PageView) => simhash(parseHtml(html({ ...clean("/"), ...shell(p.url.includes("b1") ? "first" : "second") }))("body").text())!;
+    expect(simhashSimilarity(whole(a), whole(b))).toBeGreaterThanOrEqual(NEAR_DUPLICATE);
+    expect(run("CNT-007", cleanSite(a, b))).toEqual([]);
+  });
+
+  it("CNT-007 needs at least 100 main-content words on both pages", () => {
+    const short = (path: string, word: string) => pageFrom(path, { title: `<title>Short ${word} garden page</title>`, h1: "", body: `<main><p>${paragraph("short-shared", 90)} ${word}</p></main>` });
+    const a = short("/s1/", "orchard");
+    const b = short("/s2/", "lantern");
+    expect(a.wordCount).toBeLessThan(NEAR_DUPLICATE_MIN_WORDS);
+    expect(simhashSimilarity(a.simhash!, b.simhash!)).toBeGreaterThanOrEqual(NEAR_DUPLICATE);
+    expect(run("CNT-007", cleanSite(a, b))).toEqual([]);
+  });
+
+  it("CNT-007 fires at 0.92 similarity and above, and reports the similarity", () => {
+    const pos = CASES["CNT-007"].pos();
+    expect(pos.length).toBe(2);
+    for (const f of pos) expect((f.evidence as { matches: { similarity: number }[] }).matches[0].similarity).toBeGreaterThanOrEqual(0.92);
+    expect(NEAR_DUPLICATE).toBe(0.92);
   });
 
   it("IDX-012 treats an unfetched canonical target as inconclusive", () => {

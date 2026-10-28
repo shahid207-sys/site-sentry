@@ -6,6 +6,7 @@ import { parseHtml } from "../../src/lib/audit/parse";
 import { extractOutlinks } from "../../src/lib/crawl/v2/discovery";
 import { crawlView, effectiveCanonical } from "../../src/lib/rules/analyse";
 import type { Finding, PageView, UrlFacts } from "../../src/lib/rules/contract";
+import { NEAR_DUPLICATE, NEAR_DUPLICATE_MIN_WORDS } from "../../src/lib/rules/cnt";
 import { RULES } from "../../src/lib/rules/registry";
 import { extractHtml } from "../../src/lib/snapshot/extract";
 import { simhashSimilarity } from "../../src/lib/snapshot/text";
@@ -136,14 +137,30 @@ describe("fixture site against its manifest (no crawl)", () => {
     expect(noisy).toEqual([]);
   });
 
-  it("clean pages are far from the near-duplicate threshold, and the near-duplicate pair is above it", () => {
+  it("clean pages stay under the near-duplicate threshold, and the declared near-duplicate pair is above it", () => {
     const declared = new Set(["/content/p-6", "/content/p-7", "/content/p-8", "/content/p-9"]);
-    const hashes = urls.filter((u) => u.page?.simhash && !u.page.noindex && !declared.has(new URL(u.url).pathname)).map((u) => u.page!.simhash!);
-    let max = 0;
-    for (let i = 0; i < hashes.length; i++) for (let j = i + 1; j < hashes.length; j++) max = Math.max(max, simhashSimilarity(hashes[i], hashes[j]));
-    console.log(`max pairwise SimHash similarity over ${hashes.length} pages: ${max.toFixed(3)}`);
-    expect(max).toBeLessThan(0.9);
-    expect(simhashSimilarity(pages.get("/content/p-8")!.simhash!, pages.get("/content/p-9")!.simhash!)).toBeGreaterThanOrEqual(0.95);
+    // The pages CNT-007 compares: indexable, hashed, and with enough main-content words.
+    const cmp = urls.filter((u) => u.page?.simhash && !u.page.noindex && u.page.wordCount >= NEAR_DUPLICATE_MIN_WORDS && !declared.has(new URL(u.url).pathname));
+    let best = { sim: 0, a: "", b: "" };
+    for (let i = 0; i < cmp.length; i++)
+      for (let j = i + 1; j < cmp.length; j++) {
+        const sim = simhashSimilarity(cmp[i].page!.simhash!, cmp[j].page!.simhash!);
+        if (sim > best.sim) best = { sim, a: new URL(cmp[i].url).pathname, b: new URL(cmp[j].url).pathname };
+      }
+    let clean = { sim: 0, a: "", b: "" };
+    const cleanOnly = cmp.filter((u) => new URL(u.url).pathname.startsWith("/clean/"));
+    for (let i = 0; i < cleanOnly.length; i++)
+      for (let j = i + 1; j < cleanOnly.length; j++) {
+        const sim = simhashSimilarity(cleanOnly[i].page!.simhash!, cleanOnly[j].page!.simhash!);
+        if (sim > clean.sim) clean = { sim, a: new URL(cleanOnly[i].url).pathname, b: new URL(cleanOnly[j].url).pathname };
+      }
+    console.log(`closest pair of ${cmp.length} compared pages: ${best.a} ~ ${best.b} at ${best.sim.toFixed(3)}; within /clean/ (${cleanOnly.length} pages): ${clean.a} ~ ${clean.b} at ${clean.sim.toFixed(3)} (threshold ${NEAR_DUPLICATE})`);
+    expect(best.sim).toBeLessThan(NEAR_DUPLICATE);
+    const [p8, p9] = [pages.get("/content/p-8")!, pages.get("/content/p-9")!];
+    expect(Math.min(p8.wordCount, p9.wordCount)).toBeGreaterThanOrEqual(NEAR_DUPLICATE_MIN_WORDS);
+    const near = simhashSimilarity(p8.simhash!, p9.simhash!);
+    console.log(`declared near-duplicate pair /content/p-8 ~ /content/p-9 at ${near.toFixed(3)}`);
+    expect(near).toBeGreaterThanOrEqual(NEAR_DUPLICATE);
   });
 
   it("answers each host as declared: www 301, alt 503 robots, alt2 www 200 without favicon, alt3 oversized sitemap and HTML llms.txt", () => {
