@@ -13,6 +13,7 @@ export const MAX_XML_BYTES = 5 * 1024 * 1024; // sitemaps can be larger
 /** sitemaps.org limit per sitemap file, compressed or not. */
 export const MAX_SITEMAP_BYTES = 50 * 1024 * 1024;
 export const MAX_TEXT_BYTES = 512 * 1024; // robots.txt (Google reads the first 500 KiB)
+export const MAX_IMAGE_HEAD_BYTES = 64 * 1024; // enough for the size fields of PNG, GIF, WebP and almost every JPEG
 export const TIMEOUT_MS = 10_000;
 /** Spec "Crawler engine": 10 s to open a connection, for every caller. */
 export const CONNECT_TIMEOUT_MS = 10_000;
@@ -187,8 +188,9 @@ export function pinnedAgent(hostname: string, ip: string): Agent {
  * - xml:    sitemaps (application/xml, text/xml, +xml)
  * - robots: robots.txt (text/plain; anything else is read as text too, as crawlers do)
  * - status: link/image checks — only the status and redirect chain matter, the body is never read
+ * - image:  crawl probes that measure an image (og:image) — only the first MAX_IMAGE_HEAD_BYTES, returned as `raw`
  */
-export type FetchAccept = "html" | "xml" | "sitemap" | "robots" | "status";
+export type FetchAccept = "html" | "xml" | "sitemap" | "robots" | "status" | "image";
 
 export interface FetchOptions {
   accept: FetchAccept;
@@ -226,6 +228,8 @@ export interface FetchResult {
   elapsedMs: number;
   /** With `followRedirects: false`: the 3xx Location resolved against the request URL (not yet validated). */
   location?: string;
+  /** `image` fetches only: the first bytes of the body, undecoded. */
+  raw?: Buffer;
 }
 
 /**
@@ -267,6 +271,7 @@ const ACCEPT_HEADER: Record<FetchAccept, string> = {
   robots: "text/plain,*/*;q=0.1",
   sitemap: "application/xml,text/xml;q=0.9,application/gzip;q=0.8,*/*;q=0.1",
   status: "*/*",
+  image: "image/avif,image/webp,image/png,image/jpeg,image/gif,image/*;q=0.8,*/*;q=0.1",
 };
 const CONTENT_TYPES: Record<FetchAccept, RegExp> = {
   html: /text\/html|application\/xhtml\+xml/i,
@@ -275,8 +280,9 @@ const CONTENT_TYPES: Record<FetchAccept, RegExp> = {
   // Gzipped sitemaps are often served as application/gzip, x-gzip or octet-stream.
   sitemap: /[/+]xml\b|gzip|octet-stream/i,
   status: /./,
+  image: /^image\//i,
 };
-const BYTE_CAP: Record<FetchAccept, number> = { html: MAX_BYTES, xml: MAX_XML_BYTES, sitemap: MAX_SITEMAP_BYTES, robots: MAX_TEXT_BYTES, status: 0 };
+const BYTE_CAP: Record<FetchAccept, number> = { html: MAX_BYTES, xml: MAX_XML_BYTES, sitemap: MAX_SITEMAP_BYTES, robots: MAX_TEXT_BYTES, status: 0, image: MAX_IMAGE_HEAD_BYTES };
 
 /**
  * Build a fetcher with SSRF guards: every hop (the first request and each redirect) is re-validated, resolved once,
@@ -389,6 +395,7 @@ async function fetchWithPolicy(input: string, opts: FetchOptions, policy: FetchP
         return { ...base, body: "", bytes: 0, truncated: false };
       }
       const { bytes, truncated, buffer } = await readCapped(res.body, opts.maxBytes ?? BYTE_CAP[opts.accept]);
+      if (opts.accept === "image") return { ...base, body: "", raw: Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength), bytes, truncated };
       if (opts.accept === "sitemap" && isGzip(buffer)) {
         // A .gz sitemap without Content-Encoding arrives compressed; undici only decodes Content-Encoding.
         const unzipped = gunzipCapped(buffer, MAX_SITEMAP_BYTES);

@@ -38,6 +38,8 @@ import {
   type UrlResult,
 } from "./frontier";
 import { HostThrottle, parseRetryAfter, type ThrottleOptions } from "./politeness";
+import { runProbes } from "./probes";
+import type { ProbeRecord } from "../../rules/probe-types";
 import { crawlSecretScope, decryptSecret, secretKey } from "./secrets";
 import type { TerminalState } from "./types";
 
@@ -68,6 +70,8 @@ export interface CrawlConfig {
   scope?: ScopeRules;
   /** Basic auth for the crawl's own origin. `password` is encrypted (secrets.ts), never plaintext. */
   auth?: { username: string; password: string };
+  /** The user's intent for AI crawlers (AIS-002); unset means the rule reports needs_config. */
+  aiCrawlers?: "allow" | "block";
 }
 
 export interface RobotsRecord {
@@ -120,11 +124,12 @@ interface CrawlRow {
   config: CrawlConfig;
   robots: RobotsRecord | null;
   sitemaps: SitemapLogEntry[];
+  probes: ProbeRecord[];
   discovery_done: boolean;
 }
 
 async function loadCrawl(db: Db, crawlId: string): Promise<CrawlRow | undefined> {
-  const r = await db.execute(sql`select id, site_origin, status, budget, max_depth, config, robots, sitemaps, discovery_done from crawls where id = ${crawlId}::uuid`);
+  const r = await db.execute(sql`select id, site_origin, status, budget, max_depth, config, robots, sitemaps, probes, discovery_done from crawls where id = ${crawlId}::uuid`);
   return r.rows[0] as unknown as CrawlRow | undefined;
 }
 
@@ -601,8 +606,20 @@ class Run {
   }
 
   private async finishCompleted(): Promise<RunOutcome> {
-    const stop = await this.checkStop();
+    let stop = await this.checkStop();
     if (stop) return stop;
+    const probed = await runProbes({
+      db: this.db,
+      crawlId: this.crawlId,
+      origin: this.crawl.site_origin,
+      existing: this.crawl.probes ?? [],
+      request: (url, o) => this.request(url, o),
+      signal: this.signal,
+      log: this.log,
+    });
+    stop = await this.checkStop();
+    if (stop) return stop;
+    if (!probed) return "shutdown";
     await finalizeUrls(this.db, this.crawlId, "completed", this.crawl.max_depth, this.crawl.budget);
     await this.db.execute(sql`update crawls set status = 'completed', finished_at = now() where id = ${this.crawlId}::uuid and status = 'running'`);
     this.log("crawl.completed", { crawlId: this.crawlId });

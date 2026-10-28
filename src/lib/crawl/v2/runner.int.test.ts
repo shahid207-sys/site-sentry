@@ -11,6 +11,7 @@ import { getRawHtml, LocalBlobStore } from "@/lib/snapshot/blob-store";
 import { activeCount, stateCounts } from "./frontier";
 import { HostThrottle, type ThrottleOptions } from "./politeness";
 import { MAX_THROTTLE_RETRIES, runCrawl, V2_USER_AGENT, type RunnerOptions } from "./runner";
+import type { ProbeRecord } from "@/lib/rules/probe-types";
 
 const db = testDb();
 const redis = testRedis();
@@ -48,7 +49,9 @@ async function urlStates(crawlId: string) {
   return out;
 }
 
-const pageHits = () => [...srv.hits.entries()].filter(([p]) => p !== "/robots.txt" && !p.endsWith(".xml"));
+// Crawl-level probes (favicon, llms.txt, og:image) are not crawl URLs and are not charged to the budget.
+const PROBE_PATHS = new Set(["/favicon.ico", "/llms.txt"]);
+const pageHits = () => [...srv.hits.entries()].filter(([p]) => p !== "/robots.txt" && !p.endsWith(".xml") && !PROBE_PATHS.has(p));
 const expectNoDuplicateFetches = () => {
   for (const [path, n] of srv.hits) expect(n, `${path} requested ${n} times`).toBe(1);
 };
@@ -517,5 +520,56 @@ describe("runCrawl pause and cancel take effect within 2 s", () => {
     expect(await row(c, "/slow")).toMatchObject({ state: "fetched", reason: "HTTP 200" });
     expect(await activeCount(db, c)).toMatchObject({ queued: 0, fetching: 0 });
     expect((await activeCount(db, c)).discovered).toBeGreaterThan(0);
+  });
+});
+
+describe("runCrawl crawl-level probes", () => {
+  const png = (w: number, h: number) => {
+    const b = Buffer.alloc(33);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b, 0);
+    b.writeUInt32BE(13, 8);
+    b.write("IHDR", 12, "latin1");
+    b.writeUInt32BE(w, 16);
+    b.writeUInt32BE(h, 20);
+    return b;
+  };
+  const sendBytes = (buf: Buffer, type: string) => (_req: unknown, res: import("node:http").ServerResponse) => res.writeHead(200, { "content-type": type }).end(buf);
+
+  it("probes the scheme variant, favicon, llms.txt and og:images once, outside the URL budget", async () => {
+    const o = srv.origin;
+    srv.routes.set("/", send(`<!doctype html><html><head><title>t</title><meta property="og:image" content="/og.png"><link rel="icon" href="/icon.png"></head><body><a href="/b">b</a></body></html>`));
+    srv.routes.set("/b", send(`<!doctype html><html><head><title>b</title><meta property="og:image" content="${o}/small.png"></head><body></body></html>`));
+    srv.routes.set("/og.png", sendBytes(png(1200, 630), "image/png"));
+    srv.routes.set("/small.png", sendBytes(png(100, 100), "image/png"));
+    srv.routes.set("/icon.png", sendBytes(png(32, 32), "image/png"));
+    srv.routes.set("/llms.txt", send("# Site\n\n> Summary.\n", "text/plain"));
+    const c = await newCrawl(db, { siteOrigin: o, status: "queued", budget: 2 });
+    expect(await runCrawl(opts(), c)).toBe("completed");
+
+    const row = (await db.execute(sql`select probes, fetches_committed from crawls where id = ${c}::uuid`)).rows[0] as { probes: ProbeRecord[]; fetches_committed: number };
+    expect(row.fetches_committed).toBe(2); // probes are not charged to the budget
+    const by = (kind: string) => row.probes.filter((p) => p.kind === kind);
+    // The origin is an IP, so there is no www variant; the https variant of a plain-http test server fails.
+    expect(by("home_www")).toEqual([]);
+    expect(by("home_scheme")[0]).toMatchObject({ url: o.replace("http:", "https:") + "/", status: null, error: { code: expect.any(String) } });
+    expect(by("favicon")[0]).toMatchObject({ url: `${o}/icon.png`, status: 200 });
+    expect(by("llms_txt")[0]).toMatchObject({ status: 200, body: "# Site\n\n> Summary.\n" });
+    expect(by("og_image").map((p) => [p.url, p.status, p.width, p.height])).toEqual([
+      [`${o}/og.png`, 200, 1200, 630],
+      [`${o}/small.png`, 200, 100, 100],
+    ]);
+    for (const p of ["/og.png", "/small.png", "/icon.png", "/llms.txt"]) expect(srv.hits.get(p), p).toBe(1);
+  });
+
+  it("never re-sends a probe an earlier run started", async () => {
+    srv.routes.set("/", page([]));
+    const o = srv.origin;
+    const started: ProbeRecord = { kind: "llms_txt", url: `${o}/llms.txt`, started: true, status: null };
+    const c = await newCrawl(db, { siteOrigin: o, status: "queued", probes: [started] });
+    expect(await runCrawl(opts(), c)).toBe("completed");
+    expect(srv.hits.has("/llms.txt")).toBe(false);
+    const probes = ((await db.execute(sql`select probes from crawls where id = ${c}::uuid`)).rows[0] as { probes: ProbeRecord[] }).probes;
+    expect(probes.find((p) => p.kind === "llms_txt")).toMatchObject({ status: null, skipped: expect.stringMatching(/interrupted/) });
+    expect(probes.find((p) => p.kind === "favicon")).toMatchObject({ url: `${o}/favicon.ico`, status: 404 });
   });
 });
