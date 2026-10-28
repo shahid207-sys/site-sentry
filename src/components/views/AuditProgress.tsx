@@ -15,6 +15,7 @@ import {
   Play,
   Square,
 } from "lucide-react";
+import { failureText } from "@/lib/audit/failure";
 import type { AuditPhase } from "@/lib/model";
 import { api, useApi } from "../lib/api";
 import { fmtDuration, plural } from "../lib/format";
@@ -159,7 +160,10 @@ function Outcome({ audit, href }: { audit: AuditSummary; href: string }) {
     );
   return (
     <Notice tone="error" title="Audit failed" action={open}>
-      {audit.error?.message ?? "The audit stopped before it could finish."}
+      {(() => {
+        const { label, message } = failureText(audit.error, "The audit stopped before it could finish.");
+        return label ? `${label}: ${message}` : message;
+      })()}
     </Notice>
   );
 }

@@ -4,6 +4,7 @@ import { useParams, usePathname, useRouter, useSearchParams } from "next/navigat
 import { Ban, Braces, CircleCheck, Download, FileText, GitCompareArrows, ListChecks, Search, SearchX, Square, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeKind } from "@/lib/audit/compare";
+import { failureText } from "@/lib/audit/failure";
 import { RULE_CATEGORIES, type AuditFinding, type RuleCategory, type Severity } from "@/lib/audit/types";
 import { applyFilter, filterToParams, parseFilter, type FindingFilter, type FindingSort } from "@/lib/filters";
 import type { AuditPhase, SnapshotOutcome } from "@/lib/model";
@@ -588,7 +589,7 @@ export function AuditDetailView() {
           </Notice>
         </div>
       ) : null}
-      {a.status === "failed" ? <div className="mb-6"><Notice tone="error" title="The audit failed">{a.error?.message ?? "Unknown error."} Results collected before the failure are shown below and were not used to resolve any issue.</Notice></div> : null}
+      {a.status === "failed" ? <div className="mb-6"><Notice tone="error" title="The audit failed"><FailureMessage error={a.error} fallback="Unknown error." /> Results collected before the failure are shown below and were not used to resolve any issue.</Notice></div> : null}
       {!running && a.coverage.length ? (
         <div className="mb-6">
           <Notice tone="warn" title={a.status === "partial" || a.status === "cancelled" ? "Partial audit: some of the site was not examined" : "Coverage notes"}>
@@ -647,3 +648,14 @@ export function AuditDetailView() {
 }
 
 export type { AuditFinding };
+
+/** A failure's message, labelled with its code when it is one the user can act on (e.g. scope_rule_invalid). */
+function FailureMessage({ error, fallback }: { error?: { code: string; message: string }; fallback: string }) {
+  const { label, message } = failureText(error, fallback);
+  return (
+    <>
+      {label ? <Mono className="mr-1.5 text-fg-2">{label}</Mono> : null}
+      {message}
+    </>
+  );
+}
