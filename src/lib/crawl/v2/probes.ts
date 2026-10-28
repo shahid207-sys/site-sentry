@@ -2,7 +2,8 @@
 // URL and before the crawl is marked completed, so site rules can judge what no crawled page shows. Every probe
 // goes through the crawl's fetcher (SSRF guards) inside its host throttle, is stored in crawls.probes, and is not
 // charged to the URL budget. Probes of the crawled host obey its robots.txt (a disallowed one is recorded as
-// skipped). A probe is recorded as started before its request; a resumed crawl never re-sends it.
+// skipped). A probe is queued until it holds a throttle slot, then recorded as started before its request; a
+// resumed crawl sends a queued probe and never re-sends a started one.
 import { sql } from "drizzle-orm";
 import type { Db } from "../../db/client";
 import { SafeFetchError, type FetchOptions, type FetchResult } from "../../fetch/safe-fetch";
@@ -18,7 +19,11 @@ export interface ProbeContext {
   origin: string;
   /** Probes already in crawls.probes (a resumed crawl). */
   existing: ProbeRecord[];
-  request(url: string, o: Omit<FetchOptions, "signal" | "timeoutMs" | "userAgent">): Promise<FetchResult>;
+  /** Wait for a slot in the crawl's host throttle (rejects when the crawl is stopping). */
+  acquire(): Promise<string>;
+  release(slot: string): Promise<void>;
+  /** Send a request in a slot already held; the slot is released when it returns. */
+  request(url: string, o: Omit<FetchOptions, "signal" | "timeoutMs" | "userAgent">, slot: string): Promise<FetchResult>;
   /** Why robots.txt forbids this URL on the crawled host, or null (allowed, or another host). */
   robotsBlocked(url: string): string | null;
   /** Aborted when the crawl is stopping; remaining probes are left for the resumed run. */
@@ -91,17 +96,18 @@ export async function runProbes(ctx: ProbeContext): Promise<boolean> {
     if (p.kind === "og_image" && ++ogCount > MAX_OG_IMAGE_PROBES) {
       if (!byKey.has(key(p))) {
         byKey.set(key(p), list.length);
-        list.push({ kind: p.kind, url: p.url, started: true, status: null, skipped: `over the cap of ${MAX_OG_IMAGE_PROBES} og:image probes per crawl` });
+        list.push({ kind: p.kind, url: p.url, started: false, status: null, skipped: `over the cap of ${MAX_OG_IMAGE_PROBES} og:image probes per crawl` });
       }
       continue;
     }
     const at = byKey.get(key(p));
-    if (at !== undefined) {
-      // Started by an earlier run that stopped before the response was stored: never re-send it.
-      const prev = list[at];
-      if (prev.status === null && !prev.error && !prev.skipped) list[at] = { ...prev, skipped: "interrupted before the response was stored" };
+    const prev = at === undefined ? undefined : list[at];
+    if (prev?.started) {
+      // Sent by an earlier run that stopped before the response was stored: never re-send it.
+      if (prev.status === null && !prev.error && !prev.skipped) list[at!] = { ...prev, skipped: "interrupted before the response was stored" };
       continue;
     }
+    if (prev?.skipped) continue;
     if (ctx.signal.aborted) {
       await save(ctx, list);
       return false;
@@ -109,16 +115,37 @@ export async function runProbes(ctx: ProbeContext): Promise<boolean> {
     const blocked = ctx.robotsBlocked(p.url);
     if (blocked) {
       // The crawl obeys robots.txt for probes too; a rule reading a skipped probe stays silent.
-      byKey.set(key(p), list.length);
-      list.push({ kind: p.kind, url: p.url, started: true, status: null, skipped: `blocked by robots.txt: ${blocked}` });
+      const skip: ProbeRecord = { kind: p.kind, url: p.url, started: false, status: null, skipped: `blocked by robots.txt: ${blocked}` };
+      if (prev) list[at!] = skip;
+      else {
+        byKey.set(key(p), list.length);
+        list.push(skip);
+      }
       continue;
     }
-    const rec: ProbeRecord = { kind: p.kind, url: p.url, started: true, status: null };
-    byKey.set(key(p), list.length);
-    list.push(rec);
-    await save(ctx, list);
+    // Queued until it holds a throttle slot: a stop while waiting leaves it unsent, and the resumed run sends it.
+    const rec: ProbeRecord = prev ?? { kind: p.kind, url: p.url, started: false, status: null };
+    if (!prev) {
+      byKey.set(key(p), list.length);
+      list.push(rec);
+    }
+    let slot: string;
     try {
-      const res = await ctx.request(p.url, p.opts);
+      slot = await ctx.acquire();
+    } catch (e) {
+      if (!ctx.signal.aborted) throw e;
+      await save(ctx, list);
+      return false;
+    }
+    rec.started = true;
+    try {
+      await save(ctx, list);
+    } catch (e) {
+      await ctx.release(slot);
+      throw e;
+    }
+    try {
+      const res = await ctx.request(p.url, p.opts, slot);
       rec.status = res.status;
       if (res.contentType) rec.contentType = res.contentType;
       if (res.location) rec.location = res.location;

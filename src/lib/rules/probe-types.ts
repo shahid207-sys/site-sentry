@@ -11,8 +11,8 @@ export type ProbeKind =
 export interface ProbeRecord {
   kind: ProbeKind;
   url: string;
-  /** Written before the request; a resumed crawl never re-sends a started probe. */
-  started: true;
+  /** False while queued for a throttle slot; set just before the request. A resumed crawl never re-sends a started probe. */
+  started: boolean;
   status: number | null;
   contentType?: string;
   /** Redirect target, when the response was a redirect (probes do not follow redirects). */

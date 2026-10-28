@@ -12,6 +12,7 @@ import { activeCount, stateCounts } from "./frontier";
 import { HostThrottle, type ThrottleOptions } from "./politeness";
 import { MAX_THROTTLE_RETRIES, runCrawl, V2_USER_AGENT, type RunnerOptions } from "./runner";
 import type { ProbeRecord } from "@/lib/rules/probe-types";
+import { runProbes, type ProbeContext } from "./probes";
 
 const db = testDb();
 const redis = testRedis();
@@ -571,6 +572,53 @@ describe("runCrawl crawl-level probes", () => {
     const probes = ((await db.execute(sql`select probes from crawls where id = ${c}::uuid`)).rows[0] as { probes: ProbeRecord[] }).probes;
     expect(probes.find((p) => p.kind === "llms_txt")).toMatchObject({ status: null, skipped: expect.stringMatching(/interrupted/) });
     expect(probes.find((p) => p.kind === "favicon")).toMatchObject({ url: `${o}/favicon.ico`, status: 404 });
+  });
+
+  it("a stop while a probe waits for its throttle slot leaves it queued, unsent; the resumed run sends it once", async () => {
+    const o = srv.origin;
+    const c = await newCrawl(db, { siteOrigin: o, status: "running" });
+    const probesOf = async () => ((await db.execute(sql`select probes from crawls where id = ${c}::uuid`)).rows[0] as { probes: ProbeRecord[] | null }).probes ?? [];
+    const base = (signal: AbortSignal, existing: ProbeRecord[]): ProbeContext => ({
+      db,
+      crawlId: c,
+      origin: o,
+      existing,
+      signal,
+      log: () => {},
+      robotsBlocked: () => null,
+      release: async () => {},
+      request: (url, opts) => srv.fetch(url, { ...opts, signal, timeoutMs: 5_000, userAgent: V2_USER_AGENT }),
+      acquire: async () => "slot",
+    });
+
+    // Run 1: the host throttle never grants a slot; the crawl is paused while the first probe waits for one.
+    const stop = new AbortController();
+    let waiting = 0;
+    const held: ProbeContext = {
+      ...base(stop.signal, []),
+      acquire: () => {
+        waiting++;
+        return new Promise((_, reject) => stop.signal.addEventListener("abort", () => reject(stop.signal.reason), { once: true }));
+      },
+    };
+    const run1 = runProbes(held);
+    while (waiting === 0) await new Promise((r) => setTimeout(r, 10));
+    stop.abort(new Error("paused"));
+    expect(await run1).toBe(false);
+    const queued = await probesOf();
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({ kind: "home_scheme", started: false, status: null });
+    expect(queued[0].skipped).toBeUndefined();
+    expect(srv.hits.size).toBe(0); // nothing was sent
+
+    // Run 2 (resume): the queued probe is sent, as are the rest; each exactly once.
+    expect(await runProbes(base(new AbortController().signal, queued))).toBe(true);
+    const after = await probesOf();
+    expect(after.find((p) => p.kind === "home_scheme")).toMatchObject({ started: true, status: null, error: { code: expect.any(String) } }); // https to a plain-http server
+    expect(after.find((p) => p.kind === "home_scheme")?.skipped).toBeUndefined();
+    expect(after.find((p) => p.kind === "favicon")).toMatchObject({ started: true, status: 404 });
+    expect(srv.hits.get("/favicon.ico")).toBe(1);
+    expect(srv.hits.get("/llms.txt")).toBe(1);
   });
 
   it("skips probes robots.txt disallows on the crawled host, and sends none at all when robots.txt is a full disallow", async () => {
