@@ -1,44 +1,194 @@
 @import "tailwindcss";
 
+/*
+ * SiteSentry design tokens. Light-first: neutral #F7F8FA canvas, white surfaces, deep-slate text and a
+ * restrained coral accent. Contrast on white: fg 15.9:1, fg-2 7.6:1, fg-3 5.6:1, accent-ink 5.0:1, every
+ * status colour >= 5:1, and text on accent fills 6.4:1, so all text tokens pass WCAG AA on surface,
+ * elevated and bg. Coral itself (#F15F46) is only used as a fill or decoration, never as small text.
+ */
 :root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
+  color-scheme: light;
+  --bg: #f7f8fa;
   --surface: #ffffff;
-  --muted: #64748b;
-  --line: #e2e8f0;
-  --hover: #f1f5f9;
-  --code: #f1f5f9;
-  --accent: #4f46e5;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0b1120;
-    --foreground: #e2e8f0;
-    --surface: #111827;
-    --muted: #94a3b8;
-    --line: #1f2937;
-    --hover: #1e293b;
-    --code: #0f172a;
-    --accent: #6366f1;
-  }
+  --surface-secondary: #f9fafb;
+  --elevated: #f3f5f8;
+  --hover: #f1f4f8;
+  --line: #e4e7ec;
+  --line-subtle: #eef0f3;
+  --line-strong: #cfd4dc;
+  --fg: #172033;
+  --fg-2: #5d6b82;
+  --fg-3: #5f6b7d;
+  --accent: #f15f46;
+  --accent-hover: #e04a31;
+  --accent-fg: #ffffff;
+  --accent-ink: #c2412b;
+  --accent-soft: #fff1ed;
+  --accent-softer: #fff8f6;
+  --sidebar-active: #fff1ed;
+  --sev-high: #c8281c;
+  --sev-high-soft: #fef1f0;
+  --sev-medium: #b54708;
+  --sev-medium-soft: #fff6e5;
+  --sev-low: #1e5bc6;
+  --sev-low-soft: #eef4ff;
+  --ok: #08744a;
+  --ok-soft: #ebfaf2;
+  --info: #1d4ed8;
+  --info-soft: #eff5ff;
+  --sample: #5b3fc4;
+  --sample-soft: #f3effe;
+  --chart-high: #ef4444;
+  --chart-medium: #f59e0b;
+  --chart-low: #3b82f6;
+  --chart-ok: #22c55e;
+  --shadow-card: 0 1px 2px rgb(16 24 40 / 0.04), 0 4px 14px -6px rgb(16 24 40 / 0.07);
+  --shadow-raised: 0 2px 4px rgb(16 24 40 / 0.04), 0 12px 32px -12px rgb(16 24 40 / 0.14);
+  --shadow-pop: 0 24px 56px -16px rgb(16 24 40 / 0.22), 0 0 0 1px var(--line);
+  --scrim: rgb(15 23 42 / 0.45);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-bg: var(--bg);
   --color-surface: var(--surface);
-  --color-muted: var(--muted);
-  --color-line: var(--line);
+  --color-surface-secondary: var(--surface-secondary);
+  --color-elevated: var(--elevated);
   --color-hover: var(--hover);
-  --color-code: var(--code);
+  --color-line: var(--line);
+  --color-line-subtle: var(--line-subtle);
+  --color-line-strong: var(--line-strong);
+  --color-fg: var(--fg);
+  --color-fg-2: var(--fg-2);
+  --color-fg-3: var(--fg-3);
   --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-softer: var(--accent-softer);
+  --color-chart-high: var(--chart-high);
+  --color-chart-medium: var(--chart-medium);
+  --color-chart-low: var(--chart-low);
+  --color-chart-ok: var(--chart-ok);
+  --color-sidebar-active: var(--sidebar-active);
+  --color-sev-high: var(--sev-high);
+  --color-sev-high-soft: var(--sev-high-soft);
+  --color-sev-medium: var(--sev-medium);
+  --color-sev-medium-soft: var(--sev-medium-soft);
+  --color-sev-low: var(--sev-low);
+  --color-sev-low-soft: var(--sev-low-soft);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-sample: var(--sample);
+  --color-sample-soft: var(--sample-soft);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --shadow-pop: var(--shadow-pop);
+  --shadow-card: var(--shadow-card);
+  --shadow-raised: var(--shadow-raised);
+  --color-scrim: var(--scrim);
+}
+
+html {
+  background: var(--bg);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--bg);
+  color: var(--fg);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
+  font-feature-settings: "cv11", "ss01";
+}
+
+::selection {
+  background: rgb(241 95 70 / 0.22);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Thin, quiet scrollbars. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+/* Soft coral glow behind marketing heroes. */
+.hero-glow {
+  background:
+    radial-gradient(60% 55% at 85% 20%, rgb(241 95 70 / 0.13), transparent 70%),
+    radial-gradient(45% 40% at 0% 0%, rgb(241 95 70 / 0.07), transparent 70%),
+    linear-gradient(180deg, #fffaf8 0%, var(--surface) 100%);
+}
+
+/* Faint dotted grid used behind product mockups. */
+.dot-grid {
+  background-image: radial-gradient(rgb(23 32 51 / 0.07) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Evidence blocks: long URLs and HTML wrap instead of forcing horizontal page scroll. */
+.evidence {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+@keyframes ss-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+.skeleton {
+  background: var(--elevated);
+  border-radius: 6px;
+  animation: ss-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes ss-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+.toast-in {
+  animation: ss-in 160ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Print: ink-friendly, no app chrome. */
+@media print {
+  :root {
+    --bg: #ffffff;
+    --elevated: #f4f5f7;
+    --shadow-card: none;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-break {
+    break-inside: avoid;
+  }
+  body {
+    font-size: 11pt;
+  }
 }

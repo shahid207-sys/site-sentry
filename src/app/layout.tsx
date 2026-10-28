@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Site Sentry",
-  description: "Technical SEO audit-to-fix verification",
+  title: { default: "SiteSentry", template: "%s · SiteSentry" },
+  description: "Technical SEO audits that end in verified fixes: evidence for every finding, acceptance criteria for every task, and a re-check that proves the result.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

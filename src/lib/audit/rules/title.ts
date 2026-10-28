@@ -43,10 +43,15 @@ export const titleEvaluators: Record<string, CriterionEvaluator> = {
   },
 };
 
+const WHY_TITLE =
+  "The title is the main label search engines and browsers show for the page. A missing or ambiguous title leaves search engines to generate one.";
+const WHY_LENGTH =
+  "Long titles are often truncated in search results, and very short ones tend to under-describe the page. This is a display heuristic, not a ranking rule.";
+
 export const titleRule: RuleDef<TitleFacts> = {
   id: TITLE_RULE_ID,
   name: "Page title",
-  needs: [],
+  category: "metadata",
 
   observe({ $ }) {
     // <title> inside inline SVG/MathML is element-level metadata, not the document title.
@@ -62,6 +67,9 @@ export const titleRule: RuleDef<TitleFacts> = {
     {
       code: "title/missing",
       severity: "high",
+      kind: "defect",
+      certainty: "verified",
+      why: WHY_TITLE,
       detect: (f) => f.titleCount === 0,
       criteria: () => [
         { id: "title.present", description: "The page has a <title> element", params: {} },
@@ -81,6 +89,9 @@ export const titleRule: RuleDef<TitleFacts> = {
     {
       code: "title/multiple",
       severity: "medium",
+      kind: "defect",
+      certainty: "verified",
+      why: WHY_TITLE,
       detect: (f) => f.titleCount > 1,
       criteria: () => [{ id: "title.exactly-one", description: "The page has exactly one <title> element", params: {} }],
       describe: (f) => ({
@@ -92,11 +103,15 @@ export const titleRule: RuleDef<TitleFacts> = {
           "Remove duplicate <title> elements so only one remains in <head>.",
           "Check layout templates, SEO plugins and client-side head managers for a second title.",
         ],
+        diagnosis: "Often caused by a layout template and an SEO plugin (or head manager) both writing a title.",
       }),
     },
     {
       code: "title/empty",
       severity: "high",
+      kind: "defect",
+      certainty: "verified",
+      why: WHY_TITLE,
       detect: (f) => f.titleCount >= 1 && f.titleLength === 0,
       criteria: () => [
         { id: "title.present", description: "The page has a <title> element", params: {} },
@@ -113,6 +128,9 @@ export const titleRule: RuleDef<TitleFacts> = {
     {
       code: "title/too-long",
       severity: "low",
+      kind: "warning",
+      certainty: "heuristic",
+      why: WHY_LENGTH,
       detect: (f) => (f.titleLength ?? 0) > TITLE_MAX_CHARS,
       criteria: () => [
         {
@@ -135,6 +153,9 @@ export const titleRule: RuleDef<TitleFacts> = {
     {
       code: "title/too-short",
       severity: "low",
+      kind: "warning",
+      certainty: "heuristic",
+      why: WHY_LENGTH,
       detect: (f) => (f.titleLength ?? 0) > 0 && (f.titleLength ?? 0) < TITLE_MIN_CHARS,
       criteria: () => [
         {

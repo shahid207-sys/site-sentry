@@ -8,9 +8,11 @@ import type { RedirectHop } from "../audit/types";
 
 export const MAX_REDIRECTS = 5;
 export const MAX_BYTES = 2 * 1024 * 1024; // 2 MB of HTML is plenty for head-level checks
+export const MAX_XML_BYTES = 5 * 1024 * 1024; // sitemaps can be larger
+export const MAX_TEXT_BYTES = 512 * 1024; // robots.txt (Google reads the first 500 KiB)
 export const TIMEOUT_MS = 10_000;
 const ALLOWED_PORTS = new Set(["", "80", "443"]);
-const USER_AGENT = "SiteSentryBot/0.1 (+technical SEO audit)";
+export const USER_AGENT = "SiteSentryBot/0.2 (+technical SEO audit; respects robots.txt)";
 
 export type SafeFetchErrorCode =
   | "INVALID_URL"
@@ -37,13 +39,14 @@ export class SafeFetchError extends Error {
 export function validateTargetUrl(input: string): URL {
   const trimmed = input.trim();
   if (!trimmed) throw new SafeFetchError("INVALID_URL", "Enter a URL to audit.");
+  if (trimmed.length > 2048) throw new SafeFetchError("INVALID_URL", "URLs longer than 2048 characters are not supported.");
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
 
   let url: URL;
   try {
     url = new URL(withScheme);
   } catch {
-    throw new SafeFetchError("INVALID_URL", `"${input}" is not a valid URL.`);
+    throw new SafeFetchError("INVALID_URL", `"${input.slice(0, 200)}" is not a valid URL.`);
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new SafeFetchError("INVALID_URL", "Only http:// and https:// URLs can be audited.");
@@ -61,6 +64,8 @@ export function validateTargetUrl(input: string): URL {
   if (/(^|\.)(localhost|local|internal|localdomain|home\.arpa)$/.test(host)) {
     throw new SafeFetchError("BLOCKED_HOST", "Local and internal hostnames cannot be audited.");
   }
+  const bareHost = host.replace(/^\[|\]$/g, "");
+  if (isIP(bareHost) && isBlockedIp(bareHost)) throw blockedError(bareHost);
   url.hash = "";
   return url;
 }
@@ -91,6 +96,8 @@ function blockedError(host: string, ip?: string) {
 /**
  * DNS lookup used for the actual socket connection. Re-checks every address so a
  * DNS answer that changes between our pre-check and connect (DNS rebinding) is still refused.
+ * The socket connects to exactly the address validated here, and TLS still verifies the
+ * certificate against the URL's hostname.
  */
 function guardedLookup(
   hostname: string,
@@ -111,19 +118,48 @@ export const agent = new Agent({
   connect: { lookup: guardedLookup, timeout: TIMEOUT_MS },
   headersTimeout: TIMEOUT_MS,
   bodyTimeout: TIMEOUT_MS,
+  connections: 8,
 });
 
-export interface SafeFetchResult {
+/**
+ * What the caller is prepared to read:
+ * - html:   pages to audit (text/html, application/xhtml+xml)
+ * - xml:    sitemaps (application/xml, text/xml, +xml)
+ * - robots: robots.txt (text/plain; anything else is read as text too, as crawlers do)
+ * - status: link/image checks — only the status and redirect chain matter, the body is never read
+ */
+export type FetchAccept = "html" | "xml" | "robots" | "status";
+
+export interface FetchOptions {
+  accept: FetchAccept;
+  /** HEAD is only used for `status`; servers that reject it are retried with GET. */
+  method?: "GET" | "HEAD";
+  signal?: AbortSignal;
+}
+
+export interface FetchResult {
   requestedUrl: string;
   finalUrl: string;
   status: number;
   redirectChain: RedirectHop[];
-  html: string;
+  contentType: string;
+  /** False when the response's content type is not the one requested; the body is then empty. */
+  contentTypeAccepted: boolean;
+  /** Empty for non-2xx responses, `status` fetches and unaccepted content types. */
+  body: string;
   bytes: number;
   truncated: boolean;
   /** Lower-cased response headers that rules use. */
   headers: Record<string, string>;
+  /** Response time of the final hop, in ms. */
+  elapsedMs: number;
 }
+
+/**
+ * Injected everywhere a page is retrieved, so the crawler, verifier and sample site share one contract.
+ * Non-2xx responses are results, not errors. Throws SafeFetchError for blocked, unreachable or timed-out URLs.
+ */
+export type Fetcher = (url: string, opts: FetchOptions) => Promise<FetchResult>;
 
 function findSafeFetchError(e: unknown): SafeFetchError | null {
   let cur: unknown = e;
@@ -134,21 +170,39 @@ function findSafeFetchError(e: unknown): SafeFetchError | null {
   return null;
 }
 
-/** Fetch a public HTML page with SSRF guards, manual redirect validation, timeout and size cap. */
-export async function safeFetchHtml(input: string): Promise<SafeFetchResult> {
+const ACCEPT_HEADER: Record<FetchAccept, string> = {
+  html: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1",
+  xml: "application/xml,text/xml;q=0.9,*/*;q=0.1",
+  robots: "text/plain,*/*;q=0.1",
+  status: "*/*",
+};
+const CONTENT_TYPES: Record<FetchAccept, RegExp> = {
+  html: /text\/html|application\/xhtml\+xml/i,
+  xml: /[/+]xml\b/i,
+  robots: /./, // robots.txt is read as text whatever it claims to be
+  status: /./,
+};
+const BYTE_CAP: Record<FetchAccept, number> = { html: MAX_BYTES, xml: MAX_XML_BYTES, robots: MAX_TEXT_BYTES, status: 0 };
+
+/** Fetch a public URL with SSRF guards, manual redirect validation, timeout and size cap. */
+export async function safeFetch(input: string, opts: FetchOptions): Promise<FetchResult> {
   let url = validateTargetUrl(input);
   const requestedUrl = url.toString();
   const redirectChain: RedirectHop[] = [];
-  const signal = AbortSignal.timeout(TIMEOUT_MS);
+  const timeout = AbortSignal.timeout(TIMEOUT_MS);
+  const signal = opts.signal ? AbortSignal.any([timeout, opts.signal]) : timeout;
+  let method = opts.accept === "status" ? (opts.method ?? "HEAD") : "GET";
 
   try {
     for (let hop = 0; ; hop++) {
       await assertPublicHost(url);
+      const started = Date.now();
       const res = await fetch(url, {
+        method,
         redirect: "manual",
         dispatcher: agent,
         signal,
-        headers: { "user-agent": USER_AGENT, accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1" },
+        headers: { "user-agent": USER_AGENT, accept: ACCEPT_HEADER[opts.accept] },
       });
 
       if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
@@ -157,55 +211,67 @@ export async function safeFetchHtml(input: string): Promise<SafeFetchResult> {
         if (hop >= MAX_REDIRECTS) {
           throw new SafeFetchError("TOO_MANY_REDIRECTS", `Stopped after ${MAX_REDIRECTS} redirects.`);
         }
-        url = validateTargetUrl(new URL(res.headers.get("location")!, url).toString());
+        const next = validateTargetUrl(new URL(res.headers.get("location")!, url).toString());
+        if (redirectChain.some((h) => h.url === next.toString())) {
+          throw new SafeFetchError("TOO_MANY_REDIRECTS", `Redirect loop detected at ${next.toString()}.`);
+        }
+        url = next;
         continue;
       }
 
-      if (res.status < 200 || res.status >= 300) {
+      // Some servers reject HEAD; ask again with GET rather than report a false error.
+      if (method === "HEAD" && (res.status === 405 || res.status === 501 || res.status === 403)) {
         await res.body?.cancel();
-        throw new SafeFetchError("HTTP_ERROR", `The page responded with HTTP ${res.status}.`, res.status);
+        method = "GET";
+        hop--;
+        continue;
       }
 
       const contentType = res.headers.get("content-type") ?? "";
-      if (!/text\/html|application\/xhtml\+xml/i.test(contentType)) {
-        await res.body?.cancel();
-        throw new SafeFetchError("NOT_HTML", `Expected an HTML page but got "${contentType || "no content-type"}".`);
-      }
-
-      const { bytes, truncated, buffer } = await readCapped(res.body);
-      return {
+      const ok = res.status >= 200 && res.status < 300;
+      const accepted = CONTENT_TYPES[opts.accept].test(contentType || (opts.accept === "robots" ? "text/plain" : ""));
+      const base = {
         requestedUrl,
         finalUrl: url.toString(),
         status: res.status,
         redirectChain,
-        html: decode(buffer, contentType),
-        bytes,
-        truncated,
+        contentType,
+        contentTypeAccepted: accepted,
         headers: pickHeaders(res.headers),
+        elapsedMs: Date.now() - started,
       };
+      if (!ok || !accepted || opts.accept === "status") {
+        await res.body?.cancel();
+        return { ...base, body: "", bytes: 0, truncated: false };
+      }
+      const { bytes, truncated, buffer } = await readCapped(res.body, BYTE_CAP[opts.accept]);
+      return { ...base, body: decode(buffer, contentType), bytes, truncated };
     }
   } catch (e) {
     const known = findSafeFetchError(e);
     if (known) throw known;
-    if (signal.aborted || (e as Error)?.name === "TimeoutError" || (e as Error)?.name === "AbortError") {
-      throw new SafeFetchError("TIMEOUT", `The page did not respond within ${TIMEOUT_MS / 1000}s.`);
+    if (timeout.aborted || (e as Error)?.name === "TimeoutError") {
+      throw new SafeFetchError("TIMEOUT", `No response within ${TIMEOUT_MS / 1000}s.`);
     }
-    throw new SafeFetchError("NETWORK", `Could not fetch the page: ${(e as Error)?.message ?? "network error"}.`);
+    if ((e as Error)?.name === "AbortError") throw new SafeFetchError("NETWORK", "The request was cancelled.");
+    throw new SafeFetchError("NETWORK", `Could not fetch the URL: ${(e as Error)?.message ?? "network error"}.`);
   }
 }
 
-const RULE_HEADERS = ["x-robots-tag", "link", "content-type"];
+export const liveFetcher: Fetcher = safeFetch;
+
+const RULE_HEADERS = ["x-robots-tag", "link", "content-type", "content-language"];
 
 function pickHeaders(h: { get(name: string): string | null }): Record<string, string> {
   const out: Record<string, string> = {};
   for (const name of RULE_HEADERS) {
     const v = h.get(name);
-    if (v !== null) out[name] = v;
+    if (v !== null) out[name] = v.slice(0, 2000);
   }
   return out;
 }
 
-async function readCapped(body: ReadableStream<Uint8Array> | null) {
+export async function readCapped(body: ReadableStream<Uint8Array> | null, cap: number) {
   if (!body) return { bytes: 0, truncated: false, buffer: new Uint8Array() };
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
@@ -214,9 +280,9 @@ async function readCapped(body: ReadableStream<Uint8Array> | null) {
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    if (bytes + value.byteLength > MAX_BYTES) {
-      chunks.push(value.subarray(0, MAX_BYTES - bytes));
-      bytes = MAX_BYTES;
+    if (bytes + value.byteLength > cap) {
+      chunks.push(value.subarray(0, cap - bytes));
+      bytes = cap;
       truncated = true;
       await reader.cancel();
       break;

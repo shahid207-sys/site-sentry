@@ -1,6 +1,6 @@
-# Site Sentry
+# SiteSentry
 
-Technical SEO audit-to-fix verification: run deterministic checks on a public URL, inspect the evidence, create a fix task, then re-scan to prove the fix against the original acceptance criteria.
+SEO operations workspace: audit public sites with deterministic checks, investigate the evidence, turn findings into fix tasks, re-check the live page against frozen acceptance criteria, and catch regressions between audits.
 
 ## Run
 
@@ -8,54 +8,81 @@ Requires Node 20.19+ (developed on Node 24).
 
 ```bash
 npm install
-npm run dev        # http://localhost:3000
-npm test           # rule + SSRF-guard unit tests (no network)
+npm run dev        # http://localhost:3000  (public site; workspace at /live)
+npm test           # unit tests: rules, SSRF guard, comparison, exports, sample seed (no network)
 npm run build      # production build + type-check
+npm run test:e2e   # Playwright against a running server (E2E_BASE_URL, default http://localhost:3000)
 ```
 
-Click **Load sample audit** to run the whole loop without a site you control. Sample results come from bundled fixtures (`src/lib/sample/sample-page.ts`) run through the same rules, and are labelled **SAMPLE** everywhere. The **Sample site simulator** switches the demo page between *Original (broken)*, *Fix deployed* and *Site offline*, so you can show all three re-scan outcomes.
+The E2E suite uses your installed Chrome (`E2E_CHANNEL=chrome`) and only writes to the sample workspace, which it resets before and after. `e2e/live-sandbox.spec.ts` exercises the live workspace's write paths and is skipped unless `E2E_LIVE_SANDBOX=1`. Run it against a server started with an empty, throwaway `SITE_SENTRY_DATA_DIR`; it refuses to run if the live workspace already has sites, and removes only what it creates.
 
-Tracked findings are stored in `.data/store.json` (gitignored). Delete that file to reset.
+## Public site
 
-## Evidence-to-resolution workflow
+`src/app/(marketing)/` holds the public pages: `/` (homepage with a quick-audit form), `/features`, `/how-it-works`, `/sample-audit` and `/methodology`. They are statically rendered. Nothing on them is hand-written audit data:
 
-1. **Audit:** `POST /api/audit` with `{url}` or `{sample:true}`. Each rule observes structured *facts*, and each check that fires produces a finding with: rule code, page URL, observed, expected, evidence (HTML/header snippets + facts), severity, recommendations and **acceptance criteria**.
-2. **Expectations:** canonical and indexability checks need the owner's intent (expected canonical URL, index/noindex). Until it is set they report `needs_config` with what they observed, never a guess. `PUT /api/expectations` with `{pageUrl, canonicalUrl?, indexability?}`.
-3. **Fix task:** `POST /api/findings` with `{auditId, ruleCode}`. Copied from the server's stored audit, never from client-sent evidence. Freezes the finding, the original observation, the expectations and the acceptance criteria (as data, with parameters such as `{max: 60}`).
-4. **Re-scan:** `POST /api/findings/:id/verify` (no body). Fetches the page again and evaluates the *stored* criteria with deterministic evaluators. No LLM is involved.
+- The homepage dashboard card and the interactive `/sample-audit` page (overview, issues with evidence and fixes, pages, recommendations, JSON download) read `getSampleShowcase()` (`src/lib/sample/showcase.ts`). It builds the sample workspace with the real engine and caches the result for the build. Both are labelled as sample data.
+- The smaller workflow previews use `src/lib/sample/preview.ts`, which runs the real rules over one fixture page.
 
-| Outcome | When | Status effect |
-|---|---|---|
-| `resolved` | every stored criterion passes | → resolved |
-| `still_failing` | any criterion fails | → open (reopens a resolved finding as a regression) |
-| `inconclusive` | fetch failed (timeout, DNS, 4xx/5xx, non-HTML, blocked), page truncated, URL now redirects to a different page, unknown criterion, unexpected error | unchanged |
+**Health score.** `src/lib/audit/health.ts` computes the score as 100 − 10 per high, − 3 per medium and − 1 per low open issue type (each check counted once, at its worst severity), with a minimum of 0. The bands are: 80 and above is good, 60–79 needs work, below 60 is poor. The score appears on the overview, the Sites table, the homepage and the sample audit, and `/methodology` explains it with a worked example. A site has no score until its first audit finishes.
 
-Every attempt is appended with its observation, per-criterion results and reason; the original observation is never modified. There is no endpoint that sets status directly.
+The quick-audit form validates the address in the browser (`src/lib/public-url.ts`), then uses the same API as the workspace: it adds the site to the live workspace (or reuses it if it already exists), starts a single-URL audit (10 pages, 1 click deep, link checks off) and opens its progress page. All fetch-safety rules below still apply on the server.
 
-Invariant (tested for every check): if a check *detects* a problem on some facts, at least one of its acceptance criteria fails on those same facts, so detection and verification can't disagree.
+`/app`, `/app/fix-queue` and `/app/*` redirect to the live workspace, so either URL style works. The workspace itself stays at `/live` and `/sample`, which keeps real and sample data on separate, clearly labelled routes.
 
-Other endpoints: `GET /api/findings`, `GET|PUT /api/sample-state` (sample only).
+## Workspaces
+
+- **`/live`**: your sites. Stored in `.data/live/` (gitignored).
+- **`/sample`**: two fictional sites with four audits, six tasks and verification history, produced by running the real engine over bundled fixtures with a fixed clock (`src/lib/sample/`). Every sample screen is labelled. Sites and settings are read-only on the server. Tasks and audits can be created and are discarded by **Settings → Reset sample workspace**. The **sample site simulator** switches the fixtures between *Original*, *Partly fixed*, *Fully fixed* and *Offline*, to show passing, failing and inconclusive verification.
+
+## Pages
+
+| Route | Purpose |
+|---|---|
+| `/[ws]` | Overview: sites, pages inspected, open issue types (grouped by check) and verified fixes; priority work; regressions, resolved, first-detected and not-re-checked issues since the previous audit; next actions; recent audit activity |
+| `/[ws]/sites`, `/[ws]/sites/[id]` | Add sites; per-site dashboard, important URLs (type, labels, intended indexing, expected canonical), audit history |
+| `/[ws]/audits`, `/new`, `/[id]`, `/[id]/compare` | Audit history; setup (single URL, URL list or sitemap, limits, categories) with a preview of what will run; live step-by-step progress; results with filters, sort, search, evidence drawer and CSV/JSON export; coverage-aware comparison. Audits can be deleted one at a time (recycle-bin button on each row and on the audit page) or all at once for a site |
+| `/[ws]/issues`, `/[ws]/issues/[fingerprint]?site=` | Issues tracked across audits by fingerprint, grouped by check by default (`?view=list` shows one row per page, `?rule=` filters to one check); investigation view with timeline, verification attempts and related issues |
+| `/[ws]/tasks`, `/[ws]/tasks/[id]` | Fix Queue with filters, sorting and bulk move/assign; task page with workflow, verification, notes, checklist and activity |
+| `/[ws]/reports`, `/[id]`, `/handoff?site=` | Print-ready audit report and developer handoff (save as PDF from the print dialog) |
+| `/[ws]/settings` | Thin-content threshold, multiple-h1 convention, per-check severity overrides, sample simulator, storage and scan policy |
+
+Workflow status (Open → Triaged → In progress → Ready to verify → Resolved / Won't fix) is set by people. Verification status (passing / failing / inconclusive / partial) changes only when SiteSentry re-fetches the page. A resolved task that fails a re-check, or whose finding a later audit detects again, is reopened as a regression. An issue is **resolved** only when a later audit re-examined its whole scope and no longer found it. Absence from an incomplete audit is reported as **not re-checked**.
+
+**Deleting audits.** Deleting one audit removes its findings and snapshots; comparisons and issue history are rebuilt from the audits that remain, and fix tasks are kept because each task stores its own copy of the findings. *Delete audit history* (on the Audits page filtered to a site, or in the site's Danger zone) removes every audit of that site and its fix tasks, but keeps the site, its important URLs and settings. Running audits must be cancelled first. Both actions ask for confirmation and cannot be undone. In the sample workspace, **Reset sample workspace** restores deleted audits.
+
+**Instances and issue types.** A finding instance is one check failing on one page (one fingerprint). The overview and Issues page group instances by site and check into issue types, so 25 images without dimensions show as one row with 25 affected pages. Grouping is display-only: fingerprints, tasks and verification still work per instance.
+
+**Regression vs first detected.** Comparison is coverage-aware. A finding counts as a regression only if the previous audit inspected the same page with the same check (each `RuleResult` records the checks it ran in `checked`) and didn't find it. If the previous audit was narrower (fewer pages, fewer categories, or an older engine without that check), the finding is *first detected*, and the overview says the baseline was narrower. Audits imported from the v1 store are treated as having run only the v1 title, canonical and indexability checks.
+
+## API
+
+Every route is under `/api/[ws]/…` (`ws` = `live` | `sample`). Bodies are validated with zod. Errors return `{error: {code, message}}` with 400/403/404/409/413/429/503, and never include stack traces.
+
+`overview` · `sites` (GET, POST) · `sites/:id` (GET, PATCH, DELETE) · `sites/:id/audits` (DELETE: clear the site's audit history) · `sites/:id/pages` (PUT) · `sites/:id/pages/:pageId` (DELETE) · `audits` (GET, POST) · `audits/:id` (GET, DELETE) · `audits/:id/step` (POST: one bounded crawl step) · `audits/:id/cancel` · `audits/:id/compare?base=` · `audits/:id/export?format=csv|json&<same filters as the table>` · `issues?site=` · `issues/:fingerprint?site=` · `tasks` (GET, POST) · `tasks/bulk` · `tasks/:id` (GET, PATCH, DELETE) · `tasks/:id/verify` · `settings` (GET, PUT) · `sample` (PUT, sample only). Also `GET /api/health`.
+
+Audits have no hidden background queue. The progress page calls `step` repeatedly. Each step does at most about 8 s of work and saves its state, so an interrupted audit resumes when its page is opened again, and that fits serverless time limits.
 
 ## Layout
 
 ```
-src/lib/audit/        pure, UI-free rule engine
-  types.ts            Finding / RuleResult / TrackedFinding / VerificationAttempt
-  rule.ts             RuleDef + CheckDef (detect, criteria, describe), criterion evaluation
-  rules/              title, canonical, indexability (+ tests)
-  run.ts              rule + criterion-evaluator registries
-src/lib/workflow/
-  verify.ts           pure: evaluateAttempt, applyAttempt (the only status transition)
-  service.ts          audit, track, verify, expectations (deps injected for tests)
-  pages.ts            live fetcher + sample site simulator
+src/lib/audit/        pure rule engine: rules/, site/ (cross-page rules), compare, issues, priority, fingerprint, catalog
+src/lib/crawl/        step-based crawler, robots.txt, sitemaps, URL identity
 src/lib/fetch/        SSRF-safe fetching
-src/lib/store/        Store interface, JSON-file and in-memory implementations
-src/lib/tasks/        fix-task Markdown export
-src/app/api/          route handlers
-src/components/       dashboard UI
+src/lib/workflow/     sites, tasks, verification (deps injected)
+src/lib/store/        Store interface; JSON-file and in-memory implementations; v1 migration
+src/lib/sample/       fixture sites, fixture fetcher, deterministic seed
+src/lib/server/       read models for the API (server-only)
+src/lib/export.ts     CSV (formula-injection safe) and JSON exports; filters.ts is shared by the table and the export
+src/app/api/          route handlers (thin; validation and error mapping in _lib/handler.ts)
+src/app/(marketing)/  public pages
+src/app/[ws]/         workspace pages: thin server shells around client views
+src/components/       ui.tsx (design-system primitives), overlays.tsx, domain.tsx, shell/, views/, marketing/
+e2e/                  Playwright journeys and responsive checks
 ```
 
-To add a rule: write a `RuleDef` in `src/lib/audit/rules/` (observe → facts, checks with detect/criteria/describe, and criterion evaluators), register both in `run.ts`, and add tests. The invariant test in `run.test.ts` covers new checks automatically once you add fact cases.
+### Design system
+
+Light interface defined by tokens in `src/app/globals.css`, shared by the public site and the workspace: background `#F7F8FA`, surface `#FFFFFF`, border `#E2E8F0`, text `#172033` / `#475569` / `#5B6779`, coral accent `#F15F46` for primary actions (with `#C2412B` for coral text, which needs the darker shade for contrast). Every text token is at least 4.5:1 on every surface. Geist is used for UI text, and Geist Mono only for rule codes, URLs and evidence. Severity, workflow, verification and change states always pair an icon with text. Form inputs are 40 px tall. Panels use 16 px radii with soft shadows, and key figures sit in icon stat cards. Wide tables switch to stacked rows below 1280 px (1024 px for most pages), and the public navbar collapses to a menu below 1024 px. Printing hides the app chrome. Reduced-motion preferences are respected.
 
 ## Fetch safety
 
@@ -63,13 +90,24 @@ To add a rule: write a `RuleDef` in `src/lib/audit/rules/` (observe → facts, c
 - Every resolved address is checked against private, loopback, link-local (incl. `169.254.169.254`), CGNAT, multicast and reserved ranges. On DNS64/NAT64 networks, `64:ff9b::/96` and `::ffff:` addresses are judged by their embedded IPv4.
 - The same check runs again inside the socket's DNS lookup (undici `Agent`), so a DNS answer that changes between the check and the connection is still refused.
 - Redirects are followed manually (max 5) and every hop is re-validated.
-- 10s total timeout and a 2 MB body cap. Only `text/html` / `application/xhtml+xml` responses are accepted, and non-2xx responses are reported as errors, never as findings.
+- 10 s timeout; 2 MB HTML, 5 MB sitemap and 512 KB robots.txt caps; robots.txt is respected for SiteSentryBot.
+- `SITE_SENTRY_LIVE_SCANS=disabled` turns live fetching off. `SITE_SENTRY_ALLOWED_HOSTS=a.com,b.org` restricts it to those hosts and their subdomains.
 
-## Known MVP limitations
+## Environment
 
-- Raw HTML only, with no JavaScript rendering, so titles set client-side are not seen.
+| Variable | Default | Purpose |
+|---|---|---|
+| `SITE_SENTRY_DATA_DIR` | `.data` (or `/tmp/site-sentry` on Vercel) | Where JSON data is stored |
+| `SITE_SENTRY_LIVE_SCANS` | `enabled` | `disabled` blocks live fetching; the sample workspace still works |
+| `SITE_SENTRY_ALLOWED_HOSTS` | unset | Optional allowlist for live scans |
+
+## Known limitations
+
+- Raw HTML only, with no JavaScript rendering, so content set client-side is not seen.
 - Charset comes from the `Content-Type` header only (no `<meta charset>` sniffing).
-- JSON-file store: fine for one local process; use a database for multi-instance or serverless deploys.
-- Indexability reads robots meta and X-Robots-Tag, not robots.txt; any user-agent prefix in X-Robots-Tag is treated as applying.
-- Canonical reads the HTML link only, not the `Link:` HTTP header.
-- Findings on pages over 2 MB (truncated) cannot be tracked, because a re-scan of a truncated page is always inconclusive.
+- JSON-file store: fine for one server process. On serverless hosts data in `/tmp` is ephemeral (Settings says so); use a persistent volume or a database adapter behind the `Store` interface.
+- The rate limiter is in-memory and per process.
+- There are no user accounts. Anyone who can reach the server can use both workspaces, and the homepage quick-audit form adds sites to the shared live workspace (capped at 50 sites; adding sites and starting audits are rate-limited per client IP by an in-memory limiter). Put the server behind authentication, or set `SITE_SENTRY_ALLOWED_HOSTS` or `SITE_SENTRY_LIVE_SCANS=disabled`, before exposing it publicly.
+- Quick audits from the homepage don't status-check outbound links. Run a full audit from the workspace for that.
+- Unknown top-level paths (for example `/nope`) render the not-found page with `noindex`, but with HTTP 200, because the `[ws]` segment matches any path and Cache Components rules out `dynamicParams = false`.
+- Findings on pages over 2 MB (truncated) cannot be tracked, because a re-check of a truncated page is always inconclusive.

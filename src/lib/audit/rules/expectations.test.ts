@@ -8,22 +8,42 @@ const rule = (id: string, head: string, exp: PageExpectations = {}, headers: Rec
   runRules({ html: page(head), pageUrl: URL_, headers }, exp).find((r) => r.ruleId === id)!;
 
 describe("canonical rule", () => {
-  it("asks for configuration instead of guessing when no expected canonical is set", () => {
+  it("asks for configuration instead of judging a cross-URL canonical when no intent is set", () => {
     const r = rule("canonical", `<link rel="canonical" href="https://other.example/">`);
-    expect(r.status).toBe("needs_config");
-    expect(r.findings).toEqual([]);
-    expect(r.missingExpectations).toEqual(["canonicalUrl"]);
+    // Reported only as an observation that needs review, never as a defect.
+    expect(r.findings.map((f) => [f.ruleCode, f.kind, f.certainty])).toEqual([["canonical/cross-url", "observation", "needs_review"]]);
+    expect(r.missingExpectations).toEqual(["canonicalUrl", "indexability"]);
     expect(r.facts.canonicalResolved).toBe("https://other.example/"); // still shows what it saw
   });
 
+  it("does not report a self-referencing canonical without configuration", () => {
+    const r = rule("canonical", `<link rel="canonical" href="/shoes">`);
+    expect(r.status).toBe("needs_config");
+    expect(r.findings).toEqual([]);
+  });
+
   it("passes when the canonical matches the configured URL (relative hrefs resolved)", () => {
-    expect(rule("canonical", `<link rel="canonical" href="/shoes">`, { canonicalUrl: URL_ }).status).toBe("pass");
+    expect(rule("canonical", `<link rel="canonical" href="/shoes">`, { canonicalUrl: URL_, indexability: "index" }).status).toBe("pass");
+  });
+
+  it("reports multiple canonicals once, as canonical/multiple", () => {
+    const r = rule("canonical", `<link rel="canonical" href="/shoes"><link rel="canonical" href="/boots">`, { canonicalUrl: URL_ });
+    expect(r.findings.map((f) => f.ruleCode)).toEqual(["canonical/multiple"]);
+  });
+
+  it("flags an indexable page whose canonical points elsewhere when no expected canonical is configured", () => {
+    const r = rule("canonical", `<link rel="canonical" href="https://example.com/boots">`, { indexability: "index" });
+    expect(r.findings.map((f) => f.ruleCode)).toEqual(["canonical/indexable-points-elsewhere"]);
+  });
+
+  it("reads the canonical from a Link header as evidence", () => {
+    const r = rule("canonical", ``, {}, { link: '<https://example.com/shoes>; rel="canonical"' });
+    expect(r.facts.canonicalHeader).toBe(URL_);
   });
 
   it.each([
     ["missing", ``],
     ["wrong", `<link rel="canonical" href="https://example.com/shoes?utm=x">`],
-    ["multiple", `<link rel="canonical" href="/shoes"><link rel="canonical" href="/boots">`],
   ])("fails when the canonical is %s", (_, head) => {
     const r = rule("canonical", head, { canonicalUrl: URL_ });
     expect(r.findings.map((f) => f.ruleCode)).toEqual(["canonical/expected-url"]);
@@ -32,6 +52,11 @@ describe("canonical rule", () => {
 });
 
 describe("indexability rule", () => {
+  it("flags contradictory directives without configuration", () => {
+    const r = rule("indexability", `<meta name="robots" content="index, follow">`, {}, { "x-robots-tag": "noindex" });
+    expect(r.findings.map((f) => f.ruleCode)).toEqual(["indexability/contradictory"]);
+  });
+
   it("asks for configuration instead of guessing when intended indexability is not set", () => {
     const r = rule("indexability", `<meta name="robots" content="noindex">`);
     expect(r.status).toBe("needs_config");
