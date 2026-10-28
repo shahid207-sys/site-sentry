@@ -7,7 +7,7 @@ import { countIssueTypes, healthScore } from "../audit/health";
 import { buildIssues, finishedAudits, type AuditBundle, type Issue } from "../audit/issues";
 import type { AuditFinding } from "../audit/types";
 import { describeConfig, isStale } from "../crawl/engine";
-import { crawlerV2Enabled } from "../crawl/v2/audit-bridge";
+import { crawlerV2Enabled } from "../crawl/v2/flag";
 import { secretKey } from "../crawl/v2/secrets";
 import type { AuditRun, FixTask, PageSnapshot, Workspace } from "../model";
 import type { Store, StoreData } from "../store/store";

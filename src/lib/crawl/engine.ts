@@ -37,6 +37,12 @@ export const LIMITS = {
 /** The route clamps audits to LEGACY_ENGINE_LIMITS, so null (unlimited) never reaches this engine; read it safely anyway. */
 const depthOf = (c: AuditConfig) => c.maxDepth ?? LEGACY_ENGINE_LIMITS.maxDepth;
 
+/**
+ * The engine clamp (engine_limit) only matters when it cut something: a page or depth limit fired. A small site
+ * covered completely under the clamped limits is not partial.
+ */
+const clampCut = (audit: AuditRun) => audit.coverage.some((c) => c.code === "engine_limit") && audit.coverage.some((c) => c.code === "depth_limit");
+
 export const ROBOTS_TOKEN = "SiteSentryBot";
 export const ALL_CATEGORIES: RuleCategory[] = RULE_CATEGORIES.map((c) => c.id);
 
@@ -492,7 +498,7 @@ function finalize(s: StepState, deps: Deps, cancelled: boolean) {
   } else if (blob.snapshots.length === 0) {
     audit.status = "failed";
     audit.error = { code: "NO_PAGES", message: audit.config.mode === "sitemap" ? "The sitemap provided no URLs on this site to audit." : "No URLs were audited." };
-  } else if (failed > 0 || audit.coverage.some((c) => ["page_limit", "robots_error", "truncated", "link_check_limit", "sitemap_unavailable", "engine_limit"].includes(c.code))) {
+  } else if (failed > 0 || audit.coverage.some((c) => ["page_limit", "robots_error", "truncated", "link_check_limit", "sitemap_unavailable"].includes(c.code)) || clampCut(audit)) {
     audit.status = "partial";
   } else audit.status = "completed";
   audit.queue = [];

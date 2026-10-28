@@ -294,7 +294,7 @@ function NewAuditForm({ requestedSite }: { requestedSite: string }) {
   const [single, setSingle] = useState("/");
   const [many, setMany] = useState("");
   const [sitemapUrl, setSitemapUrl] = useState("");
-  const [profile, setProfile] = useState<ProfileId>("standard");
+  const [chosenProfile, setProfile] = useState<ProfileId | null>(null);
   const [budget, setBudget] = useState<number>(PROFILES.full.budget);
   const [depth, setDepth] = useState<number | null>(PROFILES.custom.maxDepth);
   const [include, setInclude] = useState("");
@@ -305,6 +305,8 @@ function NewAuditForm({ requestedSite }: { requestedSite: string }) {
   const settings = useApi<SettingsData>(`${apiBase}/settings`);
   const v2 = settings.data?.crawler.v2 ?? false;
   const canAuth = settings.data?.crawler.basicAuth ?? false;
+  // Standard is the usual audit; the in-request engine (v2 off) cannot run it in full, so start from Quick there.
+  const profile: ProfileId = chosenProfile ?? (v2 ? "standard" : "quick");
   const [categories, setCategories] = useState<RuleCategory[]>(RULE_CATEGORIES.map((c) => c.id));
   const [checkLinks, setCheckLinks] = useState(true);
   const [includeImportant, setIncludeImportant] = useState(true);

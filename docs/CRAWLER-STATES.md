@@ -170,5 +170,6 @@ form and the methodology page.
   window is a Redis sorted set (`rl:hero-audit:<ws>:<ip>`); denied attempts are not counted. If Redis is unreachable the
   in-process limiter takes over and the fallback is logged.
 - With `CRAWLER_V2=false`, the in-request engine cannot run the larger profiles. Budget and depth are clamped to
-  100 URLs and 3 clicks, the audit gets an `engine_limit` coverage note naming both, and it ends `partial`. Scope
+  100 URLs and 3 clicks and the audit gets an `engine_limit` coverage note naming both. It ends `partial` only if the
+  clamp cut something (a `page_limit` or `depth_limit` note also fired); a site covered completely stays `completed`. Scope
   rules and basic auth are refused while v2 is off.

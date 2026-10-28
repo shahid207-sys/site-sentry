@@ -13,10 +13,7 @@ import { createCrawlQueue, enqueueCrawl, type CrawlJob } from "./queue";
 import type { CrawlConfig } from "./runner";
 import { crawlSecretScope, encryptSecret, secretKey } from "./secrets";
 
-/** Crawler v2 runs live-workspace audits when CRAWLER_V2=true. The sample workspace always uses its in-memory site. */
-export function crawlerV2Enabled(ws: Workspace, env: Record<string, string | undefined> = process.env): boolean {
-  return ws === "live" && env.CRAWLER_V2 === "true";
-}
+export { crawlerV2Enabled } from "./flag";
 
 const g = globalThis as unknown as { __ssCrawlQueue?: Queue<CrawlJob> };
 export function getCrawlQueue(): Queue<CrawlJob> {
