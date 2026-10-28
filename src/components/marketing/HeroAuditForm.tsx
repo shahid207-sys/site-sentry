@@ -3,15 +3,15 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowRight, FlaskConical, Globe } from "lucide-react";
 import { useId, useState, type FormEvent } from "react";
-import { RULE_CATEGORIES } from "@/lib/audit/types";
+import { describeLimits, HERO_PROFILE, HERO_RATE_LIMIT, PROFILES } from "@/lib/crawl/profiles";
 import type { Site } from "@/lib/model";
 import { parsePublicUrl } from "@/lib/public-url";
 import type { AuditSummary } from "@/lib/views";
 import { api, ApiError } from "../lib/api";
 import { Button, cx, LinkButton } from "../ui";
 
-/** Bounded on purpose: a homepage audit should finish in seconds, not crawl a whole site. */
-export const QUICK_AUDIT = { maxPages: 10, maxDepth: 1 } as const;
+/** Bounded on purpose: the homepage form runs the Quick profile only (the server enforces it and the per-IP limit). */
+const QUICK = PROFILES[HERO_PROFILE];
 
 type Phase = "idle" | "site" | "audit";
 
@@ -42,18 +42,7 @@ export function HeroAuditForm({ compact }: { compact?: boolean }) {
         siteId = existing;
       }
       setPhase("audit");
-      const { audit } = await api<{ audit: AuditSummary }>("/api/live/audits", {
-        method: "POST",
-        body: {
-          siteId,
-          mode: "single",
-          urls: [parsed.url],
-          ...QUICK_AUDIT,
-          categories: RULE_CATEGORIES.map((c) => c.id),
-          checkLinks: false,
-          includeImportant: false,
-        },
-      });
+      const { audit } = await api<{ audit: AuditSummary }>("/api/live/audits/quick", { method: "POST", body: { siteId, url: parsed.url } });
       router.push(`/live/audits/${audit.id}`);
     } catch (err) {
       setPhase("idle");
@@ -114,7 +103,7 @@ export function HeroAuditForm({ compact }: { compact?: boolean }) {
         ) : null}
       </div>
       <p id={hintId} className={cx("mt-3 text-[13px] text-fg-3", compact && "sr-only")}>
-        Checks up to {QUICK_AUDIT.maxPages} public pages, one click deep from the address you enter. Respects robots.txt. Results are saved to your workspace.
+        {QUICK.label} audit of the address you enter: {describeLimits(QUICK.budget, QUICK.maxDepth)}. Up to {HERO_RATE_LIMIT.audits} free audits an hour. Respects robots.txt. Results are saved to your workspace.
       </p>
       {compact ? null : <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2">
         <LinkButton href="/sample-audit" icon={FlaskConical} aria-label="Explore an interactive sample audit">

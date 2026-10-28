@@ -148,3 +148,27 @@ the server and was then lost is never retried: the URL ends `interrupted`.
 | `DNS_FAILED` | `failed_dns` |
 | `TLS` (Node/OpenSSL `CERT_*`, `ERR_TLS_*`, `ERR_SSL_*`, self-signed or unverifiable chains) | `failed_tls` |
 | anything else | `failed_network` |
+
+## Profiles
+
+Defined once in `src/lib/crawl/profiles.ts` and read by the API, the New audit form, the add-site form, the homepage
+form and the methodology page.
+
+| Profile | Budget | Depth | Set per audit |
+|---|---|---|---|
+| Quick | 25 | 3 | nothing |
+| Standard | 1,000 | 10 | nothing |
+| Full-site | 50,000 by default | unlimited | budget (1 to 1,000,000) |
+| Custom | 1,000 by default | 10 by default | budget, depth (0 to 100 or unlimited), include/exclude regex, subfolder, basic auth |
+
+- Scope checks run in this order: subfolder (`out_of_scope`), exclude rules, then include rules (both `excluded_by_rule`).
+  Rules are case-sensitive and tested against the normalised URL. The reason quotes the rule that matched.
+- Basic auth is sent only to the crawl's own origin, never across a redirect to another origin. The password is encrypted
+  with AES-256-GCM under `CRAWLER_SECRET_KEY`, bound to the crawl id as associated data, before the crawl row is written.
+  The audit stores only the username. Without the key, the API refuses basic auth before creating the audit.
+- The homepage form (`POST /api/live/audits/quick`) always runs Quick and allows 5 audits per client IP per hour. The
+  window is a Redis sorted set (`rl:hero-audit:<ws>:<ip>`); denied attempts are not counted. If Redis is unreachable the
+  in-process limiter takes over and the fallback is logged.
+- With `CRAWLER_V2=false`, the in-request engine cannot run the larger profiles. Budget and depth are clamped to
+  100 URLs and 3 clicks, the audit gets an `engine_limit` coverage note naming both, and it ends `partial`. Scope
+  rules and basic auth are refused while v2 is off.

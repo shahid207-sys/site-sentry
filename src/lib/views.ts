@@ -169,6 +169,8 @@ export interface SettingsData {
   sampleState: SampleState | null;
   storage: { persistent: boolean; ephemeral: boolean };
   liveScans: { enabled: boolean; allowedHosts: string[] | null };
+  /** Crawler v2 runs this workspace's audits (CRAWLER_V2); basicAuth = it can also store staging credentials. */
+  crawler: { v2: boolean; basicAuth: boolean };
 }
 
 export const SEVERITIES: Severity[] = ["high", "medium", "low"];

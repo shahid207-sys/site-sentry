@@ -80,12 +80,19 @@ export async function body<T>(req: NextRequest, schema: ZodType<T>): Promise<T> 
 const g = globalThis as unknown as { __ssRate?: Map<string, number[]> };
 const buckets = (g.__ssRate ??= new Map<string, number[]>());
 
-export function rateLimit(req: NextRequest, key: string, limit: number, windowMs: number) {
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip") || "local";
-  const k = `${key}:${ip}`;
+/** The client's IP as the proxy reports it: first X-Forwarded-For entry, else X-Real-IP. Spoofable without a trusted proxy. */
+export function clientIp(req: NextRequest): string {
+  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip") || "local";
+}
+
+export function rateLimit(req: NextRequest, key: string, limit: number, windowMs: number, message?: (waitS: number) => string) {
+  const k = `${key}:${clientIp(req)}`;
   const now = Date.now();
   const hits = (buckets.get(k) ?? []).filter((t) => now - t < windowMs);
-  if (hits.length >= limit) throw new HttpError(429, "RATE_LIMITED", `Too many requests. Wait ${Math.ceil((windowMs - (now - hits[0])) / 1000)}s and try again.`);
+  if (hits.length >= limit) {
+    const waitS = Math.ceil((windowMs - (now - hits[0])) / 1000);
+    throw new HttpError(429, "RATE_LIMITED", message?.(waitS) ?? `Too many requests. Wait ${waitS}s and try again.`);
+  }
   hits.push(now);
   buckets.set(k, hits);
 }

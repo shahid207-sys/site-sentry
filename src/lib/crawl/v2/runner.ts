@@ -10,6 +10,7 @@ import { parseHtml } from "../../audit/parse";
 import type { Db } from "../../db/client";
 import { SafeFetchError, type FetchOptions, type FetchResult, type Fetcher } from "../../fetch/safe-fetch";
 import { normaliseUrl } from "../normalise";
+import type { ScopeRules } from "../profiles";
 import { crawlDelayFor, isAllowed, parseRobots, type ParsedRobots } from "../robots";
 import { discoverSitemaps, extractOutlinks, type SitemapDocRecord } from "./discovery";
 import {
@@ -31,6 +32,7 @@ import {
   type UrlResult,
 } from "./frontier";
 import { parseRetryAfter, throttleFor, type HostThrottle, type ThrottleOptions } from "./politeness";
+import { crawlSecretScope, decryptSecret, secretKey } from "./secrets";
 import type { TerminalState } from "./types";
 
 /** Spec "Crawler engine → Resumability": URLs are claimed in batches of 200. */
@@ -51,10 +53,13 @@ export const V2_MAX_HTML_BYTES = 5 * 1024 * 1024;
 export const MAX_THROTTLE_RETRIES = 2;
 export const RETRY_WAIT_CAP_MS = 60_000;
 
-/** Stored in `crawls.config`. Profiles (step 8) add scope rules; Phase 1 scope is the start URL's host. */
+/** Stored in `crawls.config`. Scope is always the start URL's host; the Custom profile can narrow it further. */
 export interface CrawlConfig {
   seeds?: string[];
   sitemaps?: string[];
+  scope?: ScopeRules;
+  /** Basic auth for the crawl's own origin. `password` is encrypted (secrets.ts), never plaintext. */
+  auth?: { username: string; password: string };
 }
 
 export interface RobotsRecord {
@@ -142,7 +147,10 @@ class Run {
   private robots: ParsedRobots | null = null;
   private robotsRecord: RobotsRecord | null = null;
   private host = "";
+  private origin = "";
   private throttle!: HostThrottle;
+  private scope: { include: [string, RegExp][]; exclude: [string, RegExp][]; subfolder: string | null } = { include: [], exclude: [], subfolder: null };
+  private authHeader: string | null = null;
 
   constructor(
     private readonly opts: RunnerOptions,
@@ -163,7 +171,17 @@ class Run {
     if (crawl.status === "paused") return "paused";
     this.crawl = crawl;
     this.host = new URL(crawl.site_origin).host;
+    this.origin = new URL(crawl.site_origin).origin;
     this.throttle = this.opts.throttle ?? throttleFor(this.host, this.opts.politeness);
+    const scope = crawl.config?.scope;
+    const compile = (list: string[] = []) => list.map((s): [string, RegExp] => [s, new RegExp(s)]);
+    this.scope = { include: compile(scope?.include), exclude: compile(scope?.exclude), subfolder: scope?.subfolder ?? null };
+    if (crawl.config?.auth) {
+      const key = secretKey();
+      if (!key) throw new Error("This crawl uses basic auth, but CRAWLER_SECRET_KEY is not set on the worker.");
+      const password = decryptSecret(crawl.config.auth.password, key, crawlSecretScope(this.crawlId));
+      this.authHeader = `Basic ${Buffer.from(`${crawl.config.auth.username}:${password}`).toString("base64")}`;
+    }
 
     // We hold the lock, so no other runner is alive for this crawl: recover its claims now.
     const recovered = await sweep(this.db, this.crawlId, { force: true });
@@ -206,6 +224,8 @@ class Run {
     try {
       const res = await this.opts.fetch(url, {
         ...o,
+        // Credentials go to the crawl's own origin only (configured sitemaps can live elsewhere).
+        headers: this.authHeader && new URL(url).origin === this.origin ? { authorization: this.authHeader } : undefined,
         signal: this.opts.signal,
         timeoutMs: this.timeoutMs,
         userAgent: this.opts.fetchOptions?.userAgent ?? V2_USER_AGENT,
@@ -268,6 +288,11 @@ class Run {
   private gate(url: string): { state: TerminalState; reason: string } | null {
     const u = new URL(url);
     if (u.host !== this.host) return { state: "out_of_scope", reason: `Different host (${u.host}); this crawl covers ${this.host}.` };
+    const { subfolder, include, exclude } = this.scope;
+    if (subfolder && !u.pathname.startsWith(subfolder)) return { state: "out_of_scope", reason: `Outside ${subfolder}; this crawl covers only that subfolder.` };
+    const excluded = exclude.find(([, re]) => re.test(url));
+    if (excluded) return { state: "excluded_by_rule", reason: `Matches the exclude rule "${excluded[0]}".` };
+    if (include.length && !include.some(([, re]) => re.test(url))) return { state: "excluded_by_rule", reason: `Matches none of the ${include.length} include rule(s).` };
     if (this.robotsRecord?.outcome === "disallow_all") return { state: "blocked_robots", reason: this.robotsRecord.reason! };
     if (this.robots) {
       const d = isAllowed(this.robots, ROBOTS_TOKEN, url);
@@ -284,7 +309,8 @@ class Run {
   // ---------- seeds and sitemaps ----------
 
   private async seed() {
-    const raw = this.crawl.config?.seeds?.length ? this.crawl.config.seeds : [new URL("/", this.crawl.site_origin).toString()];
+    const start = new URL(this.scope.subfolder ?? "/", this.crawl.site_origin).toString();
+    const raw = this.crawl.config?.seeds?.length ? this.crawl.config.seeds : [start];
     const seeds: NewUrl[] = [];
     for (const s of raw) {
       const n = normaliseUrl(s);

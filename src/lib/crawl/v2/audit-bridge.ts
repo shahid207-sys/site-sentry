@@ -1,5 +1,6 @@
 // Connects JSON-store audits (the UI's unit) to crawler v2 crawls in Postgres while CRAWLER_V2=true.
 // The crawl is the source of truth for progress and status; the audit record mirrors it on every sync.
+import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import type { Queue } from "bullmq";
 import type { Db } from "../../db/client";
@@ -10,6 +11,7 @@ import { WorkflowError } from "../../workflow/deps";
 import { stateCounts } from "./frontier";
 import { createCrawlQueue, enqueueCrawl, type CrawlJob } from "./queue";
 import type { CrawlConfig } from "./runner";
+import { crawlSecretScope, encryptSecret, secretKey } from "./secrets";
 
 /** Crawler v2 runs live-workspace audits when CRAWLER_V2=true. The sample workspace always uses its in-memory site. */
 export function crawlerV2Enabled(ws: Workspace, env: Record<string, string | undefined> = process.env): boolean {
@@ -27,16 +29,46 @@ const FAILED = ["failed_timeout", "failed_dns", "failed_tls", "failed_network", 
 const INSPECTED = ["fetched", "oversized", "analysed"];
 const ACTIVE = ["discovered", "queued", "fetching"];
 
-/** Create the crawl for a freshly created audit and hand it to the worker queue. */
-export async function startCrawl(db: Db, queue: Queue<CrawlJob>, store: Store, ws: Workspace, audit: AuditRun, siteOrigin: string): Promise<AuditRun> {
-  const config: CrawlConfig = { seeds: audit.config.urls.length ? audit.config.urls : undefined, sitemaps: audit.config.sitemapUrl ? [audit.config.sitemapUrl] : undefined };
+/** Basic auth for a Custom crawl, in plaintext only between the request body and encryption here. */
+export interface CrawlAuthInput {
+  username: string;
+  password: string;
+}
+
+/**
+ * Create the crawl for a freshly created audit and hand it to the worker queue. The crawl id is made here so the
+ * basic-auth password can be encrypted bound to it before the row is written; plaintext never reaches Postgres.
+ */
+export async function startCrawl(
+  db: Db,
+  queue: Queue<CrawlJob>,
+  store: Store,
+  ws: Workspace,
+  audit: AuditRun,
+  siteOrigin: string,
+  opts: { auth?: CrawlAuthInput; env?: Record<string, string | undefined> } = {},
+): Promise<AuditRun> {
+  const id = randomUUID();
+  let auth: CrawlConfig["auth"];
+  if (opts.auth) {
+    const key = secretKey(opts.env);
+    if (!key) throw new WorkflowError("INVALID", "Basic auth needs CRAWLER_SECRET_KEY set on the server, so the password can be stored encrypted.");
+    auth = { username: opts.auth.username, password: encryptSecret(opts.auth.password, key, crawlSecretScope(id)) };
+  }
+  const config: CrawlConfig = {
+    seeds: audit.config.urls.length ? audit.config.urls : undefined,
+    sitemaps: audit.config.sitemapUrl ? [audit.config.sitemapUrl] : undefined,
+    scope: audit.config.scope,
+    auth,
+  };
   const [row] = await db
     .insert(crawls)
     .values({
+      id,
       workspace: ws,
       auditId: audit.id,
       siteOrigin,
-      profile: "form",
+      profile: audit.config.profile ?? "form",
       config,
       status: "queued",
       budget: audit.config.maxPages,

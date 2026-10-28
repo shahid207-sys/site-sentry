@@ -16,6 +16,7 @@ import type {
   VerificationOutcome,
 } from "./audit/types";
 import type { PageLinks } from "./crawl/extract";
+import type { ProfileId, ScopeRules } from "./crawl/profiles";
 
 export type Workspace = AuditSource; // "live" | "sample"
 
@@ -55,9 +56,16 @@ export interface AuditConfig {
   urls: string[];
   /** Sitemap to read (sitemap mode). */
   sitemapUrl?: string;
+  /** Crawl profile (docs/SPEC.md); absent on audits created before profiles existed. */
+  profile?: ProfileId;
+  /** URL budget. */
   maxPages: number;
-  /** 0 = only the given URLs; 1–3 = also follow internal links that many clicks deep. */
-  maxDepth: number;
+  /** 0 = only the given URLs; n = also follow internal links that many clicks deep; null = unlimited (crawler v2). */
+  maxDepth: number | null;
+  /** Custom profile scope rules (crawler v2). Basic auth is never stored here; it lives encrypted on the crawl. */
+  scope?: ScopeRules;
+  /** Custom profile: the crawl sends basic auth as this user (the password is not stored on the audit). */
+  authUser?: string;
   categories: RuleCategory[];
   /** Check the status of internal link and image targets that were not crawled (bounded). */
   checkLinks: boolean;
@@ -154,7 +162,7 @@ export interface PageSnapshot {
 }
 
 export interface CoverageNote {
-  code: "page_limit" | "depth_limit" | "robots_error" | "sitemap_unavailable" | "link_check_limit" | "cancelled" | "truncated" | "graph_incomplete" | "time_limit";
+  code: "page_limit" | "depth_limit" | "robots_error" | "sitemap_unavailable" | "link_check_limit" | "cancelled" | "truncated" | "graph_incomplete" | "time_limit" | "engine_limit";
   message: string;
 }
 

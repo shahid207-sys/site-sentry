@@ -16,14 +16,14 @@ import type { AuditConfig, AuditRun, CoverageNote, LinkCheck, PageSnapshot, Queu
 import type { AuditBlob, StoreData } from "../store/store";
 import { WorkflowError, type Deps } from "../workflow/deps";
 import { extractLinks } from "./extract";
+import { describeLimits, LEGACY_ENGINE_LIMITS, PROFILES } from "./profiles";
 import { isAllowed, parseRobots, type ParsedRobots } from "./robots";
 import { parseSitemap } from "./sitemap";
 import { isInternal, normalizePageUrl } from "./url";
 
+/** This in-request engine runs while CRAWLER_V2=false; its page and depth ceiling is shared with the profiles. */
 export const LIMITS = {
-  maxPages: 100,
-  maxDepth: 3,
-  maxListUrls: 100,
+  ...LEGACY_ENGINE_LIMITS,
   concurrency: 4,
   linkChecks: 60,
   sitemapChildren: 5,
@@ -33,6 +33,9 @@ export const LIMITS = {
   /** A running audit with no step for this long is shown as interrupted and can be resumed. */
   staleMs: 2 * 60_000,
 };
+
+/** The route clamps audits to LEGACY_ENGINE_LIMITS, so null (unlimited) never reaches this engine; read it safely anyway. */
+const depthOf = (c: AuditConfig) => c.maxDepth ?? LEGACY_ENGINE_LIMITS.maxDepth;
 
 export const ROBOTS_TOKEN = "SiteSentryBot";
 export const ALL_CATEGORIES: RuleCategory[] = RULE_CATEGORIES.map((c) => c.id);
@@ -64,10 +67,27 @@ export function isStale(audit: AuditRun, now: Date): boolean {
 export interface CreateAuditInput {
   siteId: string;
   config: AuditConfig;
+  /** Notes known before the crawl starts, such as engine_limit from clampToLegacyEngine. */
+  coverage?: CoverageNote[];
+}
+
+/**
+ * Fit a profile's budget and depth to this engine (CRAWLER_V2=false). The audit keeps the profile name and gets an
+ * engine_limit note saying what was asked for and what will run, so the report never implies a larger crawl.
+ */
+export function clampToLegacyEngine(config: AuditConfig): { config: AuditConfig; coverage: CoverageNote[] } {
+  const maxPages = Math.min(config.maxPages, LEGACY_ENGINE_LIMITS.maxPages);
+  const maxDepth = config.maxDepth === null ? LEGACY_ENGINE_LIMITS.maxDepth : Math.min(config.maxDepth, LEGACY_ENGINE_LIMITS.maxDepth);
+  if (maxPages === config.maxPages && maxDepth === config.maxDepth) return { config, coverage: [] };
+  const label = config.profile ? `The ${PROFILES[config.profile].label} profile asks for` : "This audit asked for";
+  const message =
+    `${label} ${describeLimits(config.maxPages, config.maxDepth)}. The in-request engine running this audit ` +
+    `(crawler v2 is off) stops at ${describeLimits(maxPages, maxDepth)}, so this audit covers at most that.`;
+  return { config: { ...config, maxPages, maxDepth }, coverage: [{ code: "engine_limit", message }] };
 }
 
 /** Create an audit run. Idempotent: if the site already has a live (non-stale) running audit, that run is returned. */
-export async function createAudit({ siteId, config }: CreateAuditInput, deps: Deps): Promise<{ audit: AuditRun; reused: boolean }> {
+export async function createAudit({ siteId, config, coverage = [] }: CreateAuditInput, deps: Deps): Promise<{ audit: AuditRun; reused: boolean }> {
   const now = deps.now();
   return deps.store.update((d) => {
     const site = d.sites[siteId];
@@ -113,7 +133,7 @@ export async function createAudit({ siteId, config }: CreateAuditInput, deps: De
       robots: null,
       sitemap: null,
       progress: { planned: queue.length, done: 0, inspected: 0, failed: 0, skipped: 0, linksChecked: 0 },
-      coverage: [],
+      coverage: [...coverage],
       ruleConfig: d.settings.ruleConfig,
     };
     d.audits[audit.id] = audit;
@@ -323,7 +343,7 @@ async function doPagesBatch(s: StepState, deps: Deps): Promise<void> {
   if (audit.queue.length === 0 || remaining <= 0) {
     if (audit.queue.length > 0) {
       note(audit, { code: "page_limit", message: `Stopped at the page limit of ${audit.config.maxPages}; ${audit.queue.length} discovered URL(s) were not audited.` });
-      if (audit.config.maxDepth > 0) note(audit, { code: "graph_incomplete", message: "The link graph is incomplete, so orphan candidates and inbound link counts were not computed." });
+      if (depthOf(audit.config) > 0) note(audit, { code: "graph_incomplete", message: "The link graph is incomplete, so orphan candidates and inbound link counts were not computed." });
     }
     audit.phase = audit.config.checkLinks ? "links" : "finalize";
     return;
@@ -344,7 +364,7 @@ async function doPagesBatch(s: StepState, deps: Deps): Promise<void> {
 
   const seen = new Set(audit.seen);
   // Traversal is disabled when robots.txt could not be read.
-  const maxDepth = audit.robots?.outcome === "error" ? 0 : audit.config.maxDepth;
+  const maxDepth = audit.robots?.outcome === "error" ? 0 : depthOf(audit.config);
   for (const r of results) {
     let snap: PageSnapshot;
     if ("blocked" in r && r.blocked) {
@@ -385,9 +405,9 @@ async function doPagesBatch(s: StepState, deps: Deps): Promise<void> {
         seen.add(target);
         audit.queue.push({ url: target, depth: r.item.depth + 1, via: "link" });
       }
-    } else if (snap.links && r.item.depth >= maxDepth && audit.config.maxDepth > 0) {
+    } else if (snap.links && r.item.depth >= maxDepth && depthOf(audit.config) > 0) {
       const beyond = snap.links.internal.filter((t) => !seen.has(t)).length;
-      if (beyond) note(audit, { code: "depth_limit", message: `Some links were not followed because they are deeper than ${audit.config.maxDepth} click(s) from the start URLs.` });
+      if (beyond) note(audit, { code: "depth_limit", message: `Some links were not followed because they are deeper than ${depthOf(audit.config)} click(s) from the start URLs.` });
     }
   }
   audit.seen = [...seen];
@@ -442,11 +462,11 @@ async function doLinksBatch(s: StepState, deps: Deps) {
 function finalize(s: StepState, deps: Deps, cancelled: boolean) {
   const { audit, blob } = s;
   if (cancelled) note(audit, { code: "cancelled", message: "The audit was cancelled; results cover only the URLs fetched before cancelling." });
-  if (cancelled && audit.config.maxDepth > 0) note(audit, { code: "graph_incomplete", message: "The link graph is incomplete, so orphan candidates were not computed." });
+  if (cancelled && depthOf(audit.config) > 0) note(audit, { code: "graph_incomplete", message: "The link graph is incomplete, so orphan candidates were not computed." });
   const truncated = blob.snapshots.filter((p) => p.truncated).length;
   if (truncated) note(audit, { code: "truncated", message: `${truncated} page(s) exceeded the 2 MB limit and were only partially read.` });
 
-  const graphComplete = audit.config.maxDepth > 0 && !audit.coverage.some((c) => ["page_limit", "graph_incomplete", "cancelled", "robots_error"].includes(c.code));
+  const graphComplete = depthOf(audit.config) > 0 && !audit.coverage.some((c) => ["page_limit", "graph_incomplete", "cancelled", "robots_error"].includes(c.code));
   blob.findings = analyzeAudit({
     auditId: audit.id,
     origin: s.site.origin,
@@ -459,7 +479,7 @@ function finalize(s: StepState, deps: Deps, cancelled: boolean) {
     categories: audit.config.categories,
     severityOverrides: s.severityOverrides,
     graphComplete,
-    maxDepth: audit.config.maxDepth,
+    maxDepth: depthOf(audit.config),
   });
   audit.findingCounts = countBySeverity(blob.findings);
   const fetched = blob.snapshots.filter((p) => p.status !== null).length;
@@ -472,7 +492,7 @@ function finalize(s: StepState, deps: Deps, cancelled: boolean) {
   } else if (blob.snapshots.length === 0) {
     audit.status = "failed";
     audit.error = { code: "NO_PAGES", message: audit.config.mode === "sitemap" ? "The sitemap provided no URLs on this site to audit." : "No URLs were audited." };
-  } else if (failed > 0 || audit.coverage.some((c) => ["page_limit", "robots_error", "truncated", "link_check_limit", "sitemap_unavailable"].includes(c.code))) {
+  } else if (failed > 0 || audit.coverage.some((c) => ["page_limit", "robots_error", "truncated", "link_check_limit", "sitemap_unavailable", "engine_limit"].includes(c.code))) {
     audit.status = "partial";
   } else audit.status = "completed";
   audit.queue = [];
@@ -588,7 +608,8 @@ export function describeConfig(config: AuditConfig): string[] {
   else if (config.mode === "list") lines.push(`${config.urls.length} listed URL(s)`);
   else lines.push(`URLs from the sitemap${config.sitemapUrl ? ` ${config.sitemapUrl}` : " (robots.txt declaration, else /sitemap.xml)"}`);
   if (config.includeImportant) lines.push("Plus the site's important URLs");
-  lines.push(config.maxDepth > 0 ? `Follow internal links up to ${config.maxDepth} click(s) deep` : "Do not follow links");
+  if (config.profile) lines.push(`${PROFILES[config.profile].label} profile: ${describeLimits(config.maxPages, config.maxDepth)}`);
+  lines.push(config.maxDepth === null ? "Follow internal links with no depth limit" : config.maxDepth > 0 ? `Follow internal links up to ${config.maxDepth} click(s) deep` : "Do not follow links");
   lines.push(`At most ${config.maxPages} pages`);
   if (config.checkLinks) lines.push(`Status-check up to ${LIMITS.linkChecks} uncrawled internal link and image targets`);
   lines.push("Read robots.txt first and skip URLs it disallows for SiteSentryBot");

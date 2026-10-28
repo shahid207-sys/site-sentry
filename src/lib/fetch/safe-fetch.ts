@@ -204,6 +204,8 @@ export interface FetchOptions {
   timeoutMs?: number;
   maxBytes?: number;
   userAgent?: string;
+  /** Extra request headers (crawler v2 basic auth). Sent only while a request stays on its first URL's origin. */
+  headers?: Record<string, string>;
 }
 
 export interface FetchResult {
@@ -292,6 +294,7 @@ export function safeFetch(input: string, opts: FetchOptions): Promise<FetchResul
 async function fetchWithPolicy(input: string, opts: FetchOptions, policy: FetchPolicy): Promise<FetchResult> {
   let url = validateTargetUrl(input, policy);
   const requestedUrl = url.toString();
+  const firstOrigin = url.origin;
   const redirectChain: RedirectHop[] = [];
   const timeoutMs = opts.timeoutMs ?? TIMEOUT_MS;
   const timeout = AbortSignal.timeout(timeoutMs);
@@ -313,7 +316,11 @@ async function fetchWithPolicy(input: string, opts: FetchOptions, policy: FetchP
             redirect: "manual",
             dispatcher: pinnedAgent(url.hostname, ips[i]),
             signal,
-            headers: { "user-agent": opts.userAgent ?? USER_AGENT, accept: ACCEPT_HEADER[opts.accept] },
+            headers: {
+              ...(opts.headers && url.origin === firstOrigin ? opts.headers : {}),
+              "user-agent": opts.userAgent ?? USER_AGENT,
+              accept: ACCEPT_HEADER[opts.accept],
+            },
           });
         } catch (e) {
           if (i + 1 >= ips.length || !isConnectError(e) || signal.aborted) throw e;

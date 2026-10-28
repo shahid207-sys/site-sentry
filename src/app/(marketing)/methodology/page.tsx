@@ -4,6 +4,7 @@ import { CHECKS } from "@/lib/audit/catalog";
 import { HEALTH_NOTE, HEALTH_WEIGHTS } from "@/lib/audit/health";
 import { RULE_CATEGORIES } from "@/lib/audit/types";
 import { LIMITS } from "@/lib/crawl/engine";
+import { describeLimits, HERO_RATE_LIMIT, LEGACY_ENGINE_LIMITS, PROFILE_IDS, PROFILES } from "@/lib/crawl/profiles";
 import { MAX_BYTES, MAX_REDIRECTS, TIMEOUT_MS } from "@/lib/fetch/safe-fetch";
 
 export const metadata: Metadata = {
@@ -137,8 +138,36 @@ export default function MethodologyPage() {
           <div className="mt-10">
             <TrustSummary />
           </div>
+          <div className="mt-8 overflow-x-auto rounded-xl border border-line">
+            <table className="w-full min-w-[520px] text-left text-sm">
+              <caption className="sr-only">Crawl profiles</caption>
+              <thead className="bg-surface-secondary text-[13px] text-fg-3">
+                <tr>
+                  <th scope="col" className="px-4 py-2.5 font-medium">Profile</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">Limits</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">Use</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line-subtle text-fg-2">
+                {PROFILE_IDS.map((id) => {
+                  const p = PROFILES[id];
+                  return (
+                    <tr key={id}>
+                      <th scope="row" className="px-4 py-2.5 font-medium text-fg">{p.label}</th>
+                      <td className="px-4 py-2.5">
+                        {describeLimits(p.budget, p.maxDepth)}
+                        {p.budgetEditable || p.depthEditable ? ` by default; ${[p.budgetEditable && "budget", p.depthEditable && "depth"].filter(Boolean).join(" and ")} set per audit` : ""}
+                      </td>
+                      <td className="px-4 py-2.5">{p.use}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
           <ul className="mt-8 grid list-disc gap-3 pl-5 text-sm text-fg-2 md:grid-cols-2">
-            <li>Up to {LIMITS.maxPages} pages and {LIMITS.maxDepth} clicks deep per audit, with up to {LIMITS.linkChecks} link targets status-checked.</li>
+            <li>The homepage form runs {PROFILES.quick.label} only, at most {HERO_RATE_LIMIT.audits} audits an hour from one address.</li>
+            <li>Deployments still on the in-request engine stop at {describeLimits(LEGACY_ENGINE_LIMITS.maxPages, LEGACY_ENGINE_LIMITS.maxDepth)}, and the audit says so in its coverage notes. Up to {LIMITS.linkChecks} link targets are status-checked.</li>
             <li>{TIMEOUT_MS / 1000}s timeout per request, {MAX_BYTES / 1024 / 1024} MB of HTML per page, at most {MAX_REDIRECTS} redirects, each one re-validated.</li>
             <li>Only public http/https addresses. Private, loopback, link-local and cloud-metadata IPs are refused, including at connect time.</li>
             <li>robots.txt is respected. Character encoding comes from the Content-Type header only.</li>

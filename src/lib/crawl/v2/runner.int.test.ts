@@ -265,3 +265,80 @@ describe("runCrawl politeness", () => {
     expectNoDuplicateFetches();
   });
 });
+
+describe("runCrawl Custom profile scope and auth", () => {
+  const fast = () => new HostThrottle({ ratePerSecond: 1000 });
+
+  it("keeps to the subfolder (out_of_scope) and applies exclude rules (excluded_by_rule)", async () => {
+    srv.routes.set("/blog/", page(["/blog/a", "/blog/drafts/x", "/shop/", "/"]));
+    srv.routes.set("/blog/a", page([]));
+    const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued", config: { scope: { include: [], exclude: ["/drafts/"], subfolder: "/blog/" } } });
+    expect(await runCrawl(opts({ throttle: fast() }), c)).toBe("completed");
+    const s = await urlStates(c);
+    expect(s["/blog/"]).toMatchObject({ state: "fetched", via: ["seed"] }); // the subfolder is the default start URL
+    expect(s["/blog/a"]).toMatchObject({ state: "fetched" });
+    expect(s["/blog/drafts/x"]).toMatchObject({ state: "excluded_by_rule", reason: 'Matches the exclude rule "/drafts/".' });
+    expect(s["/shop/"]).toMatchObject({ state: "out_of_scope", reason: "Outside /blog/; this crawl covers only that subfolder." });
+    expect(s["/"]).toMatchObject({ state: "out_of_scope" });
+    expect(srv.hits.has("/robots.txt")).toBe(true); // robots.txt is still read at the root
+    expect(srv.hits.has("/shop/")).toBe(false);
+    expect(srv.hits.has("/blog/drafts/x")).toBe(false);
+  });
+
+  it("with include rules, crawls only matching URLs (tested against the normalised URL)", async () => {
+    srv.routes.set("/", page(["/en/a", "/en/b", "/fr/a"]));
+    for (const p of ["/en/a", "/en/b"]) srv.routes.set(p, page([]));
+    const include = [`^${srv.origin.replace(/\./g, "\.")}/(en/.*)?$`];
+    const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued", config: { scope: { include, exclude: [] } } });
+    expect(await runCrawl(opts({ throttle: fast() }), c)).toBe("completed");
+    const s = await urlStates(c);
+    expect(s["/"].state).toBe("fetched");
+    expect(s["/en/a"].state).toBe("fetched");
+    expect(s["/fr/a"]).toMatchObject({ state: "excluded_by_rule", reason: "Matches none of the 1 include rule(s)." });
+    expect(srv.hits.has("/fr/a")).toBe(false);
+  });
+
+  it("sends basic auth to the crawl's origin only, decrypted from crawls.config", async () => {
+    const { randomBytes, randomUUID } = await import("node:crypto");
+    const { crawlSecretScope, encryptSecret } = await import("./secrets");
+    const key = randomBytes(32);
+    const other = await startLocalServer();
+    const seen = new Map<string, string | undefined>();
+    const guarded = (body: string) => (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => {
+      seen.set(`${req.headers.host}${req.url}`, req.headers.authorization);
+      if (req.headers.authorization !== `Basic ${Buffer.from("stage:s3cret").toString("base64")}`) return void res.writeHead(401, { "content-type": "text/html" }).end("auth");
+      page([body])(req, res);
+    };
+    srv.routes.set("/", guarded("/inner"));
+    srv.routes.set("/inner", guarded("/"));
+    other.routes.set("/sitemap.xml", (req, res) => {
+      seen.set(`other${req.url}`, req.headers.authorization);
+      send(urlset([`${srv.origin}/inner`]), "application/xml")(req, res);
+    });
+    const id = randomUUID();
+    const config = { sitemaps: [`${other.origin}/sitemap.xml`], auth: { username: "stage", password: encryptSecret("s3cret", key, crawlSecretScope(id)) } };
+    await newCrawl(db, { id, siteOrigin: srv.origin, status: "queued", config });
+    // Both servers are on 127.0.0.1 with their own ports; this fetcher may reach either.
+    const { createSafeFetch } = await import("@/lib/fetch/safe-fetch");
+    const fetch = createSafeFetch({ resolve: async () => ["127.0.0.1"], isBlocked: () => false, allowedPorts: new Set([String(srv.port), String(other.port)]), allowLocalNames: false });
+    process.env.CRAWLER_SECRET_KEY = key.toString("base64");
+    try {
+      expect(await runCrawl(opts({ fetch, throttle: fast() }), id)).toBe("completed");
+    } finally {
+      delete process.env.CRAWLER_SECRET_KEY;
+      await other.close();
+    }
+    const s = await urlStates(id);
+    expect(s["/"]).toMatchObject({ state: "fetched", reason: "HTTP 200" });
+    expect(s["/inner"]).toMatchObject({ state: "fetched", reason: "HTTP 200" });
+    expect(seen.get("other/sitemap.xml")).toBeUndefined(); // credentials never left the crawl's origin
+    const row = (await db.execute(sql`select config::text as c from crawls where id = ${id}::uuid`)).rows[0] as { c: string };
+    expect(row.c).not.toContain("s3cret");
+  });
+
+  it("fails the crawl with a clear error when the worker has no CRAWLER_SECRET_KEY", async () => {
+    const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued", config: { auth: { username: "u", password: "v1.a.b.c" } } });
+    await expect(runCrawl(opts({ throttle: fast() }), c)).rejects.toThrow("CRAWLER_SECRET_KEY is not set on the worker");
+    expect(srv.hits.size).toBe(0);
+  });
+});

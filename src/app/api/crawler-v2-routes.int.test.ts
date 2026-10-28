@@ -1,6 +1,6 @@
 // The audit API with CRAWLER_V2=true: create, progress (step), pause/resume/cancel and delete read and write the
 // crawls table; the crawl itself runs in-process here, as the worker would run it.
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -25,6 +25,7 @@ type Routes = {
   cancel: typeof import("./[ws]/audits/[id]/cancel/route");
   pause: typeof import("./[ws]/audits/[id]/pause/route");
   resume: typeof import("./[ws]/audits/[id]/resume/route");
+  quick: typeof import("./[ws]/audits/quick/route");
 };
 let r: Routes;
 
@@ -46,11 +47,13 @@ beforeAll(async () => {
     cancel: await import("./[ws]/audits/[id]/cancel/route"),
     pause: await import("./[ws]/audits/[id]/pause/route"),
     resume: await import("./[ws]/audits/[id]/resume/route"),
+    quick: await import("./[ws]/audits/quick/route"),
   };
   // The site is added directly: the public API only accepts ports 80/443/8080/8443, the test server is on a random port.
   const { getStore } = await import("@/lib/workspace");
   await getStore("live").update((d) => {
-    d.sites.s1 = { id: "s1", name: "Local", origin, createdAt: new Date().toISOString() };
+    // One site per test below: a site with a running audit gets that audit back instead of a new one.
+    for (const id of ["s1", "s2", "s3", "s4", "s5", "s6"]) d.sites[id] = { id, name: `Local ${id}`, origin, createdAt: new Date().toISOString() };
   });
 });
 afterAll(async () => {
@@ -64,7 +67,11 @@ afterAll(async () => {
 
 const fetcher = () => createSafeFetch(workerFetchPolicy({ CRAWLER_LOCAL_HOSTS: "site.test=127.0.0.1", CRAWLER_LOCAL_PORTS: String(srv.port) }));
 const ctx = <P extends object>(p: P) => ({ params: Promise.resolve({ ws: "live", ...p }) });
-const post = (url: string, body?: unknown) => new NextRequest(`http://localhost${url}`, { method: "POST", body: body ? JSON.stringify(body) : undefined });
+const post = (url: string, body?: unknown, headers?: Record<string, string>) =>
+  new NextRequest(`http://localhost${url}`, { method: "POST", body: body ? JSON.stringify(body) : undefined, headers });
+const base = { mode: "single", urls: [] as string[], categories: ["crawlability"], checkLinks: false, includeImportant: false };
+type CrawlRow = { profile: string; budget: number | null; max_depth: number | null; config: Record<string, unknown> };
+const crawlRow = async (id: string) => (await db.execute(sql`select profile, budget, max_depth, config from crawls where id = ${id}::uuid`)).rows[0] as CrawlRow;
 
 async function call<T>(res: Response | Promise<Response>): Promise<T> {
   const out = await res;
@@ -74,7 +81,7 @@ async function call<T>(res: Response | Promise<Response>): Promise<T> {
 }
 
 async function createAudit(): Promise<AuditSummary> {
-  const body = { siteId: "s1", mode: "single", urls: [`${origin}/`], maxPages: 20, maxDepth: 2, categories: ["crawlability"], checkLinks: false, includeImportant: false };
+  const body = { ...base, siteId: "s1", urls: [`${origin}/`], profile: "custom", budget: 20, maxDepth: 2 };
   const out = await call<{ audit: AuditSummary; reused: boolean }>(r.audits.POST(post("/api/live/audits", body), ctx({})));
   expect(out.reused).toBe(false);
   return out.audit;
@@ -117,5 +124,86 @@ describe("audit API with CRAWLER_V2=true", () => {
     expect((await act("cancel")).audit.crawler!.status).toBe("cancelling");
     expect(await runCrawl({ db, fetch: fetcher(), owner: "routes-test" }, crawlId)).toBe("cancelled");
     expect((await step(audit.id)).audit).toMatchObject({ status: "cancelled", phase: "done", crawler: { status: "cancelled" } });
+  });
+});
+
+describe("audit API crawl profiles", () => {
+  // A fresh client IP per call: this describe creates more audits than the general 10-a-minute limit allows one IP.
+  const create = (body: Record<string, unknown>) =>
+    r.audits.POST(post("/api/live/audits", { ...base, urls: [`${origin}/`], ...body }, { "x-forwarded-for": randomUUID() }), ctx({}));
+
+  it("puts the profile's budget and depth on the crawl, and rejects values a fixed profile does not take", async () => {
+    const { audit } = await call<{ audit: AuditSummary }>(create({ siteId: "s2", profile: "standard" }));
+    expect(audit.config).toMatchObject({ profile: "standard", maxPages: 1000, maxDepth: 10 });
+    expect(await crawlRow(audit.crawler!.crawlId)).toMatchObject({ profile: "standard", budget: 1000, max_depth: 10 });
+
+    await expect(call(create({ siteId: "s3", profile: "quick", budget: 500 }))).rejects.toThrow("fixed budget of 25");
+    await expect(call(create({ siteId: "s3", profile: "standard", scope: { include: ["/a"], exclude: [] } }))).rejects.toThrow("part of the Custom profile");
+    await expect(call(create({ siteId: "s3", profile: "custom", scope: { include: ["("], exclude: [] } }))).rejects.toThrow("Include rule 1:");
+    await expect(call(create({ siteId: "s3", profile: "custom", scope: { include: [], exclude: [], subfolder: "blog" } }))).rejects.toThrow("subfolder must be a path");
+  });
+
+  it("Full-site takes a budget and no depth limit", async () => {
+    const { audit } = await call<{ audit: AuditSummary }>(create({ siteId: "s3", profile: "full", budget: 120_000 }));
+    expect(await crawlRow(audit.crawler!.crawlId)).toMatchObject({ profile: "full", budget: 120_000, max_depth: null });
+  });
+
+  it("stores Custom basic auth encrypted: the password is not in the response, the audit or the crawl row", async () => {
+    const password = `pw-${randomUUID()}`;
+    const auth = { username: "stage", password };
+    delete process.env.CRAWLER_SECRET_KEY;
+    const refused = await create({ siteId: "s4", profile: "custom", auth });
+    expect(refused.status).toBe(400);
+    expect((await refused.json()).error.message).toContain("CRAWLER_SECRET_KEY");
+    const { getStore } = await import("@/lib/workspace");
+    expect(Object.values((await getStore("live").read()).audits).some((a) => a.siteId === "s4")).toBe(false); // nothing left behind
+
+    process.env.CRAWLER_SECRET_KEY = randomBytes(32).toString("base64");
+    try {
+      const res = await create({ siteId: "s4", profile: "custom", scope: { include: [], exclude: ["/private/"], subfolder: "/" }, auth });
+      const text = await res.text();
+      expect(res.status).toBe(200);
+      expect(text).not.toContain(password);
+      const { audit } = JSON.parse(text) as { audit: AuditSummary };
+      expect(audit.config).toMatchObject({ profile: "custom", authUser: "stage", scope: { exclude: ["/private/"], subfolder: "/" } });
+      expect(JSON.stringify((await getStore("live").read()).audits[audit.id])).not.toContain(password);
+      const row = await crawlRow(audit.crawler!.crawlId);
+      expect(JSON.stringify(row.config)).not.toContain(password);
+      expect(row.config.auth).toMatchObject({ username: "stage", password: expect.stringMatching(/^v1\./) });
+    } finally {
+      delete process.env.CRAWLER_SECRET_KEY;
+    }
+  });
+
+  it("the homepage endpoint runs Quick only and allows 5 audits an hour per IP", async () => {
+    const ip = `198.51.100.${randomBytes(1)[0]}-${randomUUID()}`; // unique per run: the window lives in Redis
+    const quick = () => r.quick.POST(post("/api/live/audits/quick", { siteId: "s5", url: `${origin}/` }, { "x-forwarded-for": ip }), ctx({}));
+    const first = await call<{ audit: AuditSummary }>(quick());
+    expect(first.audit.config).toMatchObject({ profile: "quick", maxPages: 25, maxDepth: 3, mode: "single" });
+    expect(await crawlRow(first.audit.crawler!.crawlId)).toMatchObject({ profile: "quick", budget: 25, max_depth: 3 });
+    for (let i = 2; i <= 5; i++) expect((await quick()).status).toBe(200); // the running audit is returned again
+    const sixth = await quick();
+    expect(sixth.status).toBe(429);
+    expect((await sixth.json()).error.message).toMatch(/limited to 5 an hour from one address\. Try again in \d+ min\./);
+  });
+
+  it("with CRAWLER_V2 off, clamps a profile to the in-request engine and says so on the audit", async () => {
+    process.env.CRAWLER_V2 = "false";
+    try {
+      await expect(call(create({ siteId: "s6", profile: "custom", scope: { include: ["/a"], exclude: [] } }))).rejects.toThrow("need crawler v2");
+      const { audit } = await call<{ audit: AuditSummary }>(create({ siteId: "s6", profile: "standard" }));
+      expect(audit.crawler).toBeUndefined();
+      expect(audit.config).toMatchObject({ profile: "standard", maxPages: 100, maxDepth: 3 });
+      const { getStore } = await import("@/lib/workspace");
+      expect((await getStore("live").read()).audits[audit.id].coverage).toEqual([
+        {
+          code: "engine_limit",
+          message:
+            "The Standard profile asks for 1,000 URLs · 10 clicks deep. The in-request engine running this audit (crawler v2 is off) stops at 100 URLs · 3 clicks deep, so this audit covers at most that.",
+        },
+      ]);
+    } finally {
+      process.env.CRAWLER_V2 = "true";
+    }
   });
 });

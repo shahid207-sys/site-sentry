@@ -37,7 +37,7 @@ beforeEach(async () => {
   });
   const deps: Deps = { store, fetch: srv.fetch, now: () => new Date(), newId: () => randomUUID(), source: "live" };
   const { audit } = await createAudit(
-    { siteId: "s1", config: { mode: "single", urls: [`${srv.origin}/`], maxPages: 10, maxDepth: 2, categories: ["crawlability"], checkLinks: false, includeImportant: false } },
+    { siteId: "s1", config: { mode: "single", urls: [`${srv.origin}/`], profile: "custom", maxPages: 10, maxDepth: 2, categories: ["crawlability"], checkLinks: false, includeImportant: false } },
     deps,
   );
   auditId = (await startCrawl(db, queue, store, "live", audit, srv.origin)).id;

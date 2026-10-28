@@ -42,3 +42,27 @@ describe("fetch options used by crawler v2", () => {
     await expect(slow).rejects.toBeInstanceOf(SafeFetchError);
   });
 });
+
+describe("extra headers", () => {
+  it("are sent on the first origin and dropped when a redirect leaves it", async () => {
+    const other = await startLocalServer();
+    try {
+      const got: Record<string, string | undefined> = {};
+      srv.routes.set("/start", (req, res) => {
+        got.start = req.headers.authorization;
+        res.writeHead(302, { location: `${other.origin}/landing` }).end();
+      });
+      other.routes.set("/landing", (req, res) => {
+        got.landing = req.headers.authorization;
+        send("<title>x</title>")(req, res);
+      });
+      const { createSafeFetch } = await import("./safe-fetch");
+      const fetch = createSafeFetch({ resolve: async () => ["127.0.0.1"], isBlocked: () => false, allowedPorts: new Set([String(srv.port), String(other.port)]), allowLocalNames: false });
+      const res = await fetch(`${srv.origin}/start`, { accept: "html", headers: { authorization: "Basic eDp5" } });
+      expect(res.status).toBe(200);
+      expect(got).toEqual({ start: "Basic eDp5", landing: undefined });
+    } finally {
+      await other.close();
+    }
+  });
+});

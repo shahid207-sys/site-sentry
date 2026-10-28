@@ -4,8 +4,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Globe, Play, ScanSearch, Trash2 } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { RULE_CATEGORIES, type RuleCategory } from "@/lib/audit/types";
+import { describeLimits, LEGACY_ENGINE_LIMITS, MAX_BUDGET, MAX_DEPTH, PROFILE_IDS, PROFILES, type ProfileId } from "@/lib/crawl/profiles";
 import type { AuditMode } from "@/lib/model";
-import type { AuditSummary } from "@/lib/views";
+import type { AuditSummary, SettingsData } from "@/lib/views";
 import { SeverityCountsInline } from "../domain";
 import { api, ApiError, useApi } from "../lib/api";
 import { cleanHost, fmtAgo, fmtDateTime, fmtDuration, plural, siteOptionLabel } from "../lib/format";
@@ -30,10 +31,11 @@ import {
 } from "../ui";
 
 const MODE_LABEL: Record<AuditMode, string> = { single: "Single URL", list: "URL list", sitemap: "Sitemap" };
-// Mirrors the server's LIMITS (src/lib/crawl/engine.ts); the API validates again.
 const ADD_SITE = "__add_site__";
 const SITE_REQUIRED = "Choose a website before starting the audit.";
-const LIMITS = { maxPages: 100, maxDepth: 3, maxListUrls: 100, linkChecks: 60 };
+// Profiles come from the shared config (src/lib/crawl/profiles.ts); the API validates again.
+const LIMITS = LEGACY_ENGINE_LIMITS;
+const ruleLines = (s: string) => s.split("\n").map((l) => l.trim()).filter(Boolean);
 
 // ---------- delete ----------
 
@@ -212,7 +214,9 @@ export function AuditsView() {
                     </td>
                     <td className="px-4 py-3 text-fg-2">
                       {MODE_LABEL[a.config.mode]}
-                      <span className="text-fg-3"> · depth {a.config.maxDepth} · max {a.config.maxPages}</span>
+                      <span className="text-fg-3">
+                        {a.config.profile ? ` · ${PROFILES[a.config.profile].label}` : ""} · {describeLimits(a.config.maxPages, a.config.maxDepth)}
+                      </span>
                     </td>
                     <td className="px-4 py-3 text-right tabular">
                       <span className="text-fg">{a.progress.inspected}</span>
@@ -255,15 +259,16 @@ export function AuditsView() {
 
 // ---------- new ----------
 
-function preview(o: { mode: AuditMode; urlCount: number; sitemapUrl: string; includeImportant: boolean; importantCount: number; maxDepth: number; maxPages: number; checkLinks: boolean; categories: RuleCategory[] }) {
+function preview(o: { mode: AuditMode; urlCount: number; sitemapUrl: string; includeImportant: boolean; importantCount: number; maxDepth: number | null; maxPages: number; checkLinks: boolean; categories: RuleCategory[]; scope: string[] }) {
   const lines: string[] = [];
   lines.push("Read robots.txt first and skip URLs it disallows for SiteSentryBot");
   if (o.mode === "single") lines.push("Inspect the one URL you entered");
   else if (o.mode === "list") lines.push(`Inspect ${plural(o.urlCount, "listed URL")}`);
   else lines.push(`Read URLs from ${o.sitemapUrl ? "the sitemap you entered" : "the sitemap declared in robots.txt, else /sitemap.xml"}`);
   if (o.includeImportant && o.importantCount) lines.push(`Also inspect the site's ${plural(o.importantCount, "important URL")}`);
-  lines.push(o.maxDepth > 0 ? `Follow internal links up to ${plural(o.maxDepth, "click")} deep` : "Do not follow links");
-  lines.push(`Stop after ${plural(o.maxPages, "page")}`);
+  lines.push(o.maxDepth === null ? "Follow internal links with no depth limit" : o.maxDepth > 0 ? `Follow internal links up to ${plural(o.maxDepth, "click")} deep` : "Do not follow links");
+  lines.push(`Stop after ${plural(o.maxPages, "URL")}`);
+  lines.push(...o.scope);
   if (o.checkLinks) lines.push(`Status-check up to ${LIMITS.linkChecks} uncrawled internal link and image targets`);
   lines.push(`Run ${o.categories.length} of ${RULE_CATEGORIES.length} check categories`);
   return lines;
@@ -289,8 +294,17 @@ function NewAuditForm({ requestedSite }: { requestedSite: string }) {
   const [single, setSingle] = useState("/");
   const [many, setMany] = useState("");
   const [sitemapUrl, setSitemapUrl] = useState("");
-  const [maxPages, setMaxPages] = useState(25);
-  const [maxDepth, setMaxDepth] = useState(1);
+  const [profile, setProfile] = useState<ProfileId>("standard");
+  const [budget, setBudget] = useState<number>(PROFILES.full.budget);
+  const [depth, setDepth] = useState<number | null>(PROFILES.custom.maxDepth);
+  const [include, setInclude] = useState("");
+  const [exclude, setExclude] = useState("");
+  const [subfolder, setSubfolder] = useState("");
+  const [authUser, setAuthUser] = useState("");
+  const [authPass, setAuthPass] = useState("");
+  const settings = useApi<SettingsData>(`${apiBase}/settings`);
+  const v2 = settings.data?.crawler.v2 ?? false;
+  const canAuth = settings.data?.crawler.basicAuth ?? false;
   const [categories, setCategories] = useState<RuleCategory[]>(RULE_CATEGORIES.map((c) => c.id));
   const [checkLinks, setCheckLinks] = useState(true);
   const [includeImportant, setIncludeImportant] = useState(true);
@@ -309,7 +323,24 @@ function NewAuditForm({ requestedSite }: { requestedSite: string }) {
   const toAbs = (u: string) => (u.trim().startsWith("/") && origin ? `${origin}${u.trim()}` : u.trim());
   const listUrls = many.split(/\s+/).map((u) => u.trim()).filter(Boolean);
 
-  const lines = preview({ mode, urlCount: listUrls.length, sitemapUrl, includeImportant, importantCount: site?.importantUrls ?? 0, maxDepth, maxPages, checkLinks, categories });
+  const p = PROFILES[profile];
+  const askedPages = p.budgetEditable ? budget : p.budget;
+  const askedDepth = p.depthEditable ? depth : p.maxDepth;
+  // Without crawler v2 the server clamps to the in-request engine's limits and notes it on the audit.
+  const maxPages = v2 ? askedPages : Math.min(askedPages, LIMITS.maxPages);
+  const maxDepth = v2 ? askedDepth : askedDepth === null ? LIMITS.maxDepth : Math.min(askedDepth, LIMITS.maxDepth);
+  const custom = profile === "custom" && v2;
+  const includes = ruleLines(include);
+  const excludes = ruleLines(exclude);
+  const scopeLines = custom
+    ? [
+        ...(subfolder.trim() ? [`Stay inside ${subfolder.trim()}`] : []),
+        ...(includes.length ? [`Keep only URLs matching ${plural(includes.length, "include rule")}`] : []),
+        ...(excludes.length ? [`Skip URLs matching ${plural(excludes.length, "exclude rule")}`] : []),
+        ...(canAuth && authUser.trim() ? [`Sign in with basic auth as ${authUser.trim()} (this site only)`] : []),
+      ]
+    : [];
+  const lines = preview({ mode, urlCount: listUrls.length, sitemapUrl, includeImportant, importantCount: site?.importantUrls ?? 0, maxDepth, maxPages, checkLinks, categories, scope: scopeLines });
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -321,7 +352,20 @@ function NewAuditForm({ requestedSite }: { requestedSite: string }) {
       const urls = mode === "single" ? [toAbs(single)] : mode === "list" ? listUrls.map(toAbs) : [];
       const r = await api<{ audit: AuditSummary; reused: boolean }>(`${apiBase}/audits`, {
         method: "POST",
-        body: { siteId, mode, urls, sitemapUrl: mode === "sitemap" && sitemapUrl.trim() ? toAbs(sitemapUrl) : undefined, maxPages, maxDepth, categories, checkLinks, includeImportant },
+        body: {
+          siteId,
+          mode,
+          urls,
+          sitemapUrl: mode === "sitemap" && sitemapUrl.trim() ? toAbs(sitemapUrl) : undefined,
+          profile,
+          ...(p.budgetEditable ? { budget } : {}),
+          ...(p.depthEditable ? { maxDepth: depth } : {}),
+          ...(custom && (subfolder.trim() || includes.length || excludes.length) ? { scope: { include: includes, exclude: excludes, subfolder: subfolder.trim() || undefined } } : {}),
+          ...(custom && canAuth && authUser.trim() ? { auth: { username: authUser.trim(), password: authPass } } : {}),
+          categories,
+          checkLinks,
+          includeImportant,
+        },
       });
       if (r.reused) toast({ tone: "info", title: "An audit is already running for this site", detail: "Showing its progress instead of starting a second one." });
       router.push(`${base}/audits/${r.audit.id}`);
@@ -382,17 +426,58 @@ function NewAuditForm({ requestedSite }: { requestedSite: string }) {
             </div>
           </Panel>
 
-          <Panel title="Limits">
+          <Panel title="Crawl profile" description={`${p.label}: ${describeLimits(askedPages, askedDepth)}. ${p.use}.`}>
             <div className="grid gap-5 sm:grid-cols-2">
-              <Field label="Page limit" htmlFor="na-max" hint={`1–${LIMITS.maxPages}. The crawl stops here and the audit is marked partial.`}>
-                <Input id="na-max" type="number" min={1} max={LIMITS.maxPages} value={maxPages} onChange={(e) => setMaxPages(Math.max(1, Math.min(LIMITS.maxPages, Number(e.target.value) || 1)))} />
-              </Field>
-              <Field label="Link depth" htmlFor="na-depth" hint="Orphan and inbound-link checks need depth ≥ 1.">
-                <Select id="na-depth" value={maxDepth} onChange={(e) => setMaxDepth(Number(e.target.value))}>
-                  <option value={0}>Only the given URLs</option>
-                  {[1, 2, 3].map((d) => <option key={d} value={d}>Follow links {d} click{d > 1 ? "s" : ""} deep</option>)}
-                </Select>
-              </Field>
+              <div className="flex flex-col gap-1.5 sm:col-span-2">
+                <Segmented label="Crawl profile" value={profile} onChange={setProfile} options={PROFILE_IDS.map((id) => ({ value: id, label: PROFILES[id].label }))} />
+              </div>
+              {settings.data && !v2 && (askedPages > maxPages || askedDepth !== maxDepth || profile === "custom") ? (
+                <div className="sm:col-span-2">
+                  <Notice tone="warn">
+                    Crawler v2 is off on this server, so audits run on the in-request engine: at most {describeLimits(LIMITS.maxPages, LIMITS.maxDepth)}. This audit will cover {describeLimits(maxPages, maxDepth)} and say so in its coverage notes.
+                    {profile === "custom" ? " Scope rules and basic auth need crawler v2." : ""}
+                  </Notice>
+                </div>
+              ) : null}
+              {p.budgetEditable ? (
+                <Field label="URL budget" htmlFor="na-budget" hint={`1–${MAX_BUDGET.toLocaleString("en")}. The crawl stops here and the audit is marked partial.`}>
+                  <Input id="na-budget" type="number" min={1} max={MAX_BUDGET} value={budget} onChange={(e) => setBudget(Math.max(1, Math.min(MAX_BUDGET, Math.floor(Number(e.target.value)) || 1)))} />
+                </Field>
+              ) : null}
+              {p.depthEditable ? (
+                <Field label="Link depth" htmlFor="na-depth" hint="Clicks from the start URLs. Orphan and inbound-link checks need depth ≥ 1.">
+                  <div className="flex items-center gap-3">
+                    <Input id="na-depth" type="number" min={0} max={MAX_DEPTH} value={depth ?? ""} disabled={depth === null} onChange={(e) => setDepth(Math.max(0, Math.min(MAX_DEPTH, Math.floor(Number(e.target.value)) || 0)))} />
+                    <Checkbox label="Unlimited" checked={depth === null} onChange={(v) => setDepth(v ? null : PROFILES.custom.maxDepth)} />
+                  </div>
+                </Field>
+              ) : null}
+              {custom ? (
+                <>
+                  <Field label="Subfolder" htmlFor="na-sub" hint="Optional. Only URLs under this path, e.g. /blog/.">
+                    <Input id="na-sub" value={subfolder} onChange={(e) => setSubfolder(e.target.value)} className="font-mono" placeholder="/blog/" />
+                  </Field>
+                  <div className="hidden sm:block" />
+                  <Field label="Include rules" htmlFor="na-inc" hint="Optional. One regular expression per line; a URL must match one. Case-sensitive, tested against the full URL.">
+                    <Textarea id="na-inc" value={include} onChange={(e) => setInclude(e.target.value)} className="min-h-20 font-mono text-[13px]" placeholder="/products/" />
+                  </Field>
+                  <Field label="Exclude rules" htmlFor="na-exc" hint="Optional. One regular expression per line; URLs matching any are skipped.">
+                    <Textarea id="na-exc" value={exclude} onChange={(e) => setExclude(e.target.value)} className="min-h-20 font-mono text-[13px]" placeholder={"\\?sort=\n/tag/"} />
+                  </Field>
+                  {canAuth ? (
+                    <>
+                      <Field label="Basic auth user" htmlFor="na-au" hint="Optional, for staging sites. Sent only to this site's own origin.">
+                        <Input id="na-au" value={authUser} onChange={(e) => setAuthUser(e.target.value)} autoComplete="off" />
+                      </Field>
+                      <Field label="Basic auth password" htmlFor="na-ap" hint="Stored encrypted with this crawl; never shown again.">
+                        <Input id="na-ap" type="password" value={authPass} onChange={(e) => setAuthPass(e.target.value)} autoComplete="new-password" />
+                      </Field>
+                    </>
+                  ) : (
+                    <p className="text-xs text-fg-3 sm:col-span-2">Basic auth for staging sites needs CRAWLER_SECRET_KEY set on the server.</p>
+                  )}
+                </>
+              ) : null}
               <Checkbox label="Check uncrawled link and image targets" hint={`Status checks of up to ${LIMITS.linkChecks} internal URLs found but not crawled.`} checked={checkLinks} onChange={setCheckLinks} />
               <Checkbox
                 label="Include important URLs"

@@ -38,7 +38,7 @@ export function coverageOf(audit: Pick<AuditRun, "config" | "robots" | "sitemap"
     responded,
     robots: audit.robots !== null && audit.robots.outcome !== "error",
     sitemap: audit.sitemap !== null && audit.sitemap.status !== null && audit.sitemap.status < 300,
-    graph: audit.config.maxDepth > 0 && !audit.coverage.some((c) => c.code === "graph_incomplete" || c.code === "page_limit" || c.code === "cancelled"),
+    graph: audit.config.maxDepth !== 0 && !audit.coverage.some((c) => c.code === "graph_incomplete" || c.code === "page_limit" || c.code === "cancelled"),
     ruleConfig: audit.ruleConfig,
     legacy: audit.coverage.some((c) => c.message === LEGACY_V1_NOTE),
   };

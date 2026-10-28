@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { CircleAlert, CircleCheck, CircleDashed, CircleX, Copy, ScanSearch, TriangleAlert } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { RULE_CATEGORIES, type AuditFinding, type CriterionResult, type Severity } from "@/lib/audit/types";
+import { describeLimits, PROFILES } from "@/lib/crawl/profiles";
 import type { Site } from "@/lib/model";
 import { SEVERITIES, type AuditSummary, type SeverityCounts } from "@/lib/views";
 import { api, ApiError } from "./lib/api";
@@ -74,8 +75,9 @@ const ADD_METHODS: { value: AddMethod; label: string }[] = [
   { value: "sitemap", label: "XML sitemap" },
   { value: "list", label: "URL list" },
 ];
-/** First audits stay small so they finish quickly; New audit offers the full set of options. */
-const FIRST_AUDIT = { single: { maxPages: 10, maxDepth: 1 }, sitemap: { maxPages: 25, maxDepth: 0 }, list: { maxPages: 25, maxDepth: 0 } } as const;
+/** First audits run the Quick profile so they finish quickly; New audit offers every profile. */
+const FIRST_AUDIT = PROFILES.quick;
+const FIRST_AUDIT_LIMITS = describeLimits(FIRST_AUDIT.budget, FIRST_AUDIT.maxDepth);
 
 /**
  * Adds a site and, optionally, starts its first audit straight away. "Add site" only stores the
@@ -140,7 +142,7 @@ export function AddSiteForm({ onCreated, autoFocus }: { onCreated?: (s: Site) =>
           mode: method,
           urls: method === "single" ? [url] : method === "list" ? listUrls : [],
           sitemapUrl: method === "sitemap" && sitemapUrl.trim() ? abs(sitemapUrl) : undefined,
-          ...FIRST_AUDIT[method],
+          profile: FIRST_AUDIT.id,
           categories: RULE_CATEGORIES.map((c) => c.id),
           checkLinks: false,
           includeImportant: false,
@@ -171,14 +173,14 @@ export function AddSiteForm({ onCreated, autoFocus }: { onCreated?: (s: Site) =>
         </div>
         {method === "single" ? (
           <p className="mt-3 text-[13px] text-fg-3">
-            Starts at the address above and follows links one click deep, up to {FIRST_AUDIT.single.maxPages} pages.
+            {FIRST_AUDIT.label} audit from the address above: {FIRST_AUDIT_LIMITS}.
           </p>
         ) : method === "sitemap" ? (
-          <Field className="mt-3" label="Sitemap URL" htmlFor="site-sitemap" hint={`Leave empty to use the robots.txt declaration, else /sitemap.xml. Up to ${FIRST_AUDIT.sitemap.maxPages} pages.`}>
+          <Field className="mt-3" label="Sitemap URL" htmlFor="site-sitemap" hint={`Leave empty to use the robots.txt declaration, else /sitemap.xml. ${FIRST_AUDIT.label} audit: ${FIRST_AUDIT_LIMITS}.`}>
             <Input id="site-sitemap" value={sitemapUrl} onChange={(e) => setSitemapUrl(e.target.value)} placeholder="/sitemap.xml" inputMode="url" />
           </Field>
         ) : (
-          <Field className="mt-3" label="URLs to audit" htmlFor="site-urls" error={error?.field === "urls" ? error.message : null} hint={`One per line. Paths like /pricing are resolved against the address. Up to ${FIRST_AUDIT.list.maxPages} pages.`}>
+          <Field className="mt-3" label="URLs to audit" htmlFor="site-urls" error={error?.field === "urls" ? error.message : null} hint={`One per line. Paths like /pricing are resolved against the address. ${FIRST_AUDIT.label} audit: ${FIRST_AUDIT_LIMITS}.`}>
             <Textarea id="site-urls" rows={3} value={urlList} onChange={(e) => setUrlList(e.target.value)} placeholder={"/\n/pricing\n/contact"} aria-invalid={error?.field === "urls"} />
           </Field>
         )}

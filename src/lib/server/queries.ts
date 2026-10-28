@@ -7,6 +7,8 @@ import { countIssueTypes, healthScore } from "../audit/health";
 import { buildIssues, finishedAudits, type AuditBundle, type Issue } from "../audit/issues";
 import type { AuditFinding } from "../audit/types";
 import { describeConfig, isStale } from "../crawl/engine";
+import { crawlerV2Enabled } from "../crawl/v2/audit-bridge";
+import { secretKey } from "../crawl/v2/secrets";
 import type { AuditRun, FixTask, PageSnapshot, Workspace } from "../model";
 import type { Store, StoreData } from "../store/store";
 import { WorkflowError } from "../workflow/deps";
@@ -392,7 +394,16 @@ export async function getSettings(ws: Workspace): Promise<SettingsData> {
     sampleState: ws === "sample" ? (data.sampleState ?? "current") : null,
     storage: { persistent: store.persistent, ephemeral: dataIsEphemeral() },
     liveScans: { enabled: liveScansEnabled(), allowedHosts: allowedHosts() },
+    crawler: { v2: crawlerV2Enabled(ws), basicAuth: crawlerV2Enabled(ws) && hasSecretKey() },
   };
+}
+
+function hasSecretKey(): boolean {
+  try {
+    return secretKey() !== null;
+  } catch {
+    return false; // set but malformed: basic auth would fail, so do not offer it
+  }
 }
 
 export type { AuditFinding };
