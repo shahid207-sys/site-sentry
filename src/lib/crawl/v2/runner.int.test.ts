@@ -572,4 +572,29 @@ describe("runCrawl crawl-level probes", () => {
     expect(probes.find((p) => p.kind === "llms_txt")).toMatchObject({ status: null, skipped: expect.stringMatching(/interrupted/) });
     expect(probes.find((p) => p.kind === "favicon")).toMatchObject({ url: `${o}/favicon.ico`, status: 404 });
   });
+
+  it("skips probes robots.txt disallows on the crawled host, and sends none at all when robots.txt is a full disallow", async () => {
+    const o = srv.origin;
+    srv.routes.set("/robots.txt", send("User-agent: *\nDisallow: /llms.txt\nDisallow: /assets/\n", "text/plain"));
+    srv.routes.set("/", send(`<!doctype html><html><head><title>t</title><meta property="og:image" content="/assets/og.png"></head><body></body></html>`));
+    srv.routes.set("/llms.txt", send("# Site\n", "text/plain"));
+    srv.routes.set("/assets/og.png", sendBytes(png(1200, 630), "image/png"));
+    const c = await newCrawl(db, { siteOrigin: o, status: "queued" });
+    expect(await runCrawl(opts(), c)).toBe("completed");
+    const probes = ((await db.execute(sql`select probes from crawls where id = ${c}::uuid`)).rows[0] as { probes: ProbeRecord[] }).probes;
+    const skipped = (kind: string) => probes.find((p) => p.kind === kind)?.skipped ?? null;
+    expect(skipped("llms_txt")).toMatch(/^blocked by robots\.txt/);
+    expect(skipped("og_image")).toMatch(/^blocked by robots\.txt/);
+    expect(skipped("favicon")).toBeNull(); // /favicon.ico is allowed: probed (404 here)
+    expect(srv.hits.has("/llms.txt")).toBe(false);
+    expect(srv.hits.has("/assets/og.png")).toBe(false);
+
+    srv.hits.clear();
+    srv.routes.set("/robots.txt", send("down", "text/plain", 503));
+    const c2 = await newCrawl(db, { siteOrigin: o, status: "queued" });
+    expect(await runCrawl(opts(), c2)).toBe("completed");
+    const probes2 = ((await db.execute(sql`select probes from crawls where id = ${c2}::uuid`)).rows[0] as { probes: ProbeRecord[] }).probes;
+    expect(probes2.filter((p) => new URL(p.url).host === new URL(o).host).every((p) => p.skipped?.startsWith("blocked by robots.txt"))).toBe(true);
+    for (const path of ["/", "/favicon.ico", "/llms.txt", "/assets/og.png"]) expect(srv.hits.has(path), path).toBe(false); // sitemap discovery still runs
+  });
 });

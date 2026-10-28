@@ -614,6 +614,12 @@ class Run {
       origin: this.crawl.site_origin,
       existing: this.crawl.probes ?? [],
       request: (url, o) => this.request(url, o),
+      robotsBlocked: (url) => {
+        if (new URL(url).host !== this.host) return null;
+        if (this.robotsRecord?.outcome === "disallow_all") return this.robotsRecord.reason ?? "robots.txt disallows everything";
+        const d = this.robots ? isAllowed(this.robots, ROBOTS_TOKEN, url) : null;
+        return d && !d.allowed ? `${d.matchedRule ?? "rule"} applies to ${ROBOTS_TOKEN}` : null;
+      },
       signal: this.signal,
       log: this.log,
     });

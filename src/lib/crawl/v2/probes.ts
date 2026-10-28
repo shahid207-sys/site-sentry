@@ -1,7 +1,8 @@
 // Crawl-level probes (docs/PHASE-2.md "Probes"): a fixed, small set of requests made once per crawl, after the last
 // URL and before the crawl is marked completed, so site rules can judge what no crawled page shows. Every probe
 // goes through the crawl's fetcher (SSRF guards) inside its host throttle, is stored in crawls.probes, and is not
-// charged to the URL budget. A probe is recorded as started before its request; a resumed crawl never re-sends it.
+// charged to the URL budget. Probes of the crawled host obey its robots.txt (a disallowed one is recorded as
+// skipped). A probe is recorded as started before its request; a resumed crawl never re-sends it.
 import { sql } from "drizzle-orm";
 import type { Db } from "../../db/client";
 import { SafeFetchError, type FetchOptions, type FetchResult } from "../../fetch/safe-fetch";
@@ -18,6 +19,8 @@ export interface ProbeContext {
   /** Probes already in crawls.probes (a resumed crawl). */
   existing: ProbeRecord[];
   request(url: string, o: Omit<FetchOptions, "signal" | "timeoutMs" | "userAgent">): Promise<FetchResult>;
+  /** Why robots.txt forbids this URL on the crawled host, or null (allowed, or another host). */
+  robotsBlocked(url: string): string | null;
   /** Aborted when the crawl is stopping; remaining probes are left for the resumed run. */
   signal: AbortSignal;
   log(event: string, data?: Record<string, unknown>): void;
@@ -102,6 +105,13 @@ export async function runProbes(ctx: ProbeContext): Promise<boolean> {
     if (ctx.signal.aborted) {
       await save(ctx, list);
       return false;
+    }
+    const blocked = ctx.robotsBlocked(p.url);
+    if (blocked) {
+      // The crawl obeys robots.txt for probes too; a rule reading a skipped probe stays silent.
+      byKey.set(key(p), list.length);
+      list.push({ kind: p.kind, url: p.url, started: true, status: null, skipped: `blocked by robots.txt: ${blocked}` });
+      continue;
     }
     const rec: ProbeRecord = { kind: p.kind, url: p.url, started: true, status: null };
     byKey.set(key(p), list.length);
