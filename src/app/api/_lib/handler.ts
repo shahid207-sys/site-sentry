@@ -1,4 +1,5 @@
 import "server-only";
+import { isIP } from "node:net";
 import { NextResponse, type NextRequest } from "next/server";
 import { ZodError, type ZodType } from "zod";
 import type { Workspace } from "@/lib/model";
@@ -80,13 +81,30 @@ export async function body<T>(req: NextRequest, schema: ZodType<T>): Promise<T> 
 const g = globalThis as unknown as { __ssRate?: Map<string, number[]> };
 const buckets = (g.__ssRate ??= new Map<string, number[]>());
 
-/** The client's IP as the proxy reports it: first X-Forwarded-For entry, else X-Real-IP. Spoofable without a trusted proxy. */
-export function clientIp(req: NextRequest): string {
-  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip") || "local";
+/** The header the trusted reverse proxy sets to the client's address (TRUSTED_PROXY_HEADER), lower-cased, or null. */
+export function trustedProxyHeader(): string | null {
+  return process.env.TRUSTED_PROXY_HEADER?.trim().toLowerCase() || null;
 }
 
+/**
+ * The client's IP, read only from TRUSTED_PROXY_HEADER. Next route handlers cannot see the socket address, so without
+ * that setting every forwarding header is ignored (a client can send any of them) and the address is unknown: null.
+ * A list such as X-Forwarded-For gives the rightmost entry, the one the trusted proxy appended. Null also when the
+ * header is missing or not an IP address.
+ */
+export function clientIp(req: NextRequest): string | null {
+  const header = trustedProxyHeader();
+  if (!header) return null;
+  const ip = req.headers.get(header)?.split(",").at(-1)?.trim() ?? "";
+  return isIP(ip) ? ip : null;
+}
+
+/**
+ * In-process limiter. Keyed per client IP when TRUSTED_PROXY_HEADER gives one; otherwise all clients share one
+ * bucket per key (the keys are already per workspace), which is stricter, never looser.
+ */
 export function rateLimit(req: NextRequest, key: string, limit: number, windowMs: number, message?: (waitS: number) => string) {
-  const k = `${key}:${clientIp(req)}`;
+  const k = `${key}:${clientIp(req) ?? "shared"}`;
   const now = Date.now();
   const hits = (buckets.get(k) ?? []).filter((t) => now - t < windowMs);
   if (hits.length >= limit) {

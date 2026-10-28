@@ -33,7 +33,11 @@ type Routes = {
 };
 let r: Routes;
 
+/** A random address in the IPv6 documentation range, so each request gets its own rate-limit window. */
+const randomIp = () => `2001:db8:${randomBytes(12).toString("hex").match(/.{4}/g)!.join(":")}`;
+
 beforeAll(async () => {
+  process.env.TRUSTED_PROXY_HEADER = "x-forwarded-for";
   dataDir = await mkdtemp(path.join(tmpdir(), "ss-v2-routes-"));
   process.env.CRAWLER_V2 = "true";
   process.env.SITE_SENTRY_DATA_DIR = dataDir;
@@ -134,7 +138,7 @@ describe("audit API with CRAWLER_V2=true", () => {
 describe("audit API crawl profiles", () => {
   // A fresh client IP per call: this describe creates more audits than the general 10-a-minute limit allows one IP.
   const create = (body: Record<string, unknown>) =>
-    r.audits.POST(post("/api/live/audits", { ...base, urls: [`${origin}/`], ...body }, { "x-forwarded-for": randomUUID() }), ctx({}));
+    r.audits.POST(post("/api/live/audits", { ...base, urls: [`${origin}/`], ...body }, { "x-forwarded-for": randomIp() }), ctx({}));
 
   it("puts the profile's budget and depth on the crawl, and rejects values a fixed profile does not take", async () => {
     const { audit } = await call<{ audit: AuditSummary }>(create({ siteId: "s2", profile: "standard" }));
@@ -180,7 +184,7 @@ describe("audit API crawl profiles", () => {
   });
 
   it("the homepage endpoint runs Quick only and allows 5 audits an hour per IP", async () => {
-    const ip = `198.51.100.${randomBytes(1)[0]}-${randomUUID()}`; // unique per run: the window lives in Redis
+    const ip = randomIp(); // unique per run: the window lives in Redis
     const quick = () => r.quick.POST(post("/api/live/audits/quick", { siteId: "s5", url: `${origin}/` }, { "x-forwarded-for": ip }), ctx({}));
     const first = await call<{ audit: AuditSummary }>(quick());
     expect(first.audit.config).toMatchObject({ profile: "quick", maxPages: 25, maxDepth: 3, mode: "single" });
@@ -189,6 +193,8 @@ describe("audit API crawl profiles", () => {
     const sixth = await quick();
     expect(sixth.status).toBe(429);
     expect((await sixth.json()).error.message).toMatch(/limited to 5 an hour from one address\. Try again in \d+ min\./);
+    const other = await r.quick.POST(post("/api/live/audits/quick", { siteId: "s5", url: `${origin}/` }, { "x-forwarded-for": `${ip}, 2001:db8::1` }), ctx({}));
+    expect(other.status).not.toBe(429); // the rightmost entry is the client; a different one has its own window
   });
 
   it("with CRAWLER_V2 off, clamps a profile to the in-request engine and says so on the audit", async () => {

@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { Redis } from "ioredis";
 import type { NextRequest } from "next/server";
 import { redisConnection } from "@/lib/crawl/v2/queue";
-import { clientIp, HttpError, rateLimit } from "./handler";
+import { clientIp, HttpError, rateLimit, trustedProxyHeader } from "./handler";
 
 // Per-IP limits that hold across web processes: a sliding window in a Redis sorted set (one member per allowed
 // request, scored by time). When Redis cannot be reached, the in-process limiter in handler.ts takes over and the
@@ -81,9 +81,23 @@ export interface IpLimit {
   message: (waitS: number) => string;
 }
 
+/**
+ * Count this request against the client's IP. The IP comes only from TRUSTED_PROXY_HEADER (see clientIp). Without it,
+ * production refuses with 503: a per-IP limit that any client can dodge by sending a header is not a limit. Outside
+ * production every client shares one bucket.
+ */
 export async function limitByIp(req: NextRequest, l: IpLimit, deps: { redis?: Redis; now?: number; log?: (msg: string) => void } = {}): Promise<void> {
+  const ip = clientIp(req) ?? (process.env.NODE_ENV === "production" ? null : "shared");
+  if (!ip) {
+    throw new HttpError(
+      503,
+      "PROXY_NOT_CONFIGURED",
+      trustedProxyHeader()
+        ? `The client address is unavailable: the trusted proxy header (${trustedProxyHeader()}) is missing or not an IP address.`
+        : "The client address is unavailable: proxy header not configured (set TRUSTED_PROXY_HEADER).",
+    );
+  }
   const redis = deps.redis ?? limiterRedis();
-  const ip = clientIp(req);
   let result: WindowResult;
   try {
     await connected(redis);

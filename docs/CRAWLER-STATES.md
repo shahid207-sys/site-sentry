@@ -224,6 +224,15 @@ form and the methodology page.
 - The homepage form (`POST /api/live/audits/quick`) always runs Quick and allows 5 audits per client IP per hour. The
   window is a Redis sorted set (`rl:hero-audit:<ws>:<ip>`); denied attempts are not counted. If Redis is unreachable the
   in-process limiter takes over and the fallback is logged.
+- **Client IP.** Next route handlers cannot see the socket address (`request.ip` was removed in Next 15, and Next copies
+  the socket address into `X-Forwarded-For` only when the client did not send one). So the IP is read only from the
+  header named in `TRUSTED_PROXY_HEADER`, which the reverse proxy in front of the app must set or overwrite. For a list
+  header such as `X-Forwarded-For`, the rightmost entry is used: the one the proxy appended. The value must parse as an
+  IP. With the setting unset, every forwarding header is ignored:
+  - production: the homepage endpoint refuses with 503 `PROXY_NOT_CONFIGURED` ("proxy header not configured");
+  - other environments: all clients share one bucket.
+  The other in-process limits (`rateLimit`, already per workspace) use the same IP, or one shared bucket per key when
+  there is none. That is stricter, never looser.
 - With `CRAWLER_V2=false`, the in-request engine cannot run the larger profiles. Budget and depth are clamped to
   100 URLs and 3 clicks and the audit gets an `engine_limit` coverage note naming both. It ends `partial` only if the
   clamp cut something (a `page_limit` or `depth_limit` note also fired); a site covered completely stays `completed`. Scope
