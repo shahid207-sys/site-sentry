@@ -1,6 +1,7 @@
 import type { LookupAddress, LookupOptions } from "node:dns";
 import { lookup as dnsLookupAsync } from "node:dns/promises";
 import { isIP } from "node:net";
+import { gunzipSync } from "node:zlib";
 import type { ReadableStream } from "node:stream/web";
 import { Agent, fetch } from "undici";
 import { isBlockedIp } from "./ip-guard";
@@ -9,6 +10,8 @@ import type { RedirectHop } from "../audit/types";
 export const MAX_REDIRECTS = 5;
 export const MAX_BYTES = 2 * 1024 * 1024; // 2 MB of HTML is plenty for head-level checks
 export const MAX_XML_BYTES = 5 * 1024 * 1024; // sitemaps can be larger
+/** sitemaps.org limit per sitemap file, compressed or not. */
+export const MAX_SITEMAP_BYTES = 50 * 1024 * 1024;
 export const MAX_TEXT_BYTES = 512 * 1024; // robots.txt (Google reads the first 500 KiB)
 export const TIMEOUT_MS = 10_000;
 // Spec "Crawler engine → Security": http(s) on 80, 443, 8080 and 8443 unless an admin overrides the policy.
@@ -172,7 +175,7 @@ export function pinnedAgent(hostname: string, ip: string): Agent {
  * - robots: robots.txt (text/plain; anything else is read as text too, as crawlers do)
  * - status: link/image checks — only the status and redirect chain matter, the body is never read
  */
-export type FetchAccept = "html" | "xml" | "robots" | "status";
+export type FetchAccept = "html" | "xml" | "sitemap" | "robots" | "status";
 
 export interface FetchOptions {
   accept: FetchAccept;
@@ -218,15 +221,18 @@ const ACCEPT_HEADER: Record<FetchAccept, string> = {
   html: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1",
   xml: "application/xml,text/xml;q=0.9,*/*;q=0.1",
   robots: "text/plain,*/*;q=0.1",
+  sitemap: "application/xml,text/xml;q=0.9,application/gzip;q=0.8,*/*;q=0.1",
   status: "*/*",
 };
 const CONTENT_TYPES: Record<FetchAccept, RegExp> = {
   html: /text\/html|application\/xhtml\+xml/i,
   xml: /[/+]xml\b/i,
   robots: /./, // robots.txt is read as text whatever it claims to be
+  // Gzipped sitemaps are often served as application/gzip, x-gzip or octet-stream.
+  sitemap: /[/+]xml\b|gzip|octet-stream/i,
   status: /./,
 };
-const BYTE_CAP: Record<FetchAccept, number> = { html: MAX_BYTES, xml: MAX_XML_BYTES, robots: MAX_TEXT_BYTES, status: 0 };
+const BYTE_CAP: Record<FetchAccept, number> = { html: MAX_BYTES, xml: MAX_XML_BYTES, sitemap: MAX_SITEMAP_BYTES, robots: MAX_TEXT_BYTES, status: 0 };
 
 /**
  * Build a fetcher with SSRF guards: every hop (the first request and each redirect) is re-validated, resolved once,
@@ -311,6 +317,11 @@ async function fetchWithPolicy(input: string, opts: FetchOptions, policy: FetchP
         return { ...base, body: "", bytes: 0, truncated: false };
       }
       const { bytes, truncated, buffer } = await readCapped(res.body, BYTE_CAP[opts.accept]);
+      if (opts.accept === "sitemap" && isGzip(buffer)) {
+        // A .gz sitemap without Content-Encoding arrives compressed; undici only decodes Content-Encoding.
+        const unzipped = gunzipCapped(buffer, MAX_SITEMAP_BYTES);
+        return { ...base, body: decode(unzipped.buffer, ""), bytes, truncated: truncated || unzipped.truncated };
+      }
       return { ...base, body: decode(buffer, contentType), bytes, truncated };
     }
   } catch (e) {
@@ -363,6 +374,24 @@ export async function readCapped(body: ReadableStream<Uint8Array> | null, cap: n
     offset += c.byteLength;
   }
   return { bytes, truncated, buffer };
+}
+
+const isGzip = (b: Uint8Array) => b.length >= 2 && b[0] === 0x1f && b[1] === 0x8b;
+
+/**
+ * Gunzip with an output cap. A stream cut off mid-way (e.g. by the download cap) yields its readable prefix, flagged
+ * as truncated. Output over `cap` (beyond the sitemaps.org 50 MB limit) or corrupt data yields an empty, truncated body.
+ */
+export function gunzipCapped(buffer: Uint8Array, cap: number): { buffer: Uint8Array; truncated: boolean } {
+  try {
+    return { buffer: gunzipSync(buffer, { maxOutputLength: cap }), truncated: false };
+  } catch {
+    try {
+      return { buffer: gunzipSync(buffer, { maxOutputLength: cap, finishFlush: 2 /* Z_SYNC_FLUSH */ }), truncated: true };
+    } catch {
+      return { buffer: new Uint8Array(), truncated: true };
+    }
+  }
 }
 
 function decode(buffer: Uint8Array, contentType: string): string {

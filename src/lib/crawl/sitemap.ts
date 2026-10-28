@@ -1,13 +1,15 @@
 // XML sitemap parsing with a minimal well-formedness check. Pure.
 import * as cheerio from "cheerio";
 
+/** Legacy engine default. sitemaps.org allows 50,000 URLs per file (SITEMAP_PROTOCOL_MAX_URLS); crawler v2 uses that. */
 export const MAX_SITEMAP_URLS = 5000;
+export const SITEMAP_PROTOCOL_MAX_URLS = 50_000;
 
 export interface ParsedSitemap {
   kind: "urlset" | "sitemapindex" | "unknown";
   /** Page URLs (urlset) or child sitemap URLs (sitemapindex), as written. */
   locs: string[];
-  /** URLs past MAX_SITEMAP_URLS were not read. */
+  /** URLs past `maxUrls` were not read. */
   truncated: boolean;
   /** Well-formedness or structure errors; empty when the document looks valid. */
   errors: string[];
@@ -52,7 +54,7 @@ export function checkWellFormed(xml: string): string[] {
   return errors;
 }
 
-export function parseSitemap(xml: string): ParsedSitemap {
+export function parseSitemap(xml: string, maxUrls = MAX_SITEMAP_URLS): ParsedSitemap {
   const errors = checkWellFormed(xml);
   const $ = cheerio.load(xml, { xml: true });
   const root = $.root().children().first();
@@ -74,7 +76,7 @@ export function parseSitemap(xml: string): ParsedSitemap {
       .text()
       .trim();
     if (!loc) return;
-    if (locs.length >= MAX_SITEMAP_URLS) {
+    if (locs.length >= maxUrls) {
       truncated = true;
       return false;
     }
