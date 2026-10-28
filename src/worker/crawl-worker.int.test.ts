@@ -39,7 +39,9 @@ function startWorker(): { child: ChildProcess; output: () => string; exited: Pro
       CRAWL_QUEUE_NAME: queueName,
       CRAWLER_LOCAL_HOSTS: "kill.test=127.0.0.1",
       CRAWLER_LOCAL_PORTS: String(srv.port),
-      CRAWLER_CONCURRENCY: String(CONCURRENCY),
+      CRAWLER_HOST_CONCURRENCY: String(CONCURRENCY),
+      // Well above the 5 req/s default, so requests overlap and the kill lands while some are in flight.
+      CRAWLER_HOST_RATE: "1000",
       CRAWL_JOB_LOCK_MS: "2000",
     },
     stdio: ["ignore", "pipe", "pipe"],

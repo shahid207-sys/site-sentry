@@ -3,7 +3,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { newCrawl, testDb } from "@/test/db";
 import { send, startLocalServer, type LocalServer } from "@/test/local-server";
 import { activeCount, stateCounts } from "./frontier";
-import { runCrawl, type RunnerOptions } from "./runner";
+import { HostThrottle } from "./politeness";
+import { MAX_THROTTLE_RETRIES, runCrawl, V2_USER_AGENT, type RunnerOptions } from "./runner";
 
 const db = testDb();
 afterAll(() => db.$client.end());
@@ -20,6 +21,7 @@ const page = (links: string[], title = "page") => send(`<!doctype html><html><he
 const urlset = (urls: string[]) => `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map((u) => `<url><loc>${u}</loc></url>`).join("")}</urlset>`;
 
 const opts = (over: Partial<RunnerOptions> = {}): RunnerOptions => ({ db, fetch: srv.fetch, owner: "test", leaseMs: 30_000, ...over });
+const oneAtATime = () => new HostThrottle({ maxConcurrency: 1, ratePerSecond: 1000 });
 
 async function urlStates(crawlId: string) {
   const r = await db.execute(sql`select normalised_url as url, state, reason, depth, discovered_via from crawl_urls where crawl_id = ${crawlId}::uuid order by id`);
@@ -116,7 +118,7 @@ describe("runCrawl", () => {
     srv.routes.set("/a", (req, res) => {
       void db.execute(sql`update crawls set status = 'paused' where id = ${c}::uuid`).then(() => page(["/a/b"])(req, res));
     });
-    expect(await runCrawl(opts({ concurrency: 1 }), c)).toBe("paused");
+    expect(await runCrawl(opts({ throttle: oneAtATime() }), c)).toBe("paused");
     const mid = await activeCount(db, c);
     expect(mid.queued + mid.fetching).toBe(0);
     expect(mid.discovered).toBeGreaterThan(0);
@@ -135,7 +137,7 @@ describe("runCrawl", () => {
     srv.routes.set("/a", (req, res) => {
       void db.execute(sql`update crawls set status = 'cancelling' where id = ${c}::uuid`).then(() => page(["/a/b"])(req, res));
     });
-    expect(await runCrawl(opts({ concurrency: 1 }), c)).toBe("cancelled");
+    expect(await runCrawl(opts({ throttle: oneAtATime() }), c)).toBe("cancelled");
     const counts = await stateCounts(db, c);
     expect(counts.cancelled).toBeGreaterThan(0);
     expect(await activeCount(db, c)).toEqual({ discovered: 0, queued: 0, fetching: 0 });
@@ -149,6 +151,117 @@ describe("runCrawl", () => {
     const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued", maxDepth: 10 });
     const outcomes = await Promise.all([runCrawl(opts(), c), runCrawl(opts(), c)]);
     expect(outcomes.sort()).toEqual(["completed", "locked"]);
+    expectNoDuplicateFetches();
+  });
+});
+
+describe("runCrawl politeness", () => {
+  async function urlRow(crawlId: string, path: string) {
+    const r = await db.execute(sql`select state, reason, status_code, attempts from crawl_urls where crawl_id = ${crawlId}::uuid and normalised_url = ${srv.origin + path}`);
+    return r.rows[0] as { state: string; reason: string; status_code: number; attempts: number };
+  }
+
+  it("keeps at most 3 requests in flight per host and sends the spec user-agent", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const agents = new Set<string>();
+    const kids = Array.from({ length: 24 }, (_, i) => `/k/${i}`);
+    srv.routes.set("/robots.txt", send("User-agent: *\nDisallow:\n", "text/plain"));
+    srv.routes.set("/", page(kids));
+    for (const k of kids) {
+      srv.routes.set(k, (req, res) => {
+        agents.add(String(req.headers["user-agent"]));
+        peak = Math.max(peak, ++inFlight);
+        setTimeout(() => {
+          inFlight--;
+          page([])(req, res);
+        }, 40);
+      });
+    }
+    const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
+    // A fast rate so the in-flight cap, not the 5 req/s spacing, is what limits this crawl.
+    expect(await runCrawl(opts({ throttle: new HostThrottle({ ratePerSecond: 1000 }) }), c)).toBe("completed");
+    expect(peak).toBe(3);
+    expect([...agents]).toEqual([V2_USER_AGENT]);
+    expectNoDuplicateFetches();
+  });
+
+  it("spaces requests by 5 req/s by default", async () => {
+    const starts: number[] = [];
+    const kids = Array.from({ length: 5 }, (_, i) => `/k/${i}`);
+    srv.routes.set("/", page(kids));
+    for (const k of kids) srv.routes.set(k, (req, res) => (starts.push(Date.now()), page([])(req, res)));
+    const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
+    expect(await runCrawl(opts(), c)).toBe("completed");
+    const gaps = starts.slice(1).map((t, i) => t - starts[i]);
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(190); // 200 ms, less timer slack
+  });
+
+  it("honours Crawl-delay for SiteSentryBot", async () => {
+    const starts: number[] = [];
+    srv.routes.set("/robots.txt", send("User-agent: SiteSentryBot\nCrawl-delay: 0.6\n\nUser-agent: *\nCrawl-delay: 0\n", "text/plain"));
+    srv.routes.set("/", (req, res) => (starts.push(Date.now()), page(["/a", "/b"])(req, res)));
+    for (const k of ["/a", "/b"]) srv.routes.set(k, (req, res) => (starts.push(Date.now()), page([])(req, res)));
+    const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
+    const throttle = new HostThrottle({ ratePerSecond: 1000 });
+    expect(await runCrawl(opts({ throttle }), c)).toBe("completed");
+    expect(throttle.intervalMs).toBe(600);
+    const gaps = starts.slice(1).map((t, i) => t - starts[i]);
+    expect(gaps).toHaveLength(2);
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(590);
+  });
+
+  it("retries a 429 after its Retry-After, slows the host down, and counts both requests", async () => {
+    const starts: number[] = [];
+    srv.routes.set("/", page(["/busy"]));
+    srv.routes.set("/busy", (req, res) => {
+      starts.push(Date.now());
+      if (starts.length === 1) return void res.writeHead(429, { "content-type": "text/html", "retry-after": "1" }).end("slow down");
+      page([])(req, res);
+    });
+    const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
+    const throttle = new HostThrottle({ ratePerSecond: 1000, baseBackoffMs: 100 });
+    expect(await runCrawl(opts({ throttle }), c)).toBe("completed");
+    expect(await urlRow(c, "/busy")).toMatchObject({ state: "fetched", status_code: 200, reason: "HTTP 200", attempts: 2 });
+    expect(starts[1] - starts[0]).toBeGreaterThanOrEqual(990); // Retry-After: 1, longer than the 100 ms backoff
+    expect(throttle.events).toMatchObject([{ reason: "429", concurrency: 1, pausedForMs: 1000 }]);
+  });
+
+  it(`gives up after ${MAX_THROTTLE_RETRIES} retries and files the 429 as the result`, async () => {
+    srv.routes.set("/", page(["/busy"]));
+    srv.routes.set("/busy", send("busy", "text/html", 429, { "retry-after": "0" }));
+    const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
+    const throttle = new HostThrottle({ ratePerSecond: 1000, baseBackoffMs: 20 });
+    expect(await runCrawl(opts({ throttle }), c)).toBe("completed");
+    expect(await urlRow(c, "/busy")).toMatchObject({ state: "fetched", status_code: 429, reason: "HTTP 429 after 3 requests", attempts: 3 });
+    expect(srv.hits.get("/busy")).toBe(MAX_THROTTLE_RETRIES + 1);
+    expect(throttle.events.map((e) => e.pausedForMs)).toEqual([20, 40, 80]); // exponential
+  });
+
+  it("does not retry when Retry-After asks for longer than the cap", async () => {
+    srv.routes.set("/", page(["/down"]));
+    srv.routes.set("/down", send("maintenance", "text/html", 503, { "retry-after": "3600" }));
+    const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
+    // The host pause is capped at maxBackoffMs (60 s by default; 50 ms here to keep the test fast).
+    const throttle = new HostThrottle({ ratePerSecond: 1000, baseBackoffMs: 20, maxBackoffMs: 50 });
+    expect(await runCrawl(opts({ throttle }), c)).toBe("completed");
+    const row = await urlRow(c, "/down");
+    expect(row).toMatchObject({ state: "fetched", status_code: 503, attempts: 1 });
+    expect(row.reason).toBe("HTTP 503. Retry-After asks for 3600 s, longer than the 60 s this crawl waits; not retried.");
+    expect(srv.hits.get("/down")).toBe(1);
+    expect(throttle.events).toMatchObject([{ reason: "503", pausedForMs: 50 }]);
+  });
+
+  it("halves concurrency when p95 latency goes over the threshold", async () => {
+    const kids = Array.from({ length: 12 }, (_, i) => `/k/${i}`);
+    srv.routes.set("/", page(kids));
+    for (const k of kids) srv.routes.set(k, (req, res) => void setTimeout(() => page([])(req, res), 60));
+    const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued" });
+    // Thresholds scaled down (3 s → 30 ms, window 20 → 4) so the test runs in milliseconds, not minutes.
+    const throttle = new HostThrottle({ ratePerSecond: 1000, slowP95Ms: 30, window: 4, baseBackoffMs: 10 });
+    expect(await runCrawl(opts({ throttle }), c)).toBe("completed");
+    expect(throttle.events.map((e) => e.reason)).toContain("slow_p95");
+    expect(throttle.events[0].concurrency).toBe(1);
     expectNoDuplicateFetches();
   });
 });

@@ -14,6 +14,13 @@ export const MAX_XML_BYTES = 5 * 1024 * 1024; // sitemaps can be larger
 export const MAX_SITEMAP_BYTES = 50 * 1024 * 1024;
 export const MAX_TEXT_BYTES = 512 * 1024; // robots.txt (Google reads the first 500 KiB)
 export const TIMEOUT_MS = 10_000;
+/** Spec "Crawler engine": 10 s to open a connection, for every caller. */
+export const CONNECT_TIMEOUT_MS = 10_000;
+/**
+ * Backstop for waiting on headers or body. The real limit is each request's total timeout (`timeoutMs`, enforced with
+ * an AbortSignal: 10 s legacy, 30 s crawler v2), so this only has to be longer than any of them.
+ */
+const SOCKET_IDLE_BACKSTOP_MS = 60_000;
 // Spec "Crawler engine → Security": http(s) on 80, 443, 8080 and 8443 unless an admin overrides the policy.
 const ALLOWED_PORTS = new Set(["", "80", "443", "8080", "8443"]);
 export const USER_AGENT = "SiteSentryBot/0.2 (+technical SEO audit; respects robots.txt)";
@@ -26,6 +33,7 @@ export type SafeFetchErrorCode =
   | "TOO_MANY_REDIRECTS"
   | "HTTP_ERROR"
   | "NOT_HTML"
+  | "TLS"
   | "NETWORK";
 
 export class SafeFetchError extends Error {
@@ -158,7 +166,12 @@ export function pinnedAgent(hostname: string, ip: string): Agent {
     pinnedAgents.set(key, a);
     return a;
   }
-  a = new Agent({ connect: { lookup: pinnedLookup(ip), timeout: TIMEOUT_MS }, headersTimeout: TIMEOUT_MS, bodyTimeout: TIMEOUT_MS, connections: 8 });
+  a = new Agent({
+    connect: { lookup: pinnedLookup(ip), timeout: CONNECT_TIMEOUT_MS },
+    headersTimeout: SOCKET_IDLE_BACKSTOP_MS,
+    bodyTimeout: SOCKET_IDLE_BACKSTOP_MS,
+    connections: 8,
+  });
   pinnedAgents.set(key, a);
   if (pinnedAgents.size > MAX_PINNED_AGENTS) {
     const [oldKey, old] = pinnedAgents.entries().next().value!;
@@ -218,6 +231,24 @@ export interface FetchResult {
  * Non-2xx responses are results, not errors. Throws SafeFetchError for blocked, unreachable or timed-out URLs.
  */
 export type Fetcher = (url: string, opts: FetchOptions) => Promise<FetchResult>;
+
+const TIMEOUT_ERROR_CODES = new Set(["UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT"]);
+// Node's TLS and OpenSSL certificate errors (e.g. DEPTH_ZERO_SELF_SIGNED_CERT, CERT_HAS_EXPIRED, ERR_TLS_CERT_ALTNAME_INVALID).
+const TLS_ERROR_CODE = /^(ERR_TLS_|ERR_SSL_|CERT_|UNABLE_TO_|DEPTH_ZERO_SELF_SIGNED_CERT$|SELF_SIGNED_CERT_IN_CHAIN$|HOSTNAME_MISMATCH$)/;
+
+/** A transport failure worth its own error code, from the `code` of the error or any of its causes. */
+export function classifyTransportError(e: unknown): { code: "TLS" | "TIMEOUT"; detail: string } | null {
+  let cur: unknown = e;
+  for (let i = 0; i < 5 && cur; i++) {
+    const code = (cur as { code?: unknown }).code;
+    if (typeof code === "string") {
+      if (TLS_ERROR_CODE.test(code)) return { code: "TLS", detail: code };
+      if (TIMEOUT_ERROR_CODES.has(code)) return { code: "TIMEOUT", detail: code };
+    }
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return null;
+}
 
 function findSafeFetchError(e: unknown): SafeFetchError | null {
   let cur: unknown = e;
@@ -361,7 +392,10 @@ async function fetchWithPolicy(input: string, opts: FetchOptions, policy: FetchP
   } catch (e) {
     const known = findSafeFetchError(e);
     if (known) throw known;
-    if (timeout.aborted || (e as Error)?.name === "TimeoutError") {
+    const transport = classifyTransportError(e);
+    if (transport?.code === "TLS") throw new SafeFetchError("TLS", `TLS connection failed (${transport.detail}).`);
+    if (transport?.detail === "UND_ERR_CONNECT_TIMEOUT") throw new SafeFetchError("TIMEOUT", `Could not connect within ${CONNECT_TIMEOUT_MS / 1000}s.`);
+    if (transport || timeout.aborted || (e as Error)?.name === "TimeoutError") {
       throw new SafeFetchError("TIMEOUT", `No response within ${timeoutMs / 1000}s.`);
     }
     if ((e as Error)?.name === "AbortError") throw new SafeFetchError("NETWORK", "The request was cancelled.");
@@ -371,7 +405,7 @@ async function fetchWithPolicy(input: string, opts: FetchOptions, policy: FetchP
 
 export const liveFetcher: Fetcher = safeFetch;
 
-const RULE_HEADERS = ["x-robots-tag", "link", "content-type", "content-language"];
+const RULE_HEADERS = ["x-robots-tag", "link", "content-type", "content-language", "retry-after"];
 
 function pickHeaders(h: { get(name: string): string | null }): Record<string, string> {
   const out: Record<string, string> = {};

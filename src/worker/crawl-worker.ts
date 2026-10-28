@@ -10,7 +10,7 @@ import { finalizeUrls, sweep } from "../lib/crawl/v2/frontier";
 import { createCrawlQueue, crawlQueueName, enqueueCrawl, redisConnection, type CrawlJob } from "../lib/crawl/v2/queue";
 import { runCrawl } from "../lib/crawl/v2/runner";
 
-const intEnv = (name: string, fallback: number) => {
+const numEnv = (name: string, fallback: number) => {
   const v = Number(process.env[name]);
   return Number.isFinite(v) && v > 0 ? v : fallback;
 };
@@ -22,14 +22,14 @@ function log(event: string, data: Record<string, unknown> = {}) {
   console.log(JSON.stringify({ t: new Date().toISOString(), event, ...data }));
 }
 
-const db = createDb(undefined, intEnv("CRAWL_DB_POOL", 10));
+const db = createDb(undefined, numEnv("CRAWL_DB_POOL", 10));
 
 async function main() {
   const owner = `${hostname()}-${process.pid}`;
   const connection = redisConnection();
   const queue = createCrawlQueue(connection);
   const fetch = createSafeFetch(workerFetchPolicy());
-  const leaseMs = intEnv("CRAWLER_LEASE_MS", 60_000);
+  const leaseMs = numEnv("CRAWLER_LEASE_MS", 60_000);
   const shutdown = new AbortController();
 
   // Boot reconcile: recover expired claims everywhere, then make sure every unfinished crawl has a job.
@@ -45,7 +45,7 @@ async function main() {
       const crawlId = job.data.crawlId;
       log("crawl.start", { crawlId });
       try {
-        const run = () => runCrawl({ db, fetch, owner, leaseMs, concurrency: intEnv("CRAWLER_CONCURRENCY", 3), signal: shutdown.signal, log }, crawlId);
+        const run = () => runCrawl({ db, fetch, owner, leaseMs, politeness: { maxConcurrency: numEnv("CRAWLER_HOST_CONCURRENCY", 3), ratePerSecond: numEnv("CRAWLER_HOST_RATE", 5) }, signal: shutdown.signal, log }, crawlId);
         let outcome = await run();
         // A resume that arrived while this job was still winding down from a pause could not enqueue a new job
         // (same job id), so pick it up here.
@@ -67,11 +67,11 @@ async function main() {
     },
     {
       connection,
-      concurrency: intEnv("CRAWL_WORKER_CONCURRENCY", 4),
+      concurrency: numEnv("CRAWL_WORKER_CONCURRENCY", 4),
       // A job whose worker died is handed to another worker after the lock expires (BullMQ stall check).
       // Redelivery is harmless (Postgres holds the state), so allow it as often as needed.
-      lockDuration: intEnv("CRAWL_JOB_LOCK_MS", 30_000),
-      stalledInterval: intEnv("CRAWL_JOB_LOCK_MS", 30_000),
+      lockDuration: numEnv("CRAWL_JOB_LOCK_MS", 30_000),
+      stalledInterval: numEnv("CRAWL_JOB_LOCK_MS", 30_000),
       maxStalledCount: 100,
     },
   );

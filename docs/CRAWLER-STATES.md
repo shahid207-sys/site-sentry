@@ -89,3 +89,49 @@ cause a second fetch.
   depth (a redirect is not a click), with `redirect_hops` + 1. Beyond 10 hops the target is `excluded_by_rule`.
 - A row is eligible when its depth is within the profile's maximum, or a seed or sitemap lists it. Rows that are left
   over and beyond the depth limit end as `depth_exceeded`, and all other leftovers as `budget_exhausted`.
+
+## Politeness
+
+Code: `src/lib/crawl/v2/politeness.ts` (throttle), `src/lib/crawl/v2/runner.ts` (where it is applied). Spec values:
+
+| Limit | Value | Where |
+| --- | --- | --- |
+| Requests in flight per host | 3 (`CRAWLER_HOST_CONCURRENCY`) | `HostThrottle.max`; the runner runs that many lanes |
+| Request rate per host | 5 req/s (`CRAWLER_HOST_RATE`) | minimum gap between request starts |
+| Crawl-delay | from the robots.txt group that applies to `SiteSentryBot` (else `*`), capped at 60 s | the gap becomes `max(1 / rate, Crawl-delay)` |
+| User-agent | `SiteSentryBot/1.0 (+https://sitesentry.app/bot)` | `V2_USER_AGENT` |
+| Timeouts | 10 s connect, 30 s total | `CONNECT_TIMEOUT_MS` on the agent, `V2_TOTAL_TIMEOUT_MS` per request |
+| HTML size | 5 MB; larger pages end `oversized` | `V2_MAX_HTML_BYTES` |
+
+Every request a crawl makes goes through the host throttle: robots.txt, sitemaps and pages. A lane takes a slot
+*before* `commitToSend`, so a committed URL is never left waiting out a backoff unsent. There is one throttle per
+host per worker process, shared by all crawls of that host on that worker. It is not shared across worker
+processes (see known risks).
+
+**Adaptive throttle.** A 429, a 503, or a p95 response time over 3 s across the last 20 responses each:
+
+- halve the host's concurrency (minimum 1);
+- pause the host for an exponential backoff (1 s, 2 s, 4 s … 60 s), or for `Retry-After` when that is longer.
+
+Two choices here are not in the spec:
+
+- The pause is capped at 60 s. A `Retry-After` of hours does not stall the crawl.
+- Recovery is additive: concurrency goes up by 1 after 20 consecutive responses that are neither throttled nor slow, and the backoff halves at the same time.
+
+**Retries.** A 429/503 page is requested again after the pause, at most 2 more times (`MAX_THROTTLE_RETRIES`),
+under the same claim. Each extra request is counted in `crawl_urls.attempts` (`recordRetry`), but the budget is
+charged only once. A page that still answers 429/503 ends `fetched` with the status and a reason such as
+`HTTP 429 after 3 requests`. If `Retry-After` asks for more than 60 s, the request is not retried, and the reason
+says so.
+
+The server refused those requests, so retrying them does not break at-most-once. A request that may have reached
+the server and was then lost is never retried: the URL ends `interrupted`.
+
+**Failures** map to terminal states by error code:
+
+| Error | Terminal state |
+| --- | --- |
+| `TIMEOUT` (including undici connect, headers or body timeouts) | `failed_timeout` |
+| `DNS_FAILED` | `failed_dns` |
+| `TLS` (Node/OpenSSL `CERT_*`, `ERR_TLS_*`, `ERR_SSL_*`, self-signed or unverifiable chains) | `failed_tls` |
+| anything else | `failed_network` |

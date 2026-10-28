@@ -10,7 +10,7 @@ import { parseHtml } from "../../audit/parse";
 import type { Db } from "../../db/client";
 import { SafeFetchError, type FetchOptions, type FetchResult, type Fetcher } from "../../fetch/safe-fetch";
 import { normaliseUrl } from "../normalise";
-import { isAllowed, parseRobots, type ParsedRobots } from "../robots";
+import { crawlDelayFor, isAllowed, parseRobots, type ParsedRobots } from "../robots";
 import { discoverSitemaps, extractOutlinks, type SitemapDocRecord } from "./discovery";
 import {
   ClaimLostError,
@@ -19,6 +19,7 @@ import {
   finalizeUrls,
   INTERRUPTED_REASON,
   recordResult,
+  recordRetry,
   releaseReservations,
   renewLeases,
   reserve,
@@ -29,6 +30,7 @@ import {
   type ReservedUrl,
   type UrlResult,
 } from "./frontier";
+import { parseRetryAfter, throttleFor, type HostThrottle, type ThrottleOptions } from "./politeness";
 import type { TerminalState } from "./types";
 
 /** Spec "Crawler engine → Resumability": URLs are claimed in batches of 200. */
@@ -37,6 +39,17 @@ export const BATCH_SIZE = 200;
 export const MAX_REDIRECT_HOPS = 10;
 /** Product token matched against robots.txt groups. */
 export const ROBOTS_TOKEN = "SiteSentryBot";
+/** Spec "Crawler engine → Politeness and speed": default user-agent and fetch limits (connect timeout is the agent's 10 s). */
+export const V2_USER_AGENT = "SiteSentryBot/1.0 (+https://sitesentry.app/bot)";
+export const V2_TOTAL_TIMEOUT_MS = 30_000;
+export const V2_MAX_HTML_BYTES = 5 * 1024 * 1024;
+/**
+ * A 429/503 is requested again at most this many times, after the throttle's backoff (or Retry-After), and only when
+ * the server does not ask for a longer wait than RETRY_WAIT_CAP_MS. The server refused those requests, so repeating
+ * them does not break at-most-once fetching; every request is counted in `crawl_urls.attempts`.
+ */
+export const MAX_THROTTLE_RETRIES = 2;
+export const RETRY_WAIT_CAP_MS = 60_000;
 
 /** Stored in `crawls.config`. Profiles (step 8) add scope rules; Phase 1 scope is the start URL's host. */
 export interface CrawlConfig {
@@ -71,8 +84,11 @@ export interface RunnerOptions {
   owner: string;
   leaseMs?: number;
   batchSize?: number;
-  /** Requests in flight for this crawl. Step 6 replaces this with the per-host politeness controller. */
-  concurrency?: number;
+  /** Per-host limits for the process-wide throttle (the first crawl of a host sets them). Defaults: 3 in flight, 5 req/s. */
+  politeness?: Pick<ThrottleOptions, "maxConcurrency" | "ratePerSecond">;
+  /** A throttle to use instead of the process-wide one for the crawl's host (tests). */
+  throttle?: HostThrottle;
+  /** Overrides for the spec defaults (V2_TOTAL_TIMEOUT_MS, V2_MAX_HTML_BYTES, V2_USER_AGENT). */
   fetchOptions?: Pick<FetchOptions, "timeoutMs" | "maxBytes" | "userAgent">;
   signal?: AbortSignal;
   log?: (event: string, data?: Record<string, unknown>) => void;
@@ -126,6 +142,7 @@ class Run {
   private robots: ParsedRobots | null = null;
   private robotsRecord: RobotsRecord | null = null;
   private host = "";
+  private throttle!: HostThrottle;
 
   constructor(
     private readonly opts: RunnerOptions,
@@ -146,6 +163,7 @@ class Run {
     if (crawl.status === "paused") return "paused";
     this.crawl = crawl;
     this.host = new URL(crawl.site_origin).host;
+    this.throttle = this.opts.throttle ?? throttleFor(this.host, this.opts.politeness);
 
     // We hold the lock, so no other runner is alive for this crawl: recover its claims now.
     const recovered = await sweep(this.db, this.crawlId, { force: true });
@@ -159,7 +177,7 @@ class Run {
     const renew = setInterval(() => void renewLeases(this.db, this.owner, this.leaseMs).catch(() => {}), Math.max(1000, this.leaseMs / 3));
     renew.unref();
     try {
-      await this.loadRobots();
+      if (!(await this.loadRobots())) return "shutdown";
       const stop = await this.checkStop();
       if (stop) return stop;
       await this.seed();
@@ -176,18 +194,44 @@ class Run {
 
   // ---------- robots.txt ----------
 
-  private async loadRobots() {
+  // ---------- requests ----------
+
+  private get timeoutMs() {
+    return this.opts.fetchOptions?.timeoutMs ?? V2_TOTAL_TIMEOUT_MS;
+  }
+
+  /** Every request this crawl makes: inside a host throttle slot, with the v2 timeout and user-agent. */
+  private async request(url: string, o: Omit<FetchOptions, "signal" | "timeoutMs" | "userAgent">, slotHeld = false): Promise<FetchResult> {
+    if (!slotHeld) await this.throttle.acquire(this.opts.signal);
+    try {
+      const res = await this.opts.fetch(url, {
+        ...o,
+        signal: this.opts.signal,
+        timeoutMs: this.timeoutMs,
+        userAgent: this.opts.fetchOptions?.userAgent ?? V2_USER_AGENT,
+      });
+      this.throttle.release({ status: res.status, elapsedMs: res.elapsedMs, retryAfterMs: parseRetryAfter(res.headers["retry-after"]) });
+      return res;
+    } catch (e) {
+      // A timeout is the slowest possible response; other failures say nothing about the server's pace.
+      this.throttle.release(e instanceof SafeFetchError && e.code === "TIMEOUT" ? { status: 0, elapsedMs: this.timeoutMs } : {});
+      throw e;
+    }
+  }
+
+  /** False when the worker is shutting down; robots.txt then stays "started" and is requested again on resume. */
+  private async loadRobots(): Promise<boolean> {
     let rec = this.crawl.robots;
     if (rec?.outcome) {
       this.applyRobots(rec);
-      return;
+      return true;
     }
     const url = new URL("/robots.txt", this.crawl.site_origin).toString();
     const interrupted = rec?.started === true;
     rec = { url, started: true, status: null, ...(interrupted ? { refetchedAfterInterrupt: true } : {}) };
     await this.saveRobots(rec);
     try {
-      const res = await this.opts.fetch(url, { accept: "robots", signal: this.opts.signal, ...this.opts.fetchOptions });
+      const res = await this.request(url, { accept: "robots" });
       rec.status = res.status;
       if (res.status >= 200 && res.status < 300) {
         const parsed = parseRobots(res.body);
@@ -198,11 +242,13 @@ class Run {
         Object.assign(rec, { outcome: "disallow_all", reason: `robots.txt returned ${res.status}; treated as a full disallow (RFC 9309 §2.3.1.4).`, sitemaps: [] });
       }
     } catch (e) {
+      if (this.opts.signal?.aborted) return false;
       const err = e instanceof SafeFetchError ? { code: e.code, message: e.message } : { code: "INTERNAL", message: String((e as Error)?.message ?? e) };
       Object.assign(rec, { error: err, outcome: "disallow_all", reason: `robots.txt could not be fetched (${err.message}); treated as a full disallow (RFC 9309 §2.3.1.4).`, sitemaps: [] });
     }
     await this.saveRobots(rec);
     this.applyRobots(rec);
+    return true;
   }
 
   private async saveRobots(rec: RobotsRecord) {
@@ -212,6 +258,8 @@ class Run {
   private applyRobots(rec: RobotsRecord) {
     this.robotsRecord = rec;
     this.robots = rec.outcome === "parsed" ? parseRobots(rec.body ?? "") : null;
+    const delay = this.robots ? crawlDelayFor(this.robots, ROBOTS_TOKEN) : null;
+    this.throttle.setCrawlDelay(delay === null ? null : delay * 1000);
   }
 
   // ---------- scope and classification ----------
@@ -258,7 +306,7 @@ class Run {
       origin: this.crawl.site_origin,
       robotsSitemaps: this.robotsRecord?.sitemaps ?? [],
       configured: this.crawl.config?.sitemaps,
-      fetch: (url, o) => this.opts.fetch(url, { ...o, signal: this.opts.signal, ...this.opts.fetchOptions, maxBytes: undefined }),
+      fetch: (url, o) => this.request(url, o),
       prior,
     });
     for await (const e of events) {
@@ -267,6 +315,8 @@ class Run {
         if (stop) return stop;
         await append({ started: e.url });
       } else if (e.type === "doc") {
+        // Shutting down mid-request: leave the document "started" so a resumed run files it as interrupted.
+        if (e.doc.error && this.opts.signal?.aborted) return "shutdown";
         await append(e.doc);
       } else {
         await upsertUrls(this.db, this.crawlId, e.urls.map((u) => this.newUrl(u.url, u.original, "sitemap", null)));
@@ -305,7 +355,6 @@ class Run {
   }
 
   private async processBatch(batch: ReservedUrl[]): Promise<"budget" | "stopped" | null> {
-    const concurrency = this.opts.concurrency ?? 3;
     let next = 0;
     let halted: "budget" | "stopped" | null = null;
     let failed: unknown = null;
@@ -325,13 +374,24 @@ class Run {
           return;
         }
         const r = batch[next++];
-        const commit = await commitToSend(this.db, this.crawlId, r.id, this.owner, this.leaseMs);
+        // Take the host slot before committing, so a committed URL never waits out a backoff unsent.
+        try {
+          await this.throttle.acquire(this.opts.signal);
+        } catch {
+          halted = "stopped"; // aborted while waiting; the reservation is released
+          return;
+        }
+        const commit = await commitToSend(this.db, this.crawlId, r.id, this.owner, this.leaseMs).catch((e) => {
+          this.throttle.release();
+          throw e;
+        });
         if (!commit.ok) {
+          this.throttle.release();
           if (commit.why !== "lost") halted = commit.why;
           continue;
         }
-        const result = await this.fetchOne(r);
         try {
+          const result = await this.fetchOne(r, commit.token);
           await recordResult(this.db, this.crawlId, r.id, commit.token, result);
         } catch (e) {
           if (!(e instanceof ClaimLostError)) throw e;
@@ -339,20 +399,43 @@ class Run {
         }
       }
     };
-    await Promise.all(Array.from({ length: Math.min(concurrency, batch.length) }, lane));
+    await Promise.all(Array.from({ length: Math.min(this.throttle.max, batch.length) }, lane));
     if (failed) throw failed;
     return halted;
   }
 
-  private async fetchOne(r: ReservedUrl): Promise<UrlResult> {
-    let res: FetchResult;
-    try {
-      res = await this.opts.fetch(r.url, { accept: "html", followRedirects: false, signal: this.opts.signal, ...this.opts.fetchOptions });
-    } catch (e) {
-      // Shutting down mid-request: it may have reached the server, so it is not retried.
-      if (this.opts.signal?.aborted) return { state: "interrupted", reason: INTERRUPTED_REASON };
-      return failure(e);
+  /** Request a committed URL (the caller holds a throttle slot, which this returns) and classify the response. */
+  private async fetchOne(r: ReservedUrl, token: string): Promise<UrlResult> {
+    const maxBytes = this.opts.fetchOptions?.maxBytes ?? V2_MAX_HTML_BYTES;
+    for (let retries = 0; ; retries++) {
+      let res: FetchResult;
+      try {
+        res = await this.request(r.url, { accept: "html", followRedirects: false, maxBytes }, true);
+      } catch (e) {
+        // Shutting down mid-request: it may have reached the server, so it is not retried.
+        if (this.opts.signal?.aborted) return { state: "interrupted", reason: INTERRUPTED_REASON };
+        return failure(e);
+      }
+      if ((res.status !== 429 && res.status !== 503) || retries >= MAX_THROTTLE_RETRIES) return this.classify(r, res, retries);
+      const wait = parseRetryAfter(res.headers["retry-after"]);
+      if (wait !== null && wait > RETRY_WAIT_CAP_MS) {
+        return this.classify(r, res, retries, `Retry-After asks for ${Math.round(wait / 1000)} s, longer than the ${RETRY_WAIT_CAP_MS / 1000} s this crawl waits; not retried.`);
+      }
+      try {
+        await this.throttle.acquire(this.opts.signal); // waits out the backoff the 429/503 just set
+      } catch {
+        return this.classify(r, res, retries, "The worker stopped before the retry.");
+      }
+      try {
+        await recordRetry(this.db, r.id, token);
+      } catch (e) {
+        this.throttle.release();
+        throw e;
+      }
     }
+  }
+
+  private classify(r: ReservedUrl, res: FetchResult, retries: number, note?: string): UrlResult {
     const base = { statusCode: res.status, contentType: res.contentType || null, elapsedMs: res.elapsedMs, bytes: res.bytes };
 
     if (res.status >= 300 && res.status < 400 && res.location) {
@@ -382,7 +465,10 @@ class Run {
     if (ok && !res.contentTypeAccepted) {
       return { ...base, state: "non_html", reason: `Content-Type ${res.contentType || "(none)"} is not HTML.`, snapshot };
     }
-    if (!ok) return { ...base, state: "fetched", reason: `HTTP ${res.status}`, snapshot };
+    if (!ok) {
+      const tries = retries ? ` after ${retries + 1} requests` : "";
+      return { ...base, state: "fetched", reason: `HTTP ${res.status}${tries}${note ? `. ${note}` : ""}`, snapshot };
+    }
 
     const out = extractOutlinks(parseHtml(res.body), res.finalUrl);
     const childDepth = (r.depth ?? 0) + 1; // a sitemap-only page counts as depth 0 for its children
@@ -418,6 +504,6 @@ class Run {
 function failure(e: unknown): UrlResult {
   if (!(e instanceof SafeFetchError)) return { state: "failed_network", reason: `Unexpected error: ${(e as Error)?.message ?? String(e)}` };
   const state: TerminalState =
-    e.code === "TIMEOUT" ? "failed_timeout" : e.code === "DNS_FAILED" ? "failed_dns" : /certificate|tls|ssl/i.test(e.message) ? "failed_tls" : "failed_network";
+    e.code === "TIMEOUT" ? "failed_timeout" : e.code === "DNS_FAILED" ? "failed_dns" : e.code === "TLS" ? "failed_tls" : "failed_network";
   return { state, reason: `${e.code}: ${e.message}` };
 }

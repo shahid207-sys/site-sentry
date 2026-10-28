@@ -8,6 +8,8 @@ export interface RobotsRule {
 export interface RobotsGroup {
   agents: string[];
   rules: RobotsRule[];
+  /** Crawl-delay in seconds (not part of RFC 9309, widely used); the last valid value in the group wins. */
+  crawlDelay?: number;
 }
 
 export interface ParsedRobots {
@@ -51,20 +53,35 @@ export function parseRobots(text: string): ParsedRobots {
       current.rules.push({ allow: key === "allow", path: value });
     } else if (key === "sitemap") {
       if (value) sitemaps.push(value);
+    } else if (key === "crawl-delay") {
+      if (!current) continue;
+      const seconds = /^\d+(\.\d+)?$/.test(value) ? Number(value) : NaN;
+      if (Number.isFinite(seconds)) current.crawlDelay = seconds;
+      else if (invalidLines.length < 20) invalidLines.push(raw.slice(0, 200));
     }
-    // crawl-delay, host, etc. are accepted and ignored.
+    // host, etc. are accepted and ignored.
   }
   return { groups, sitemaps, invalidLines };
 }
 
-/** Rules for a crawler: the most specific matching group, merged when several groups name it; "*" otherwise. */
-export function rulesFor(robots: ParsedRobots, userAgent: string): RobotsRule[] | null {
+/** The groups that apply to a crawler: every group naming it, or the "*" groups when none does. */
+function groupsFor(robots: ParsedRobots, userAgent: string): RobotsGroup[] | null {
   const token = userAgent.toLowerCase();
   const named = robots.groups.filter((g) => g.agents.some((a) => a !== "*" && token.startsWith(a)));
-  if (named.length) return named.flatMap((g) => g.rules);
+  if (named.length) return named;
   const star = robots.groups.filter((g) => g.agents.includes("*"));
-  if (star.length) return star.flatMap((g) => g.rules);
-  return null;
+  return star.length ? star : null;
+}
+
+/** Rules for a crawler: the most specific matching group, merged when several groups name it; "*" otherwise. */
+export function rulesFor(robots: ParsedRobots, userAgent: string): RobotsRule[] | null {
+  return groupsFor(robots, userAgent)?.flatMap((g) => g.rules) ?? null;
+}
+
+/** Crawl-delay in seconds for a crawler, from the same groups as its rules; the longest when merged groups disagree. */
+export function crawlDelayFor(robots: ParsedRobots, userAgent: string): number | null {
+  const delays = (groupsFor(robots, userAgent) ?? []).flatMap((g) => (g.crawlDelay === undefined ? [] : [g.crawlDelay]));
+  return delays.length ? Math.max(...delays) : null;
 }
 
 function patternToRegex(path: string): RegExp {
