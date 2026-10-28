@@ -189,7 +189,9 @@ function languageChunks(text: string): string[] {
   const judged = text.slice(0, LANGUAGE_MAX_CHARS).replace(/\S*[/\d@]\S*/g, " ").replace(/\b\p{Lu}{2,}s?\b/gu, " ").replace(/ {2,}/g, " ");
   for (const s of judged.split(/(?<=[.!?。！？])\s+/)) {
     cur = cur ? `${cur} ${s}` : s;
-    if (cur.length >= LANGUAGE_CHUNK_CHARS) (out.push(cur), (cur = ""));
+    if (cur.length < LANGUAGE_CHUNK_CHARS) continue;
+    out.push(cur);
+    cur = "";
   }
   if (cur.length >= LANGUAGE_CHUNK_CHARS / 2 || !out.length) out.push(cur);
   return out;
