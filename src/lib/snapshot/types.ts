@@ -50,6 +50,8 @@ export interface SnapshotLink {
   rel: string;
   location: LinkLocation;
   nofollow: boolean;
+  /** hreflang value as written, on <link rel="alternate" hreflang> (via "hreflang"). */
+  hreflang?: string;
 }
 
 export interface SnapshotImage {
@@ -62,6 +64,12 @@ export interface SnapshotImage {
   height: string | null;
   loading: string | null;
   srcset: string | null;
+  /** Inside an <a href>. Absent on snapshots from before Phase 2b. */
+  linked?: boolean;
+  /** Inside the main-content element (see mainContentText) and outside boilerplate. Absent before Phase 2b. */
+  inMain?: boolean;
+  /** The direct child of a <picture> with <source srcset> (responsive by art direction). Absent before Phase 2b. */
+  inPicture?: boolean;
 }
 
 export interface JsonLdBlock {
@@ -95,6 +103,8 @@ export interface PageFacts {
   jsRedirect: string | null;
   /** Stylesheets and scripts the page loads, resolved (rules check them against robots.txt). */
   renderResources: string[];
+  /** <video> elements: resolved src (or first <source src>) and poster. Absent on snapshots from before Phase 2b. */
+  videos?: { src: string | null; poster: string | null }[];
   /** Characters of visible text in <body> (boilerplate included). */
   bodyTextChars: number;
   /** Characters of main-content text. */

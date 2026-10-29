@@ -5,7 +5,7 @@ import { Worker } from "bullmq";
 import { sql } from "drizzle-orm";
 import { Redis } from "ioredis";
 import { createDb } from "../lib/db/client";
-import { createSafeFetch } from "../lib/fetch/safe-fetch";
+import { createPeerCertReader, createSafeFetch } from "../lib/fetch/safe-fetch";
 import { workerFetchPolicy } from "../lib/crawl/v2/fetch-policy";
 import { finalizeUrls, sweep } from "../lib/crawl/v2/frontier";
 import { createCrawlQueue, crawlQueueName, enqueueCrawl, redisConnection, type CrawlJob } from "../lib/crawl/v2/queue";
@@ -34,6 +34,7 @@ async function main() {
   // throttle calls wait for it to come back (requests stop) rather than fail or run unthrottled.
   const redis = new Redis({ ...connection, maxRetriesPerRequest: null });
   const fetch = createSafeFetch(workerFetchPolicy());
+  const peerCert = createPeerCertReader(workerFetchPolicy());
   const leaseMs = numEnv("CRAWLER_LEASE_MS", 60_000);
   const shutdown = new AbortController();
   const analysisQueue = createAnalysisQueue(connection);
@@ -55,7 +56,7 @@ async function main() {
       const crawlId = job.data.crawlId;
       log("crawl.start", { crawlId });
       try {
-        const run = () => runCrawl({ db, redis, fetch, owner, leaseMs, politeness: { maxConcurrency: numEnv("CRAWLER_HOST_CONCURRENCY", 3), ratePerSecond: numEnv("CRAWLER_HOST_RATE", 5), keyPrefix: process.env.CRAWLER_THROTTLE_PREFIX || undefined }, signal: shutdown.signal, log }, crawlId);
+        const run = () => runCrawl({ db, redis, fetch, peerCert, owner, leaseMs, politeness: { maxConcurrency: numEnv("CRAWLER_HOST_CONCURRENCY", 3), ratePerSecond: numEnv("CRAWLER_HOST_RATE", 5), keyPrefix: process.env.CRAWLER_THROTTLE_PREFIX || undefined }, signal: shutdown.signal, log }, crawlId);
         let outcome = await run();
         // A resume that arrived while this job was still winding down from a pause could not enqueue a new job
         // (same job id), so pick it up here.

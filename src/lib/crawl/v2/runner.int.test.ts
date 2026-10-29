@@ -56,7 +56,7 @@ async function urlStates(crawlId: string) {
 }
 
 // Crawl-level probes (favicon, llms.txt, og:image) are not crawl URLs and are not charged to the budget.
-const PROBE_PATHS = new Set(["/favicon.ico", "/llms.txt"]);
+const PROBE_PATHS = new Set(["/favicon.ico", "/llms.txt", "/.env", "/.git/HEAD"]);
 const pageHits = () => [...srv.hits.entries()].filter(([p]) => p !== "/robots.txt" && !p.endsWith(".xml") && !PROBE_PATHS.has(p));
 const expectNoDuplicateFetches = () => {
   for (const [path, n] of srv.hits) expect(n, `${path} requested ${n} times`).toBe(1);
@@ -606,6 +606,119 @@ describe("runCrawl crawl-level probes", () => {
     for (const p of ["/og.png", "/small.png", "/icon.png", "/llms.txt"]) expect(srv.hits.get(p), p).toBe(1);
   });
 
+  it("probes /.env and /.git/HEAD, keeping only the signature match, never the body (SEC-006)", async () => {
+    const CANARY = "sk_live_canary_9f3a";
+    srv.routes.set("/", page([]));
+    srv.routes.set("/.env", send(`# app settings\nDB_HOST=db.internal\nexport API_KEY=${CANARY}\n\nDEBUG=false\n`, "text/plain"));
+    srv.routes.set("/.git/HEAD", send("ref: refs/heads/main\n", "text/plain"));
+    const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued", budget: 1 });
+    expect(await runCrawl(opts(), c)).toBe("completed");
+    const probes = ((await db.execute(sql`select probes from crawls where id = ${c}::uuid`)).rows[0] as { probes: ProbeRecord[] }).probes;
+    expect(probes.find((p) => p.kind === "env_file")).toMatchObject({ status: 200, secret: { pattern: "env_key_value", lines: 3 } });
+    expect(probes.find((p) => p.kind === "git_head")).toMatchObject({ status: 200, secret: { pattern: "git_head_ref", lines: 1 } });
+    expect(JSON.stringify(probes)).not.toContain(CANARY);
+    expect(JSON.stringify(probes)).not.toContain("db.internal");
+
+    // A catch-all route answering 200 with an HTML page is a soft 404, not the file.
+    srv.routes.set("/.env", send("<!doctype html><title>Not found</title><p>API_KEY=nothing here</p>"));
+    srv.routes.set("/.git/HEAD", send("<!doctype html><title>Home</title>"));
+    const soft = await newCrawl(db, { siteOrigin: srv.origin, status: "queued", budget: 1 });
+    expect(await runCrawl(opts(), soft)).toBe("completed");
+    const sp = ((await db.execute(sql`select probes from crawls where id = ${soft}::uuid`)).rows[0] as { probes: ProbeRecord[] }).probes;
+    expect(sp.find((p) => p.kind === "env_file")).toMatchObject({ status: 200, secret: null });
+    expect(sp.find((p) => p.kind === "git_head")).toMatchObject({ status: 200, secret: null });
+  });
+
+  it("checks external links and images within their budgets: HEAD first, GET when HEAD is refused, robots per host (LNK-010, IMG)", async () => {
+    const port = srv.port;
+    const o = srv.origin;
+    const log: string[] = [];
+    const logged = (h: import("@/test/local-server").Handler): import("@/test/local-server").Handler => (req, res) => {
+      log.push(`${req.headers.host} ${req.method} ${req.url}${req.headers.range ? ` range=${req.headers.range}` : ""}`);
+      h(req, res);
+    };
+    const ext = (host: string, i: number) => `http://${host}:${port}/x/${host.split(".")[0]}/${i}`;
+    const hosts = ["ext1.test", "ext2.test", "ext3.test"];
+    const links = hosts.flatMap((h) => [0, 1, 2, 3].map((i) => ext(h, i)));
+    links.push(`http://blocked.test:${port}/x/blocked/0`);
+    const imgs = [0, 1, 2, 3].map((i) => `${o}/img/${i}.png`);
+    srv.routes.set("/", send(`<!doctype html><title>t</title><body>${links.map((l) => `<a href="${l}">x</a>`).join("")}${imgs.map((i) => `<img src="${i}" alt="">`).join("")}<a href="/b">b</a></body>`));
+    srv.routes.set("/b", send(`<!doctype html><title>b</title><body><a href="${links[0]}">again</a><img src="${imgs[0]}" alt=""></body>`));
+    srv.routes.set("/robots.txt", logged((req, res) => {
+      const body = req.headers.host?.startsWith("blocked.test") ? "User-agent: *\nDisallow: /x/\n" : "User-agent: *\nAllow: /\n";
+      res.writeHead(200, { "content-type": "text/plain" }).end(body);
+    }));
+    for (const l of links) {
+      const p = new URL(l).pathname;
+      // ext2's first URL refuses HEAD; ext3's last is gone.
+      srv.routes.set(p, logged((req, res) => {
+        if (p === "/x/ext2/0" && req.method === "HEAD") return void res.writeHead(405).end();
+        res.writeHead(p === "/x/ext3/3" ? 404 : 200, { "content-type": "text/html" }).end(req.method === "HEAD" ? undefined : "<title>ok</title>");
+      }));
+    }
+    const png = Buffer.alloc(200_000);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(png, 0);
+    png.writeUInt32BE(13, 8);
+    png.write("IHDR", 12, "latin1");
+    png.writeUInt32BE(640, 16);
+    png.writeUInt32BE(480, 20);
+    for (const i of imgs) {
+      srv.routes.set(new URL(i).pathname, logged((req, res) => {
+        const m = /bytes=(\d+)-(\d+)/.exec(req.headers.range ?? "");
+        if (req.method === "HEAD") return void res.writeHead(200, { "content-type": "image/png", "content-length": png.length }).end();
+        if (!m) return void res.writeHead(200, { "content-type": "image/png" }).end(png);
+        const part = png.subarray(Number(m[1]), Number(m[2]) + 1);
+        res.writeHead(206, { "content-type": "image/png", "content-range": `bytes ${m[1]}-${m[2]}/${png.length}` }).end(part);
+      }));
+    }
+
+    const c = await newCrawl(db, { siteOrigin: o, status: "queued", budget: 5 });
+    expect(await runCrawl(opts({ resourceLimits: { externalLinks: 7, images: 3 } }), c)).toBe("completed");
+
+    const row = (await db.execute(sql`select resources, fetches_committed from crawls where id = ${c}::uuid`)).rows[0] as { resources: import("./resources").CrawlResourcesSummary; fetches_committed: number };
+    expect(row.fetches_committed).toBe(2); // resources are not charged to the URL budget
+    expect(row.resources).toMatchObject({ planned: true, external: { found: 13, planned: 7, overBudget: 6, budget: 7 }, images: { found: 4, planned: 3, overBudget: 1, budget: 3 } });
+    expect(row.resources.finishedAt).toEqual(expect.any(String));
+
+    const rs = (await db.execute(sql`select kind, url, state, skip_code, method, status, bytes, width, height, referrers, sample_pages from resources where crawl_id = ${c}::uuid order by id`)).rows as Record<string, unknown>[];
+    const ext7 = rs.filter((r) => r.kind === "external_link");
+    // Round-robin across hosts in first-seen order: one per host per turn.
+    expect(ext7.map((r) => r.url)).toEqual([ext("ext1.test", 0), ext("ext2.test", 0), ext("ext3.test", 0), `http://blocked.test:${port}/x/blocked/0`, ext("ext1.test", 1), ext("ext2.test", 1), ext("ext3.test", 1)]);
+    const by = (u: string) => rs.find((r) => r.url === u)!;
+    expect(by(ext("ext1.test", 0))).toMatchObject({ state: "done", method: "HEAD", status: 200, referrers: 2, sample_pages: [`${o}/`, `${o}/b`] });
+    expect(by(ext("ext2.test", 0))).toMatchObject({ state: "done", method: "GET", status: 200 });
+    expect(by(`http://blocked.test:${port}/x/blocked/0`)).toMatchObject({ state: "skipped", skip_code: "blocked_robots", status: null });
+    const img = rs.filter((r) => r.kind === "image");
+    expect(img.map((r) => [r.url, r.state, r.method, r.status, Number(r.bytes), r.width, r.height])).toEqual(
+      imgs.slice(0, 3).map((u) => [u, "done", "HEAD+GET", 200, 200_000, 640, 480]),
+    );
+
+    // Requests counted at the server: within budget, once each, robots.txt once per external host.
+    const extRequests = log.filter((l) => / \/x\//.test(l));
+    expect(extRequests.filter((l) => l.includes("/x/blocked/"))).toEqual([]);
+    expect(extRequests.filter((l) => !l.includes("/x/ext2/0")).length).toBe(5); // 6 checkable links, one HEAD each…
+    expect(extRequests.filter((l) => l.includes("/x/ext2/0"))).toEqual([`ext2.test:${port} HEAD /x/ext2/0`, `ext2.test:${port} GET /x/ext2/0`]); // …and HEAD then GET
+    for (const h of [...hosts, "blocked.test"]) expect(log.filter((l) => l === `${h}:${port} GET /robots.txt`).length, h).toBe(1);
+    const imgRequests = log.filter((l) => l.includes("/img/"));
+    expect(imgRequests).toEqual(imgs.slice(0, 3).flatMap((u) => [`127.0.0.1:${port} HEAD ${new URL(u).pathname}`, `127.0.0.1:${port} GET ${new URL(u).pathname} range=bytes=0-65535`]));
+  });
+
+  it("never re-sends a resource an earlier run started", async () => {
+    const o = srv.origin;
+    srv.routes.set("/", send(`<!doctype html><title>t</title><body><img src="/i.png" alt=""><img src="/j.png" alt=""></body>`));
+    srv.routes.set("/j.png", send("", "image/svg+xml"));
+    const c = await newCrawl(db, { siteOrigin: o, status: "queued", budget: 1 });
+    await db.execute(sql`update crawls set resources = ${JSON.stringify({ urlPhaseFinishedAt: new Date().toISOString(), planned: true, external: { found: 0, planned: 0, overBudget: 0, budget: 500 }, images: { found: 2, planned: 2, overBudget: 0, budget: 2000 } })}::jsonb where id = ${c}::uuid`);
+    await db.execute(sql`insert into resources (crawl_id, kind, url, host, state) values (${c}::uuid, 'image', ${`${o}/i.png`}, ${new URL(o).host}, 'started'), (${c}::uuid, 'image', ${`${o}/j.png`}, ${new URL(o).host}, 'queued')`);
+    expect(await runCrawl(opts(), c)).toBe("completed");
+    const rs = (await db.execute(sql`select url, state, status from resources where crawl_id = ${c}::uuid order by id`)).rows;
+    expect(rs).toEqual([
+      { url: `${o}/i.png`, state: "interrupted", status: null },
+      { url: `${o}/j.png`, state: "done", status: 200 },
+    ]);
+    expect(srv.hits.has("/i.png")).toBe(false);
+  });
+
   it("never re-sends a probe an earlier run started", async () => {
     srv.routes.set("/", page([]));
     const o = srv.origin;
@@ -788,7 +901,7 @@ describe("runCrawl start URL redirects", () => {
   it("moves to the www/non-www twin the start URL redirects to: reads the twin's robots.txt and crawls only the twin", async () => {
     const site = await startFixtureSite();
     try {
-      const fetch = createSafeFetch(workerFetchPolicy({ NODE_ENV: "test", CRAWLER_LOCAL_HOSTS: LOCAL_HOSTS_ENV, CRAWLER_LOCAL_PORTS: String(site.port) }));
+      const fetch = createSafeFetch(workerFetchPolicy({ NODE_ENV: "test", CRAWLER_LOCAL_HOSTS: LOCAL_HOSTS_ENV, CRAWLER_LOCAL_PORTS: String(site.port), CRAWLER_LOCAL_CA: site.ca }));
       // www.fixture.test answers every path with a 301 to fixture.test.
       const c = await newCrawl(db, { siteOrigin: site.origins.www, status: "queued", budget: 6, maxDepth: 1 });
       expect(await runCrawl(opts({ fetch }), c)).toBe("completed");

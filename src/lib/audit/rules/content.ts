@@ -17,15 +17,20 @@ export function blockText(root: ReturnType<Doc>): string {
 }
 
 /** Regions that are page furniture, not content: by element, or by ARIA landmark role (page builders often use <div role="navigation">). */
-const BOILERPLATE =
+export const BOILERPLATE =
   'script, style, noscript, template, svg, nav, header, footer, aside, form, [role="navigation"], [role="banner"], [role="contentinfo"], [role="complementary"], [role="search"]';
 
 /** Visible main-content text: <main>, else <article>, else <body>, without scripts, styles and boilerplate regions. */
 export function mainContentText($: Doc): { text: string; source: "main" | "article" | "body" } {
-  const pick = $("main, [role=main]").first().length ? "main" : $("article").first().length ? "article" : "body";
+  const pick = mainContentSource($);
   const root = $(pick === "main" ? "main, [role=main]" : pick).first().clone();
   root.find(BOILERPLATE).remove();
   return { text: blockText(root), source: pick };
+}
+
+/** Which element holds the main content: <main> (or role=main), else <article>, else <body>. */
+export function mainContentSource($: Doc): "main" | "article" | "body" {
+  return $("main, [role=main]").first().length ? "main" : $("article").first().length ? "article" : "body";
 }
 
 /** Visible main-content words. Strips scripts, styles and common boilerplate regions. */

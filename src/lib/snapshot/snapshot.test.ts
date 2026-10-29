@@ -128,6 +128,22 @@ describe("extractHtml", () => {
     expect(mixed.accuracy).toBeLessThan(0.9);
   });
 
+  it("keeps hreflang on alternate links, image placement and videos (Phase 2b)", () => {
+    const y = extract(`<html><head><link rel="alternate" hreflang="de-DE" href="/de/"><link rel="alternate" href="/feed.xml"></head><body>
+      <header><img src="/logo.png" alt="Logo"></header>
+      <main><p>Text</p><a href="/big.jpg"><img src="/thumb.jpg" alt="t"></a><picture><source srcset="/p.webp"><img src="/p.jpg" alt="p"></picture>
+      <video src="/v.mp4" poster="/v.jpg"></video><video><source src="/w.webm"></video></main></body></html>`);
+    expect(y.links.filter((l) => l.hreflang)).toEqual([expect.objectContaining({ href: "https://a.test/de/", via: "hreflang", hreflang: "de-DE" })]);
+    const img = (src: string) => y.images.find((i) => i.src === src);
+    expect(img("/logo.png")).toMatchObject({ linked: false, inMain: false, inPicture: false });
+    expect(img("/thumb.jpg")).toMatchObject({ linked: true, inMain: true, inPicture: false });
+    expect(img("/p.jpg")).toMatchObject({ linked: false, inMain: true, inPicture: true });
+    expect(y.facts.videos).toEqual([
+      { src: "https://a.test/v.mp4", poster: "https://a.test/v.jpg" },
+      { src: "https://a.test/w.webm", poster: null },
+    ]);
+  });
+
   it("finds a meta refresh target", () => {
     expect(extract(`<html><head><meta http-equiv="Refresh" content="0; url=/to"></head></html>`).facts.metaRefresh).toEqual({ content: "0; url=/to", target: "https://a.test/to" });
   });

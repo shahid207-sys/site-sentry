@@ -11,7 +11,7 @@ import { parseHtml } from "../../audit/parse";
 import { blobStoreFromEnv, putRawHtml, type BlobStore } from "../../snapshot/blob-store";
 import { extractHtml } from "../../snapshot/extract";
 import type { Db } from "../../db/client";
-import { SafeFetchError, type FetchOptions, type FetchResult, type Fetcher } from "../../fetch/safe-fetch";
+import { SafeFetchError, type FetchOptions, type FetchResult, type Fetcher, type PeerCertReader } from "../../fetch/safe-fetch";
 import { normaliseUrl } from "../normalise";
 import type { ScopeRules } from "../profiles";
 import { crawlDelayFor, isAllowed, parseRobots, type ParsedRobots } from "../robots";
@@ -38,6 +38,7 @@ import {
   type UrlResult,
 } from "./frontier";
 import { HostThrottle, parseRetryAfter, type ThrottleOptions } from "./politeness";
+import { runResources, type CrawlResourcesSummary } from "./resources";
 import { runProbes } from "./probes";
 import type { ProbeRecord } from "../../rules/probe-types";
 import { crawlSecretScope, decryptSecret, secretKey } from "./secrets";
@@ -97,6 +98,10 @@ export type RunOutcome = "completed" | "paused" | "cancelled" | "failed" | "lock
 export interface RunnerOptions {
   db: Db;
   fetch: Fetcher;
+  /** Reads the start host's TLS certificate (tls_cert probe, SEC-003), with the same SSRF policy as `fetch`. */
+  peerCert?: PeerCertReader;
+  /** Per-crawl resource budgets (default 500 external links, 2,000 images); lowered only by tests. */
+  resourceLimits?: { externalLinks?: number; images?: number };
   /** Worker identity; each run adds a suffix so leases are per run. */
   owner: string;
   leaseMs?: number;
@@ -125,6 +130,7 @@ interface CrawlRow {
   robots: RobotsRecord | null;
   sitemaps: SitemapLogEntry[];
   probes: ProbeRecord[];
+  resources: CrawlResourcesSummary | null;
   discovery_done: boolean;
   start_redirect: StartRedirect | null;
 }
@@ -153,7 +159,7 @@ export function isTwinOrigin(a: URL, b: URL): boolean {
 const START_MAX_HOPS = 5;
 
 async function loadCrawl(db: Db, crawlId: string): Promise<CrawlRow | undefined> {
-  const r = await db.execute(sql`select id, site_origin, status, budget, max_depth, config, robots, sitemaps, probes, discovery_done, start_redirect from crawls where id = ${crawlId}::uuid`);
+  const r = await db.execute(sql`select id, site_origin, status, budget, max_depth, config, robots, sitemaps, probes, resources, discovery_done, start_redirect from crawls where id = ${crawlId}::uuid`);
   return r.rows[0] as unknown as CrawlRow | undefined;
 }
 
@@ -379,22 +385,22 @@ class Run {
   }
 
   /** Every request this crawl makes: inside a host throttle slot, with the v2 timeout and user-agent. */
-  private async request(url: string, o: Omit<FetchOptions, "signal" | "timeoutMs" | "userAgent">, held?: string): Promise<FetchResult> {
-    const slot = held ?? (await this.throttle.acquire(this.signal));
+  private async request(url: string, o: Omit<FetchOptions, "signal" | "timeoutMs" | "userAgent">, held?: string, throttle = this.throttle): Promise<FetchResult> {
+    const slot = held ?? (await throttle.acquire(this.signal));
     try {
       const res = await this.opts.fetch(url, {
         ...o,
         // Credentials go to the crawl's own origin only (configured sitemaps can live elsewhere).
-        headers: this.authHeader && new URL(url).origin === this.origin ? { authorization: this.authHeader } : undefined,
+        headers: this.authHeader && new URL(url).origin === this.origin ? { ...o.headers, authorization: this.authHeader } : o.headers,
         signal: this.fetchSignal,
         timeoutMs: this.timeoutMs,
         userAgent: this.opts.fetchOptions?.userAgent ?? V2_USER_AGENT,
       });
-      await this.throttle.release(slot, { status: res.status, elapsedMs: res.elapsedMs, retryAfterMs: parseRetryAfter(res.headers["retry-after"]) });
+      await throttle.release(slot, { status: res.status, elapsedMs: res.elapsedMs, retryAfterMs: parseRetryAfter(res.headers["retry-after"]) });
       return res;
     } catch (e) {
       // A timeout is the slowest possible response; other failures say nothing about the server's pace.
-      await this.throttle.release(slot, e instanceof SafeFetchError && e.code === "TIMEOUT" ? { status: 0, elapsedMs: this.timeoutMs } : {});
+      await throttle.release(slot, e instanceof SafeFetchError && e.code === "TIMEOUT" ? { status: 0, elapsedMs: this.timeoutMs } : {});
       throw e;
     }
   }
@@ -729,6 +735,7 @@ class Run {
       acquire: () => this.throttle.acquire(this.signal),
       release: (slot) => this.throttle.release(slot),
       request: (url, o, slot) => this.request(url, o, slot),
+      peerCert: this.opts.peerCert,
       robotsToken: ROBOTS_TOKEN,
       robotsBlocked: (url, asOwnHost = false) => {
         if (!asOwnHost && new URL(url).host !== this.host) return null;
@@ -742,6 +749,26 @@ class Run {
     stop = await this.checkStop();
     if (stop) return stop;
     if (!probed) return "shutdown";
+    const checked = await runResources({
+      db: this.db,
+      crawlId: this.crawlId,
+      origin: this.crawl.site_origin,
+      existing: this.crawl.resources,
+      throttle: (host) => (host === this.host ? this.throttle : new HostThrottle(this.opts.redis, host, this.opts.politeness)),
+      send: (url, o, throttle, slot) => this.request(url, o, slot, throttle),
+      robotsBlockedOwn: (url) => {
+        if (this.robotsRecord?.outcome === "disallow_all") return this.robotsRecord.reason ?? "robots.txt disallows everything";
+        const d = this.robots ? isAllowed(this.robots, ROBOTS_TOKEN, url) : null;
+        return d && !d.allowed ? `${d.matchedRule ?? "rule"} applies to ${ROBOTS_TOKEN}` : null;
+      },
+      robotsToken: ROBOTS_TOKEN,
+      signal: this.signal,
+      log: this.log,
+      limits: this.opts.resourceLimits,
+    });
+    stop = await this.checkStop();
+    if (stop) return stop;
+    if (!checked) return "shutdown";
     await finalizeUrls(this.db, this.crawlId, "completed", this.crawl.max_depth, this.crawl.budget);
     await this.db.execute(sql`update crawls set status = 'completed', finished_at = now() where id = ${this.crawlId}::uuid and status = 'running'`);
     this.log("crawl.completed", { crawlId: this.crawlId });

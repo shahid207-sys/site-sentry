@@ -36,6 +36,8 @@ export const crawls = pgTable(
     startRedirect: jsonb("start_redirect"),
     /** Crawl-level probe results (src/lib/rules/probe-types.ts). */
     probes: jsonb("probes").notNull().default(sql`'[]'::jsonb`),
+    /** Resource phase (external links, images) summary: CrawlResourcesSummary in src/lib/crawl/v2/resources.ts. */
+    resources: jsonb("resources"),
     /** Analysis job progress: { status, startedAt, finishedAt, pages, findings, error }. */
     analysis: jsonb("analysis"),
     error: jsonb("error"),
@@ -72,7 +74,12 @@ export const crawlUrls = pgTable(
     redirectTarget: text("redirect_target"),
     redirectHops: integer("redirect_hops").notNull().default(0),
     attempts: integer("attempts").notNull().default(0),
+    /** DOM-skeleton fingerprint of the page (templates.fingerprint), set by the site pass. */
     templateId: text("template_id"),
+    /** Site pass (analysis): distinct crawled pages with an <a href> here, clicks from the start URL, internal PageRank 0–100. */
+    inbound: integer("inbound"),
+    linkDepth: integer("link_depth"),
+    pagerank: real("pagerank"),
     leaseOwner: text("lease_owner"),
     leaseUntil: timestamp("lease_until", { withTimezone: true }),
     claimToken: text("claim_token"),
@@ -110,6 +117,62 @@ export const urlEdges = pgTable(
     nofollow: boolean("nofollow").notNull().default(false),
   },
   (t) => [index("url_edges_to_idx").on(t.crawlId, t.toUrl), index("url_edges_from_idx").on(t.crawlId, t.fromUrl)],
+);
+
+export const RESOURCE_KINDS = ["external_link", "image"] as const;
+export const RESOURCE_STATES = ["queued", "started", "done", "skipped", "interrupted"] as const;
+
+/**
+ * External links and images referenced by crawled pages, checked in the resource phase after the URL crawl
+ * (src/lib/crawl/v2/resources.ts). One row per crawl × kind × URL; planned rows over the budget are kept as skipped.
+ */
+export const resources = pgTable(
+  "resources",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    crawlId: uuid("crawl_id")
+      .notNull()
+      .references(() => crawls.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    url: text("url").notNull(),
+    host: text("host").notNull(),
+    /** queued → started (request about to be sent) → done; or skipped (skip_code); started left by a dead worker → interrupted. */
+    state: text("state").notNull().default("queued"),
+    skipCode: text("skip_code"),
+    /** HEAD, or GET when HEAD was refused; with a Range header for image dimensions. */
+    method: text("method"),
+    status: integer("status"),
+    contentType: text("content_type"),
+    /** Bytes from Content-Length, or the total in Content-Range; null when the server sent neither. */
+    bytes: bigint("bytes", { mode: "number" }),
+    width: integer("width"),
+    height: integer("height"),
+    error: jsonb("error"),
+    /** Distinct crawled pages that reference it, and the first few. */
+    referrers: integer("referrers").notNull().default(0),
+    samplePages: jsonb("sample_pages").notNull().default(sql`'[]'::jsonb`),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("resources_crawl_kind_url_uq").on(t.crawlId, t.kind, t.url),
+    index("resources_crawl_state_idx").on(t.crawlId, t.kind, t.state, t.id),
+    check("resources_kind_ck", sql`${t.kind} in (${list(RESOURCE_KINDS)})`),
+    check("resources_state_ck", sql`${t.state} in (${list(RESOURCE_STATES)})`),
+  ],
+);
+
+/** DOM-skeleton clusters of a crawl's HTML pages (site pass). */
+export const templates = pgTable(
+  "templates",
+  {
+    crawlId: uuid("crawl_id")
+      .notNull()
+      .references(() => crawls.id, { onDelete: "cascade" }),
+    fingerprint: text("fingerprint").notNull(),
+    pageCount: integer("page_count").notNull(),
+    sampleUrl: text("sample_url").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.crawlId, t.fingerprint] })],
 );
 
 /**

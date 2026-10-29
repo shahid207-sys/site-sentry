@@ -6,13 +6,15 @@
 // resumed crawl sends a queued probe and never re-sends a started one.
 import { sql } from "drizzle-orm";
 import type { Db } from "../../db/client";
-import { SafeFetchError, type FetchOptions, type FetchResult } from "../../fetch/safe-fetch";
+import { SafeFetchError, type FetchOptions, type FetchResult, type PeerCertReader } from "../../fetch/safe-fetch";
 import { isAllowed, parseRobots } from "../robots";
 import { imageSize } from "../../snapshot/image-size";
-import { MAX_OG_IMAGE_PROBES, resolveOgImage, type ProbeKind, type ProbeRecord } from "../../rules/probe-types";
+import { exposedFileMatch, MAX_OG_IMAGE_PROBES, resolveOgImage, type ProbeKind, type ProbeRecord } from "../../rules/probe-types";
 
 /** llms.txt kept for AIS-003, at most. */
 export const LLMS_TXT_KEEP_CHARS = 8 * 1024;
+/** Bytes read of /.env and /.git/HEAD to judge their signature (the body is then dropped). */
+export const EXPOSED_FILE_READ_BYTES = 64 * 1024;
 
 export interface ProbeContext {
   db: Db;
@@ -30,6 +32,11 @@ export interface ProbeContext {
    * `asOwnHost` (another host whose robots.txt redirects to the crawl's own, which then applies to it).
    */
   robotsBlocked(url: string, asOwnHost?: boolean): string | null;
+  /**
+   * Reads a host's certificate by TLS handshake (SSRF-guarded, nothing written); called inside a held slot. Without it
+   * (tests with a fake fetcher) no tls_cert probe is planned.
+   */
+  peerCert?: PeerCertReader;
   /** robots.txt user-agent token the crawl obeys. */
   robotsToken: string;
   /** Aborted when the crawl is stopping; remaining probes are left for the resumed run. */
@@ -72,6 +79,11 @@ async function plan(ctx: ProbeContext): Promise<Planned[]> {
   const icons = ((r.rows[0] as { icons: string[] | null } | undefined)?.icons ?? []).filter((i) => /^https?:/i.test(i));
   out.push({ kind: "favicon", url: icons[0] ?? new URL("/favicon.ico", ctx.origin).toString(), opts: { accept: "status", method: "GET" } });
   out.push({ kind: "llms_txt", url: new URL("/llms.txt", ctx.origin).toString(), opts: { accept: "robots" } });
+  // Exposed files (SEC-006): not followed, since a redirect is not the file.
+  const exposed = { accept: "robots" as const, followRedirects: false, maxBytes: EXPOSED_FILE_READ_BYTES };
+  out.push({ kind: "env_file", url: new URL("/.env", ctx.origin).toString(), opts: exposed });
+  out.push({ kind: "git_head", url: new URL("/.git/HEAD", ctx.origin).toString(), opts: exposed });
+  if (ctx.peerCert && new URL(ctx.origin).protocol === "https:") out.push({ kind: "tls_cert", url: home, opts: { accept: "status" } });
 
   // Distinct og:image URLs in crawl order, resolved exactly as META-017 resolves them.
   const imgs = await ctx.db.execute(sql`select u.normalised_url as url, s.facts->'og'->>'image' as image from page_snapshots s join crawl_urls u on u.id = s.url_id
@@ -141,6 +153,7 @@ async function sendProbe(ctx: ProbeContext, list: ProbeRecord[], byKey: Map<stri
     await ctx.release(slot);
     throw e;
   }
+  if (p.kind === "tls_cert") return sendCertProbe(ctx, list, rec, slot);
   try {
     const res = await ctx.request(p.url, p.opts, slot);
     rec.status = res.status;
@@ -148,6 +161,8 @@ async function sendProbe(ctx: ProbeContext, list: ProbeRecord[], byKey: Map<stri
     if (res.location) rec.location = res.location;
     if (p.kind === "llms_txt" && res.status === 200) rec.body = res.body.slice(0, LLMS_TXT_KEEP_CHARS);
     if (p.kind === "robots_txt" && res.status >= 200 && res.status < 300) rec.robotsBody = res.body.slice(0, ROBOTS_KEEP_CHARS);
+    // Only the match is kept; the body (possibly real secrets) is dropped here.
+    if (p.kind === "env_file" || p.kind === "git_head") rec.secret = res.status === 200 ? exposedFileMatch(p.kind, res.body, res.contentType) : null;
     if (p.kind === "og_image" && res.status === 200 && res.raw) {
       const size = imageSize(res.raw);
       if (size) Object.assign(rec, { width: size.width, height: size.height });
@@ -162,6 +177,24 @@ async function sendProbe(ctx: ProbeContext, list: ProbeRecord[], byKey: Map<stri
   }
   await save(ctx, list);
   ctx.log("crawl.probe", { crawlId: ctx.crawlId, kind: rec.kind, url: rec.url, status: rec.status, error: rec.error?.code });
+  return rec;
+}
+
+/** The tls_cert probe: a handshake inside the held slot, released here (no HTTP request, so no throttle outcome). */
+async function sendCertProbe(ctx: ProbeContext, list: ProbeRecord[], rec: ProbeRecord, slot: string): Promise<ProbeRecord | null> {
+  try {
+    rec.cert = await ctx.peerCert!(rec.url, { signal: ctx.signal });
+  } catch (e) {
+    if (ctx.signal.aborted) {
+      await ctx.release(slot);
+      await save(ctx, list);
+      return null;
+    }
+    rec.error = e instanceof SafeFetchError ? { code: e.code, message: e.message } : { code: "INTERNAL", message: String((e as Error)?.message ?? e) };
+  }
+  await ctx.release(slot);
+  await save(ctx, list);
+  ctx.log("crawl.probe", { crawlId: ctx.crawlId, kind: rec.kind, url: rec.url, validTo: rec.cert?.validTo, error: rec.error?.code });
   return rec;
 }
 

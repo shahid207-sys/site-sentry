@@ -6,7 +6,7 @@ import { generate } from "selfsigned";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startLocalServer } from "@/test/local-server";
 import { isBlockedIp } from "./ip-guard";
-import { classifyTransportError, createSafeFetch, SafeFetchError } from "./safe-fetch";
+import { classifyTransportError, createPeerCertReader, createSafeFetch, SafeFetchError } from "./safe-fetch";
 
 let tls: Server;
 let port = 0;
@@ -40,6 +40,35 @@ describe("fetch limits", () => {
     expect(await trusted(`https://tls.test:${port}/`, { accept: "html" })).toMatchObject({ status: 200, body: "<title>secret</title>" });
     // Same host and address, no ca: a separate agent, so the trusted connection is not reused.
     await expect(createSafeFetch(policy)(`https://tls.test:${port}/`, { accept: "html" })).rejects.toMatchObject({ code: "TLS" });
+  });
+
+  it("reads an expired certificate by handshake alone, with the fetch's SSRF guards (SEC-003)", async () => {
+    const day = 86_400_000;
+    const pems = await generate([{ name: "commonName", value: "old.test" }], {
+      keyType: "ec",
+      algorithm: "sha256",
+      notBeforeDate: new Date(Date.now() - 30 * day),
+      notAfterDate: new Date(Date.now() - day),
+      extensions: [{ name: "subjectAltName", altNames: [{ type: 2, value: "old.test" }] }],
+    });
+    let requests = 0;
+    const old = createServer({ key: pems.private, cert: pems.cert }, (_req, res) => (requests++, res.end()));
+    await new Promise<void>((r) => old.listen(0, "127.0.0.1", r));
+    const oldPort = (old.address() as AddressInfo).port;
+    try {
+      const policy = { resolve: async () => ["127.0.0.1"], isBlocked: (ip: string) => ip !== "127.0.0.1" && isBlockedIp(ip), allowedPorts: new Set([String(oldPort)]), allowLocalNames: false };
+      const c = await createPeerCertReader({ ...policy, ca: [pems.cert] })(`https://old.test:${oldPort}/`);
+      expect(c).toMatchObject({ subject: "old.test", altNames: ["old.test"], authorized: false, authorizationError: "CERT_HAS_EXPIRED" });
+      expect(Date.parse(c.validTo)).toBeLessThan(Date.now());
+      expect(requests).toBe(0); // no HTTP request is ever written on the socket
+
+      // The same guards as a fetch: production policy refuses loopback, a private DNS answer and plain http.
+      await expect(createPeerCertReader()(`https://127.0.0.1:${oldPort}/`)).rejects.toMatchObject({ code: "BLOCKED_HOST" });
+      await expect(createPeerCertReader({ ...policy, resolve: async () => ["10.0.0.5"] })(`https://old.test:${oldPort}/`)).rejects.toMatchObject({ code: "BLOCKED_HOST" });
+      await expect(createPeerCertReader(policy)(`http://old.test:${oldPort}/`)).rejects.toMatchObject({ code: "INVALID_URL" });
+    } finally {
+      await new Promise<void>((r) => old.close(() => r()));
+    }
   });
 
   it("classifies undici timeouts and TLS codes found anywhere in the cause chain", () => {

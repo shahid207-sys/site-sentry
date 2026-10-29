@@ -2,7 +2,7 @@ import type { LookupAddress, LookupOptions } from "node:dns";
 import { lookup as dnsLookupAsync } from "node:dns/promises";
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
-import { rootCertificates } from "node:tls";
+import { connect as tlsConnect, rootCertificates, type PeerCertificate } from "node:tls";
 import { gunzipSync } from "node:zlib";
 import type { ReadableStream } from "node:stream/web";
 import { Agent, fetch } from "undici";
@@ -235,6 +235,8 @@ export interface FetchResult {
   location?: string;
   /** `image` fetches only: the first bytes of the body, undecoded. */
   raw?: Buffer;
+  /** The method of the request that produced this response: GET when a refused HEAD was retried. */
+  method?: "GET" | "HEAD";
 }
 
 /**
@@ -393,6 +395,7 @@ async function fetchWithPolicy(input: string, opts: FetchOptions, policy: FetchP
         contentType,
         contentTypeAccepted: accepted,
         headers: pickHeaders(res.headers),
+        method: method as "GET" | "HEAD",
         elapsedMs: Date.now() - started,
       };
       if (!ok || !accepted || opts.accept === "status") {
@@ -424,7 +427,22 @@ async function fetchWithPolicy(input: string, opts: FetchOptions, policy: FetchP
 
 export const liveFetcher: Fetcher = safeFetch;
 
-const RULE_HEADERS = ["x-robots-tag", "link", "content-type", "content-language", "retry-after"];
+/** Response headers kept on every result (and stored on snapshots) because a rule or the crawler reads them. */
+const RULE_HEADERS = [
+  "x-robots-tag",
+  "link",
+  "content-type",
+  "content-language",
+  "retry-after",
+  // Security rules (SEC-004, SEC-005).
+  "strict-transport-security",
+  "x-content-type-options",
+  "x-frame-options",
+  "content-security-policy",
+  // Image and resource sizes (IMG-005, IMG-006): Content-Range carries the total on a ranged GET.
+  "content-length",
+  "content-range",
+];
 
 function pickHeaders(h: { get(name: string): string | null }): Record<string, string> {
   const out: Record<string, string> = {};
@@ -488,4 +506,86 @@ function decode(buffer: Uint8Array, contentType: string): string {
   } catch {
     return new TextDecoder("utf-8").decode(buffer);
   }
+}
+
+/** The certificate a host presents, read by a TLS handshake alone (SEC-003). */
+export interface PeerCertificateInfo {
+  subject: string | null;
+  issuer: string | null;
+  /** ISO timestamps. */
+  validFrom: string;
+  validTo: string;
+  /** DNS names in subjectAltName. */
+  altNames: string[];
+  /** True when the chain verifies against the trusted roots for this hostname. */
+  authorized: boolean;
+  /** OpenSSL's reason when `authorized` is false (e.g. CERT_HAS_EXPIRED). */
+  authorizationError: string | null;
+}
+
+export type PeerCertReader = (url: string, opts?: { signal?: AbortSignal; timeoutMs?: number }) => Promise<PeerCertificateInfo>;
+
+const certName = (x: PeerCertificate["subject"] | undefined) => {
+  const v = x ? (x.CN ?? x.O ?? null) : null;
+  return Array.isArray(v) ? v.join(", ") : v;
+};
+
+/**
+ * Read an https URL's server certificate with the same SSRF guards as a fetch: the URL is validated, the host resolved
+ * once and every address checked, and the socket connects to that pinned address with the hostname as SNI. The
+ * handshake does not reject an invalid chain, so an expired or mismatched certificate can still be read and reported;
+ * nothing is written on the socket (no HTTP request), and it is closed right after the handshake.
+ */
+export function createPeerCertReader(policy: FetchPolicy = DEFAULT_POLICY): PeerCertReader {
+  return async (input, opts = {}) => {
+    const url = validateTargetUrl(input, policy);
+    if (url.protocol !== "https:") throw new SafeFetchError("INVALID_URL", "Only https:// URLs have a certificate to read.");
+    const ips = await resolvePinned(url, policy);
+    const host = url.hostname.replace(/^\[|\]$/g, "");
+    const timeoutMs = opts.timeoutMs ?? CONNECT_TIMEOUT_MS;
+    for (let i = 0; ; i++) {
+      try {
+        return await handshake(ips[i], Number(url.port || 443), isIP(host) ? undefined : host, policy.ca, timeoutMs, opts.signal);
+      } catch (e) {
+        if (i + 1 >= ips.length || !isConnectError(e) || opts.signal?.aborted) {
+          const known = findSafeFetchError(e);
+          if (known) throw known;
+          if ((e as { code?: string })?.code === "ETIMEDOUT") throw new SafeFetchError("TIMEOUT", `No TLS handshake within ${timeoutMs / 1000}s.`);
+          throw new SafeFetchError("NETWORK", `Could not complete a TLS handshake: ${(e as Error)?.message ?? "network error"}.`);
+        }
+      }
+    }
+  };
+}
+
+function handshake(ip: string, port: number, servername: string | undefined, ca: string[] | undefined, timeoutMs: number, signal?: AbortSignal): Promise<PeerCertificateInfo> {
+  return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();
+    const socket = tlsConnect({ host: ip, port, servername, rejectUnauthorized: false, ALPNProtocols: ["http/1.1"], ...(ca?.length ? { ca: [...rootCertificates, ...ca] } : {}) });
+    const finish = (err: unknown, value?: PeerCertificateInfo) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      socket.destroy();
+      if (err) reject(err);
+      else resolve(value!);
+    };
+    const onAbort = () => finish(new SafeFetchError("NETWORK", "The request was cancelled."));
+    const timer = setTimeout(() => finish(Object.assign(new Error("handshake timed out"), { code: "ETIMEDOUT" })), timeoutMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    socket.once("error", (e) => finish(e));
+    socket.once("secureConnect", () => {
+      const c = socket.getPeerCertificate();
+      if (!c || !c.valid_to) return finish(new SafeFetchError("TLS", "The server presented no certificate."));
+      const err = socket.authorizationError as unknown;
+      finish(null, {
+        subject: certName(c.subject),
+        issuer: certName(c.issuer),
+        validFrom: new Date(c.valid_from).toISOString(),
+        validTo: new Date(c.valid_to).toISOString(),
+        altNames: (c.subjectaltname ?? "").split(/,\s*/).filter((x) => x.startsWith("DNS:")).map((x) => x.slice(4)),
+        authorized: socket.authorized,
+        authorizationError: err ? String((err as { code?: string }).code ?? err) : null,
+      });
+    });
+  });
 }

@@ -2,7 +2,7 @@
 // for outlinks, so each page is parsed once. Main-content text reuses the legacy content rule's extraction.
 import { createHash } from "node:crypto";
 import { detect } from "tinyld";
-import { blockText, mainContentText } from "../audit/rules/content";
+import { blockText, BOILERPLATE, mainContentSource, mainContentText } from "../audit/rules/content";
 import type { Doc } from "../audit/parse";
 import type { Outlink } from "../crawl/v2/discovery";
 import { simhash, textHash, words } from "./text";
@@ -161,6 +161,13 @@ function factsOf($: Doc, html: string, base: string, headers: Record<string, str
     if (r) icons.push(r);
   });
 
+  const videos: NonNullable<PageFacts["videos"]> = [];
+  $("video").each((_, el) => {
+    const n = $(el);
+    const src = n.attr("src") ?? n.children("source[src]").first().attr("src");
+    videos.push({ src: src ? resolve(src, base) : null, poster: n.attr("poster") ? resolve(n.attr("poster"), base) : null });
+  });
+
   const body = $("body").first().clone();
   body.find("script, style, noscript, template, svg").remove();
 
@@ -174,6 +181,7 @@ function factsOf($: Doc, html: string, base: string, headers: Record<string, str
     metaRefresh,
     jsRedirect,
     renderResources: [...new Set(renderResources)],
+    videos: videos.slice(0, 100),
     bodyTextChars: blockText(body).length,
     mainTextChars,
     htmlBytes,
@@ -256,12 +264,26 @@ export function extractHtml({ $, html, pageUrl, headers, bytes, outlinks }: Extr
 
   const main = mainContentText($).text.slice(0, SNAPSHOT_CAPS.mainTextChars);
 
+  // An image is in the main content when it sits inside the element mainContentText reads and outside boilerplate.
+  const source = mainContentSource($);
+  const mainRoot = $(source === "main" ? "main, [role=main]" : source).first()[0];
   const images: SnapshotImage[] = [];
   $("img").each((_, el) => {
     if (images.length >= SNAPSHOT_CAPS.images) return false;
     const n = $(el);
     const src = n.attr("src") ?? "";
-    images.push({ src, resolved: src ? resolve(src, base) : null, alt: n.attr("alt") ?? null, width: n.attr("width") ?? null, height: n.attr("height") ?? null, loading: n.attr("loading") ?? null, srcset: n.attr("srcset") ?? null });
+    images.push({
+      src,
+      resolved: src ? resolve(src, base) : null,
+      alt: n.attr("alt") ?? null,
+      width: n.attr("width") ?? null,
+      height: n.attr("height") ?? null,
+      loading: n.attr("loading") ?? null,
+      srcset: n.attr("srcset") ?? null,
+      linked: n.closest("a[href]").length > 0,
+      inMain: !!mainRoot && n.parents().toArray().includes(mainRoot) && !n.closest(BOILERPLATE).length,
+      inPicture: n.parent().is("picture") && n.parent().children("source[srcset]").length > 0,
+    });
   });
 
   const jsonLd: JsonLdBlock[] = [];
@@ -285,7 +307,7 @@ export function extractHtml({ $, html, pageUrl, headers, bytes, outlinks }: Extr
     mainText: main,
     wordCount: words(main).length,
     language: language($("html").attr("lang")?.trim() ?? null, main),
-    links: outlinks.map((l) => ({ href: l.url, original: l.original, via: l.via, anchor: l.anchor, rel: l.rel, location: l.location, nofollow: l.nofollow })),
+    links: outlinks.map((l) => ({ href: l.url, original: l.original, via: l.via, anchor: l.anchor, rel: l.rel, location: l.location, nofollow: l.nofollow, ...(l.hreflang ? { hreflang: l.hreflang } : {}) })),
     images,
     jsonLd,
     textHash: textHash(main),
