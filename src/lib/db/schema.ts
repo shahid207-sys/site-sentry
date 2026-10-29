@@ -345,6 +345,30 @@ export const issueStates = pgTable(
   ],
 );
 
+/**
+ * Read-only share links to an audit's report (src/lib/report/shares.ts). The token is shown once and stored only
+ * as its SHA-256; the optional password only as a scrypt hash.
+ */
+export const reportShares = pgTable(
+  "report_shares",
+  {
+    id: uuid("id").primaryKey(),
+    tokenHash: text("token_hash").notNull(),
+    workspace: text("workspace").notNull(),
+    auditId: text("audit_id").notNull(),
+    crawlId: uuid("crawl_id")
+      .notNull()
+      .references(() => crawls.id, { onDelete: "cascade" }),
+    /** scrypt$<salt b64url>$<hash b64url>; null: no password. */
+    passwordHash: text("password_hash"),
+    /** Null: never expires. */
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("report_shares_token_idx").on(t.tokenHash), index("report_shares_audit_idx").on(t.workspace, t.auditId)],
+);
+
 /** One per crawl and rule: the issue group, with the priority inputs (docs/HEALTH-SCORE.md) and the score. */
 export const issueGroups = pgTable(
   "issue_groups",
