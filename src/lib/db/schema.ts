@@ -260,9 +260,65 @@ export const findings = pgTable(
     /** issue | inconclusive (the rule could not judge: e.g. its probe was skipped by robots.txt). */
     outcome: text("outcome").notNull().default("issue"),
     evidence: jsonb("evidence").notNull(),
+    /** hash(rule id, normalised URL, evidence key) (src/lib/rules/fingerprint.ts); null on findings stored before Phase 3. */
+    fingerprint: text("fingerprint"),
+    evidenceKey: text("evidence_key"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("findings_crawl_rule_idx").on(t.crawlId, t.ruleId), index("findings_crawl_url_idx").on(t.crawlId, t.url)],
+  (t) => [index("findings_crawl_rule_idx").on(t.crawlId, t.ruleId), index("findings_crawl_url_idx").on(t.crawlId, t.url), index("findings_crawl_fp_idx").on(t.crawlId, t.fingerprint)],
+);
+
+/**
+ * What a crawl observed, one row per rule × URL × evidence key: a finding, or for a rule that reports per template
+ * group, each page of the group. Issue groups, reach and the cross-audit states are computed from these rows.
+ */
+export const findingOccurrences = pgTable(
+  "finding_occurrences",
+  {
+    crawlId: uuid("crawl_id")
+      .notNull()
+      .references(() => crawls.id, { onDelete: "cascade" }),
+    fingerprint: text("fingerprint").notNull(),
+    ruleId: text("rule_id").notNull(),
+    url: text("url").notNull(),
+    evidenceKey: text("evidence_key").notNull(),
+    /** The page's template (crawl_urls.template_id) when the subject is a crawled page. */
+    templateId: text("template_id"),
+    /** issue | inconclusive */
+    outcome: text("outcome").notNull(),
+    /**
+     * Indexable pages this occurrence counts toward reach: 1 or 0 for a page subject (indexable or not), the
+     * evidence's page count for a resource or a template-wide finding, null for a site-wide subject (robots.txt).
+     */
+    reachPages: integer("reach_pages"),
+  },
+  (t) => [primaryKey({ columns: [t.crawlId, t.fingerprint] }), index("finding_occurrences_rule_idx").on(t.crawlId, t.ruleId)],
+);
+
+/** One per crawl and rule: the issue group, with the priority inputs (docs/HEALTH-SCORE.md) and the score. */
+export const issueGroups = pgTable(
+  "issue_groups",
+  {
+    crawlId: uuid("crawl_id")
+      .notNull()
+      .references(() => crawls.id, { onDelete: "cascade" }),
+    ruleId: text("rule_id").notNull(),
+    category: text("category").notNull(),
+    impact: smallint("impact").notNull(),
+    confidence: text("confidence").notNull(),
+    confidenceWeight: real("confidence_weight").notNull(),
+    /** Reach inputs: affected indexable pages over the crawl's indexable pages, and the log-scaled share. */
+    affectedPages: integer("affected_pages").notNull(),
+    indexablePages: integer("indexable_pages").notNull(),
+    reach: real("reach").notNull(),
+    score: real("score").notNull(),
+    /** critical | high | medium | low | info */
+    priority: text("priority").notNull(),
+    /** Distinct subject URLs with an issue, and with an inconclusive result. */
+    affectedUrls: integer("affected_urls").notNull(),
+    inconclusiveUrls: integer("inconclusive_urls").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.crawlId, t.ruleId] })],
 );
 
 /** Per rule, per analysis run: did it run, on how many inputs, how many findings, how long. */

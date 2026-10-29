@@ -15,6 +15,8 @@ import { NeedsConfig, type CrawlView, type Finding, type Hreflang, type PageRule
 import { bfsDepth, pageRank } from "./graph";
 import type { ProbeRecord } from "./probe-types";
 import { clusterTemplates, type ShapedPage } from "../snapshot/template";
+import { insertOccurrences, occurrenceOf, reachBasis, writeIssueGroups, type Occurrence } from "../results/occurrences";
+import { fingerprintOf } from "./fingerprint";
 import { TemplateGroups } from "./group";
 import { RULES } from "./registry";
 
@@ -369,10 +371,13 @@ class Stats {
   }
 }
 
-async function insertFindings(tx: Exec, crawlId: string, list: Finding[]): Promise<void> {
+async function insertFindings(tx: Exec, crawlId: string, list: Finding[], byId: Map<string, Rule>): Promise<void> {
   for (let i = 0; i < list.length; i += 500) {
     await tx.insert(findingsTable).values(
-      list.slice(i, i + 500).map((f) => ({ crawlId, ruleId: f.ruleId, ruleVersion: f.ruleVersion, url: f.url, confidence: f.confidence, outcome: f.outcome, message: f.message, evidence: f.evidence })),
+      list.slice(i, i + 500).map((f) => {
+        const { fingerprint, key } = fingerprintOf(byId.get(f.ruleId), f);
+        return { crawlId, ruleId: f.ruleId, ruleVersion: f.ruleVersion, url: f.url, confidence: f.confidence, outcome: f.outcome, message: f.message, evidence: f.evidence, fingerprint, evidenceKey: key };
+      }),
     );
   }
 }
@@ -395,6 +400,8 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
       await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`analysis:${crawlId}`}, 0))`);
       await tx.execute(sql`delete from findings where crawl_id = ${crawlId}::uuid`);
       await tx.execute(sql`delete from rule_runs where crawl_id = ${crawlId}::uuid`);
+      await tx.execute(sql`delete from finding_occurrences where crawl_id = ${crawlId}::uuid`);
+      await tx.execute(sql`delete from issue_groups where crawl_id = ${crawlId}::uuid`);
       for (const r of rules) {
         await tx.execute(sql`insert into rules (id, version, category, scope, confidence, impact, updated_at) values (${r.id}, ${r.version}, ${r.category}, ${r.scope}, ${r.confidence}, ${r.impact}, now())
           on conflict (id) do update set version = excluded.version, category = excluded.category, scope = excluded.scope, confidence = excluded.confidence, impact = excluded.impact, updated_at = now()`);
@@ -403,6 +410,9 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
       await templates(tx, crawlId, batch);
       const crawl = crawlView(row, { complete: await crawlComplete(tx, crawlId, row.status), resources: await loadResources(tx, crawlId, batch) });
       const site = await loadSiteView(tx, crawlId, batch);
+      const basis = reachBasis(site);
+      const byId = new Map(rules.map((r) => [r.id, r] as [string, Rule]));
+      let duplicates = 0;
 
       // Redirect chains are a snapshot field, filled here from the redirect rows before rules read them.
       const chains = [...redirectChains(site)].map(([urlId, chain]) => ({ url_id: urlId, chain }));
@@ -425,12 +435,15 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
         const r = await tx.execute(sql`select s.*, coalesce(u.template_id, s.template_fingerprint) as template_fingerprint, u.normalised_url, u.state, u.depth, u.discovered_via from page_snapshots s join crawl_urls u on u.id = s.url_id
           where s.crawl_id = ${crawlId}::uuid and s.id > ${after} order by s.id limit ${batch}`);
         const found: Finding[] = [];
+        // Every page's own findings, grouped rules included: issue groups, reach and states count pages.
+        const occurrences: Occurrence[] = [];
         for (const x of r.rows as Record<string, unknown>[]) {
           const page = pageView(x);
           pages++;
           for (const rule of pageRules) {
             const own: Finding[] = [];
             stats.run(rule, { page, crawl, site }, own);
+            for (const f of own) occurrences.push(occurrenceOf(rule, f, basis));
             if (rule.groupByTemplate) {
               const ungrouped = grouped.add(own, page.templateFingerprint);
               stats.adjust(rule.id, ungrouped.length - own.length); // grouped issues are counted once per group, below
@@ -444,19 +457,29 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
             pageIssues.get(rule.id)!.set(page.templateFingerprint, t);
           }
         }
-        await insertFindings(tx, crawlId, found);
+        await insertFindings(tx, crawlId, found, byId);
+        duplicates += await insertOccurrences(tx, crawlId, occurrences, batch);
         total += found.length;
         if (r.rows.length < batch) break;
         after = Number((r.rows[r.rows.length - 1] as { id: number }).id);
       }
       const siteFound: Finding[] = grouped.findings();
+      const groupedCount = siteFound.length; // their occurrences are the pages', stored above
       for (const f of siteFound) stats.adjust(f.ruleId, 1);
       for (const rule of siteRules) stats.run(rule, { site, crawl, pageIssues }, siteFound);
       for (const rule of resourceRules) {
         for (const resource of (rule.kind === "image" ? crawl.resources.images : crawl.resources.links).values()) stats.run(rule, { resource, crawl }, siteFound);
       }
-      await insertFindings(tx, crawlId, siteFound);
+      await insertFindings(tx, crawlId, siteFound, byId);
+      duplicates += await insertOccurrences(
+        tx,
+        crawlId,
+        siteFound.slice(groupedCount).map((f) => occurrenceOf(byId.get(f.ruleId), f, basis)),
+        batch,
+      );
       total += siteFound.length;
+      if (duplicates) log("analysis.duplicate_fingerprints", { crawlId, duplicates });
+      const issueGroups = await writeIssueGroups(tx, crawlId, rules, basis.indexable);
 
       const list = stats.all();
       for (const s of list) {
@@ -466,7 +489,7 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
       // fetched → analysed: every snapshot was read by the page rules above.
       await tx.execute(sql`update crawl_urls set state = 'analysed', updated_at = now() where crawl_id = ${crawlId}::uuid and state = 'fetched'`);
       const msPerPage = pages ? Math.round((list.reduce((n, s) => n + s.totalMs, 0) / pages) * 1000) / 1000 : 0;
-      await tx.execute(sql`update crawls set analysis = ${JSON.stringify({ status: "completed", startedAt, finishedAt: new Date().toISOString(), pages, findings: total, msPerPage })}::jsonb where id = ${crawlId}::uuid`);
+      await tx.execute(sql`update crawls set analysis = ${JSON.stringify({ status: "completed", startedAt, finishedAt: new Date().toISOString(), pages, findings: total, msPerPage, issueGroups, duplicateFingerprints: duplicates })}::jsonb where id = ${crawlId}::uuid`);
       return { outcome: "analysed" as const, pages, findings: total, stats: list, msPerPage };
     });
     log("analysis.completed", { crawlId, pages: result.pages, findings: result.findings, msPerPage: result.msPerPage });

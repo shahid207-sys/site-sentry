@@ -168,6 +168,11 @@ interface RuleBase<C> {
    * per page, for defects a template repeats on every page it builds (group.ts).
    */
   groupByTemplate?: boolean;
+  /**
+   * What tells two findings of this rule about the same URL apart, for the finding's fingerprint (fingerprint.ts).
+   * Default: evidence.groupKey, else "" (the rule reports at most one finding per URL). Never counts or samples.
+   */
+  evidenceKey?(f: Finding): string;
   evaluate(ctx: C): Finding[];
   explain: { why: string; fix: string; acceptance: string; docs?: string };
 }

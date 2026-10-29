@@ -71,6 +71,13 @@
       "when": 1793293699612,
       "tag": "0009_app_store",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793294394876,
+      "tag": "0010_issue_groups",
+      "breakpoints": true
     }
   ]
 }

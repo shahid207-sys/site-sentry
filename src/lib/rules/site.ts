@@ -19,6 +19,8 @@ const SITE001 = site({
   confidence: "verified",
   impact: 3,
   needs: ["graph"],
+  // One finding per grouped rule and template; the template id comes from clustering and may change between crawls.
+  evidenceKey: (f) => String(f.evidence.ruleId),
   evaluate({ site: s, pageIssues }) {
     const groups = new Map<string, number>();
     for (const u of s.urls) if (u.page?.template) groups.set(u.page.template, (groups.get(u.page.template) ?? 0) + 1);

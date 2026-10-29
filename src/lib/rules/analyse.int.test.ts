@@ -93,6 +93,24 @@ describe("analyseCrawl", () => {
     const crawl = (await db.execute(sql`select analysis from crawls where id = ${c}::uuid`)).rows[0] as { analysis: Record<string, unknown> };
     expect(crawl.analysis).toMatchObject({ status: "completed", pages: 5, findings: f.length });
     expect(typeof crawl.analysis.msPerPage).toBe("number");
+    expect(crawl.analysis).toMatchObject({ duplicateFingerprints: 0 });
+
+    // Every finding has a fingerprint and an occurrence; one issue group per rule with an occurrence, inputs stored.
+    const unfp = (await db.execute(sql`select count(*)::int as n from findings f where crawl_id = ${c}::uuid and (fingerprint is null
+      or not exists (select 1 from finding_occurrences o where o.crawl_id = f.crawl_id and o.fingerprint = f.fingerprint))`)).rows[0] as { n: number };
+    expect(unfp.n).toBe(0);
+    const groups = (await db.execute(sql`select * from issue_groups where crawl_id = ${c}::uuid order by rule_id`)).rows as Record<string, unknown>[];
+    expect(groups.map((g) => g.rule_id)).toEqual([...new Set(f.map((x) => x.rule_id))].sort());
+    expect(crawl.analysis.issueGroups).toBe(groups.length);
+    // /, /a, /new are indexable (/b noindex, /missing 404). CNT-005 (thin) is on all three: reach ln 4 / ln 4 = 1.
+    // IDX-001 is on /missing, a URL that is not a page: it counts once, reach ln 2 / ln 4 = 0.5.
+    const at = (id: string) => groups.find((g) => g.rule_id === id)!;
+    const rule = RULES.find((r) => r.id === "CNT-005")!;
+    expect(f.filter((x) => x.rule_id === "CNT-005").map((x) => new URL(x.url).pathname).sort()).toEqual(["/", "/a", "/new"]);
+    expect(at("CNT-005")).toMatchObject({ indexable_pages: 3, affected_pages: 3, affected_urls: 3, impact: rule.impact, confidence: rule.confidence, reach: 1 });
+    expect(at("CNT-005").score).toBeCloseTo(rule.impact * { verified: 1, heuristic: 0.6, advisory: 0.3 }[rule.confidence], 4);
+    expect(at("IDX-001")).toMatchObject({ affected_pages: 1, affected_urls: 1 });
+    expect(at("IDX-001").reach).toBeCloseTo(0.5, 4);
   });
 
   it("is idempotent and gives the same result whatever the batch size", async () => {
