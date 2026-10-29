@@ -6,7 +6,7 @@ import type { IssueState } from "../db/schema";
 import type { Priority } from "./priority";
 import { ANSWERED, crawlComplete, crawlCoverage, type Coverage } from "./coverage";
 import type { Health } from "./health";
-import { OPEN_STATES, projectKey, rechecked, type StateCounts } from "./states";
+import { OPEN_STATES, projectKey, rechecked, wideAudits, type StateCounts } from "./states";
 
 type Exec = Pick<Db, "execute">;
 
@@ -185,13 +185,14 @@ export async function compareCrawls(db: Exec, a: string, b: string): Promise<Com
   if (!x.analysed || !y.analysed) throw new ResultsError("INVALID", "Both audits must be analysed before they can be compared.");
   const [base, head] = x.createdAt <= y.createdAt ? [x, y] : [y, x];
   const complete = await crawlComplete(db, head.crawlId, head.status);
+  const wide = complete ? await wideAudits(db, head.crawlId) : [];
   const r = await db.execute(sql`with b as (select fingerprint, rule_id, url, page_subject from issue_states where crawl_id = ${base.crawlId}::uuid and state in ('new', 'persistent', 'regressed', 'not_rechecked')),
       h as (select fingerprint, rule_id, outcome, first_seen_at from issue_states where crawl_id = ${head.crawlId}::uuid and outcome is not null),
       f as (select coalesce(b.rule_id, h.rule_id) as rule_id,
         case when h.outcome = 'inconclusive' then 'inconclusive'
              when b.fingerprint is not null and h.fingerprint is not null then 'persistent'
              when b.fingerprint is null then case when h.first_seen_at < ${base.createdAt}::timestamptz then 'regressed' else 'new' end
-             when ${rechecked(head.crawlId, complete, "b")} then 'resolved'
+             when ${rechecked(head.crawlId, complete, wide, "b")} then 'resolved'
              else 'not_rechecked' end as change
         from b full join h on h.fingerprint = b.fingerprint)
     select rule_id, change, count(*)::int as n from f group by rule_id, change order by rule_id collate "C"`);

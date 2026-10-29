@@ -126,9 +126,9 @@ describe("issue states across audits", () => {
     expect(await Promise.all([a2, a3, a4].map(allStates))).toEqual(before);
   });
 
-  it("a complete but narrower crawl never resolves a site-rule finding about a page it did not fetch", { timeout: 60_000 }, async () => {
+  it("a site-rule finding resolves only in a complete crawl that saw at least what the observing audit saw, and answered its URL", { timeout: 90_000 }, async () => {
     const project = `p-${randomUUID()}`;
-    const titled = (t: string) => send(`<!doctype html><html lang="en"><head><title>${t}</title></head><body><main><h1>${t}</h1><p>${words(THIN_WORDS + 50)} ${t}</p></main></body></html>`, "text/html");
+    const titled = (t: string, path: string) => send(`<!doctype html><html lang="en"><head><title>${t}</title></head><body><main><h1>${t}</h1><p>${words(THIN_WORDS + 50)} ${path}</p></main></body></html>`, "text/html");
     const run = async (robots: string, config: Record<string, unknown> = {}) => {
       srv.routes.set("/robots.txt", send(robots, "text/plain"));
       const c = await newCrawl(db, { siteOrigin: srv.origin, siteId: project, status: "queued", maxDepth: 5, config });
@@ -136,28 +136,37 @@ describe("issue states across audits", () => {
       expect((await analyseCrawl(db, c)).outcome).toBe("analysed");
       return c;
     };
+    const NAMES_SITEMAP = `User-agent: *\nAllow: /\nSitemap: ${srv.origin}/sitemap.xml\n`;
     srv.routes.set("/", send(`<!doctype html><html lang="en"><head><title>Home</title></head><body><main><h1>Home</h1><p>${words(THIN_WORDS + 50)}</p><a href="/a">a</a><a href="/b">b</a></main></body></html>`, "text/html"));
-    srv.routes.set("/a", titled("Same"));
-    srv.routes.set("/b", titled("Same"));
+    srv.routes.set("/a", titled("Same", "/a"));
+    srv.routes.set("/b", titled("Same", "/b"));
     srv.routes.set("/sitemap.xml", send(`<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${srv.origin}/</loc></url></urlset>`, "application/xml"));
     // Audit 1: /a and /b share a title (META-004, a site rule, about each page); robots.txt names no sitemap (IDX-027, about robots.txt).
     const a1 = await run("User-agent: *\nAllow: /\n");
-    const fpOf = async (path: string) => ((await db.execute(sql`select fingerprint from issue_states where crawl_id = ${a1}::uuid and rule_id = 'META-004' and url = ${`${srv.origin}${path}`}`)).rows[0] as { fingerprint: string }).fingerprint;
-    const fpA = await fpOf("/a");
-    const fpB = await fpOf("/b");
-    const robots = (await db.execute(sql`select fingerprint from issue_states where crawl_id = ${a1}::uuid and rule_id = 'IDX-027'`)).rows as { fingerprint: string }[];
-    expect(robots).toHaveLength(1);
+    const fpOf = async (rule: string, path: string) => ((await db.execute(sql`select fingerprint from issue_states where crawl_id = ${a1}::uuid and rule_id = ${rule} and url = ${`${srv.origin}${path}`}`)).rows[0] as { fingerprint: string }).fingerprint;
+    const fpA = await fpOf("META-004", "/a");
+    const fpB = await fpOf("META-004", "/b");
+    const fpRobots = await fpOf("IDX-027", "/robots.txt");
     const st = async (c: string, fp: string) => ((await db.execute(sql`select state, page_subject from issue_states where crawl_id = ${c}::uuid and fingerprint = ${fp}`)).rows[0] as { state: string; page_subject: boolean } | undefined);
     expect(await st(a1, fpA)).toEqual({ state: "new", page_subject: true });
-    expect(await st(a1, robots[0].fingerprint)).toEqual({ state: "new", page_subject: false });
+    expect(await st(a1, fpRobots)).toEqual({ state: "new", page_subject: false });
 
-    // Audit 2 excludes /b by scope (nothing is left unfetched, so the crawl is complete) and robots.txt now names the sitemap.
-    const a2 = await run(`User-agent: *\nAllow: /\nSitemap: ${srv.origin}/sitemap.xml\n`, { scope: { include: [], exclude: ["/b"] } });
+    // Audit 2 excludes /b by scope: nothing is left unfetched (complete), but it saw less than audit 1. /a was fetched and
+    // no longer has a duplicate in this crawl, yet /b still carries the same title: nothing is fixed. robots.txt now names
+    // the sitemap, but a narrower crawl re-checks no site-rule finding, site-wide subjects included.
+    const a2 = await run(NAMES_SITEMAP, { scope: { include: [], exclude: ["/b"] } });
     expect((await db.execute(sql`select state from crawl_urls where crawl_id = ${a2}::uuid and normalised_url = ${`${srv.origin}/b`}`)).rows[0]).toEqual({ state: "excluded_by_rule" });
-    expect(await st(a2, fpA)).toMatchObject({ state: "resolved" }); // fetched, no duplicate left in the crawl
-    expect(await st(a2, fpB)).toMatchObject({ state: "not_rechecked", page_subject: true }); // never fetched: never resolved
-    expect(await st(a2, robots[0].fingerprint)).toMatchObject({ state: "resolved", page_subject: false }); // a site-wide subject
-    const cmp = await compareCrawls(db, a1, a2);
-    expect(cmp.groups.find((g) => g.ruleId === "META-004")?.counts).toMatchObject({ resolved: 1, not_rechecked: 1 });
+    expect(await st(a2, fpA)).toMatchObject({ state: "not_rechecked" });
+    expect(await st(a2, fpB)).toMatchObject({ state: "not_rechecked", page_subject: true });
+    expect(await st(a2, fpRobots)).toMatchObject({ state: "not_rechecked", page_subject: false });
+    expect((await compareCrawls(db, a1, a2)).groups.find((g) => g.ruleId === "META-004")?.counts).toMatchObject({ resolved: 0, not_rechecked: 2 });
+
+    // Audit 3 crawls the whole site again with /b retitled: every finding is fixed and re-checked.
+    srv.routes.set("/b", titled("Other", "/b"));
+    const a3 = await run(NAMES_SITEMAP);
+    expect(await st(a3, fpA)).toMatchObject({ state: "resolved" });
+    expect(await st(a3, fpB)).toMatchObject({ state: "resolved" });
+    expect(await st(a3, fpRobots)).toMatchObject({ state: "resolved" });
+    expect((await compareCrawls(db, a1, a3)).groups.find((g) => g.ruleId === "META-004")?.counts).toMatchObject({ resolved: 2, not_rechecked: 0 });
   });
 });

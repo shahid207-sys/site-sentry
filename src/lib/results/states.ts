@@ -19,13 +19,14 @@ import { sql } from "drizzle-orm";
 import type { VerifyConfig } from "../crawl/v2/runner";
 import type { Db } from "../db/client";
 import type { CrawlKind, IssueState } from "../db/schema";
-import { ANSWERED } from "./coverage";
+import { ANSWERED, NOT_OURS } from "./coverage";
 
 type Exec = Pick<Db, "execute">;
 
 export const OPEN_STATES: IssueState[] = ["new", "persistent", "regressed", "not_rechecked"];
 const OPEN = sql.raw(OPEN_STATES.map((s) => `'${s}'`).join(", "));
 const ANSWERED_SQL = sql.raw(ANSWERED.map((s) => `'${s}'`).join(", "));
+const NOT_OURS_SQL = sql.raw(NOT_OURS.map((s) => `'${s}'`).join(", "));
 
 /** SQL: the project key of crawl row alias `c`. */
 export const projectKey = (alias: string) => sql.raw(`coalesce(${alias}.site_id, ${alias}.site_origin)`);
@@ -35,20 +36,41 @@ export const projectKey = (alias: string) => sql.raw(`coalesce(${alias}.site_id,
  * The rule must have run in that crawl (rule_runs status 'ran': not needs_config, not error), and its subject must
  * have been examined: a page rule's URL answered (an ANSWERED state: a page that now redirects or is no longer HTML
  * no longer has the page defect), a resource rule's resource answered (resources.state = 'done'), and for a site
- * rule, a crawl that left no URL of the host unfetched (`complete`) and, when the subject is a URL of the crawl
- * inventory (page_subject), that URL answered: a narrower crawl that never fetched a page cannot resolve a site-rule
- * finding about it. Robots-blocked, excluded, failed, budget- or depth-limited URLs are never re-checked.
+ * rule, a crawl that left no URL of the host unfetched (`complete`), saw at least what the audit that last observed
+ * the finding saw (that audit is in `wide`, see wideAudits), and, when the subject is a URL of the crawl inventory
+ * (page_subject), answered that URL. A site rule's verdict on one URL depends on other pages (a duplicate title is
+ * a duplicate of another page), so a crawl that excluded or could not reach part of the site re-checks none of them.
+ * Robots-blocked, excluded, failed, budget- or depth-limited URLs are never re-checked.
  */
-export function rechecked(checker: string, complete: boolean, s = "s") {
+export function rechecked(checker: string, complete: boolean, wide: string[], s = "s") {
   const c = sql`${checker}::uuid`;
   const row = sql.raw(s);
   return sql`(exists (select 1 from rule_runs rr where rr.crawl_id = ${c} and rr.rule_id = ${row}.rule_id and rr.status = 'ran')
     and case (select scope from rules where id = ${row}.rule_id)
       when 'page' then exists (select 1 from crawl_urls u where u.crawl_id = ${c} and u.normalised_url = ${row}.url and u.state in (${ANSWERED_SQL}))
       when 'resource' then exists (select 1 from resources r where r.crawl_id = ${c} and r.url = ${row}.url and r.state = 'done')
-      else ${complete} and (not ${row}.page_subject
+      else ${complete}
+        and (select o.crawl_id from issue_states o join crawls p on p.id = o.crawl_id join crawls k on k.id = ${c}
+             where o.fingerprint = ${row}.fingerprint and o.outcome = 'issue' and p.kind = 'audit' and p.workspace = k.workspace
+               and ${projectKey("p")} = ${projectKey("k")} and (p.created_at, p.id) < (k.created_at, k.id)
+             order by p.created_at desc, p.id desc limit 1) in (select jsonb_array_elements_text(${JSON.stringify(wide)}::jsonb)::uuid)
+        and (not ${row}.page_subject
         or exists (select 1 from crawl_urls u where u.crawl_id = ${c} and u.normalised_url = ${row}.url and u.state in (${ANSWERED_SQL})))
     end)`;
+}
+
+/**
+ * The project's earlier audits that crawl `checker` saw at least as much of the site as: the same seeds, and no URL
+ * the audit answered is excluded by the checker's scope rules, blocked by robots.txt or CDN-managed in the checker.
+ * Only these can have their site-rule findings resolved by `checker` (rechecked).
+ */
+export async function wideAudits(db: Exec, checker: string): Promise<string[]> {
+  const r = await db.execute(sql`select p.id from crawls c join crawls p on p.workspace = c.workspace and ${projectKey("p")} = ${projectKey("c")}
+    where c.id = ${checker}::uuid and p.kind = 'audit' and (p.created_at, p.id) < (c.created_at, c.id)
+      and coalesce(p.config->'seeds', 'null'::jsonb) = coalesce(c.config->'seeds', 'null'::jsonb)
+      and not exists (select 1 from crawl_urls pu join crawl_urls cu on cu.crawl_id = c.id and cu.normalised_url = pu.normalised_url
+        where pu.crawl_id = p.id and pu.state in (${ANSWERED_SQL}) and cu.state in (${NOT_OURS_SQL}))`);
+  return (r.rows as { id: string }[]).map((x) => x.id);
 }
 
 /** The project's latest earlier analysed audit (not a verification), or null. */
@@ -71,6 +93,7 @@ export async function stateCounts(db: Exec, crawlId: string): Promise<StateCount
 
 /** (Re)computes crawl `crawlId`'s states from its occurrences and the project's history. `complete`: see rechecked. */
 export async function writeIssueStates(db: Exec, crawlId: string, complete: boolean): Promise<StateCounts> {
+  const wide = complete ? await wideAudits(db, crawlId) : [];
   await db.execute(sql`delete from issue_states where crawl_id = ${crawlId}::uuid`);
   await db.execute(sql`insert into issue_states (crawl_id, fingerprint, rule_id, url, evidence_key, template_id, outcome, state, first_seen_at, page_subject)
     select o.crawl_id, o.fingerprint, o.rule_id, o.url, o.evidence_key, o.template_id, o.outcome,
@@ -88,7 +111,7 @@ export async function writeIssueStates(db: Exec, crawlId: string, complete: bool
     where o.crawl_id = ${crawlId}::uuid`);
   await db.execute(sql`insert into issue_states (crawl_id, fingerprint, rule_id, url, evidence_key, template_id, outcome, state, first_seen_at, page_subject)
     select ${crawlId}::uuid, s.fingerprint, s.rule_id, s.url, s.evidence_key, s.template_id, null,
-      case when ${rechecked(crawlId, complete)} then 'resolved' else 'not_rechecked' end, s.first_seen_at, s.page_subject
+      case when ${rechecked(crawlId, complete, wide)} then 'resolved' else 'not_rechecked' end, s.first_seen_at, s.page_subject
     from (select distinct on (s.fingerprint) s.* from issue_states s join crawls p on p.id = s.crawl_id join crawls c on c.id = ${crawlId}::uuid
           where s.state <> 'inconclusive' and p.workspace = c.workspace and ${projectKey("p")} = ${projectKey("c")} and (p.created_at, p.id) < (c.created_at, c.id)
           order by s.fingerprint, p.created_at desc, p.id desc) s
@@ -117,7 +140,7 @@ export async function writeVerifyStates(db: Exec, crawlId: string, v: VerifyConf
     select ${crawlId}::uuid, s.fingerprint, s.rule_id, s.url, s.evidence_key, s.template_id, o.outcome,
       case when o.outcome = 'issue' then 'persistent'
            when o.outcome = 'inconclusive' then 'inconclusive'
-           when ${rechecked(crawlId, false)} then 'resolved'
+           when ${rechecked(crawlId, false, [])} then 'resolved'
            else 'not_rechecked' end,
       s.first_seen_at, s.page_subject
     from (select distinct on (s.fingerprint) s.* from issue_states s join crawls p on p.id = s.crawl_id join crawls c on c.id = ${crawlId}::uuid
