@@ -252,7 +252,7 @@ const SD007 = page({
 
 /** Path segments of a URL ("/a/b/" → 2). */
 const segments = (url: string) => new URL(url).pathname.split("/").filter(Boolean).length;
-export const DEEP_PAGE_SEGMENTS = 2;
+export const DEEP_PAGE_SEGMENTS = 3; // "deep": two parent levels (/a/b/page); a flat /section/page has little trail to show
 
 const SD008 = page({
   id: "SD-008",

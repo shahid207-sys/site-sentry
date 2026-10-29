@@ -21,6 +21,8 @@ export interface Parts {
   head: string;
   /** Inside <body>, before <main>. */
   header: string;
+  /** After the header: links to neighbouring pages (server.ts), so every page has two inbound links. */
+  nav: string;
   h1: string;
   /** Main content after the H1 (text, then links). */
   text: string;
@@ -47,6 +49,22 @@ export function pageDescription(path: string): string {
   return `${d}.`;
 }
 
+/** An Organization block with every property Google recommends (SD-004 silent). */
+export const organization = (origin: string, name: string) => ({
+  "@context": "https://schema.org",
+  "@type": "Organization",
+  name,
+  legalName: `${name} Ltd`,
+  url: `${origin}/`,
+  logo: `${origin}${OG_IMAGE}`,
+  description: `${name} is a test site for SiteSentry.`,
+  email: "hello@fixture.test",
+  telephone: "+44 20 7946 0000",
+  address: { "@type": "PostalAddress", streetAddress: "1 Garden Road", addressLocality: "London", postalCode: "N1 1AA", addressCountry: "GB" },
+  contactPoint: { "@type": "ContactPoint", contactType: "customer service", telephone: "+44 20 7946 0000" },
+  sameAs: ["https://example.org/fixture-site"],
+});
+
 export function cleanParts(path: string, origin: string, body = ""): Parts {
   const self = `${origin}${path}`;
   const title = pageTitle(path);
@@ -62,8 +80,10 @@ export function cleanParts(path: string, origin: string, body = ""): Parts {
     icon: '<link rel="icon" href="/favicon.ico">',
     og: `<meta property="og:title" content="${esc(title)}"><meta property="og:image" content="${origin}${OG_IMAGE}"><meta property="og:url" content="${self}">`,
     twitter: '<meta name="twitter:card" content="summary_large_image">',
-    head: "",
+    // The home page names the organisation (SD-007 negative).
+    head: path === "/" ? `<script type="application/ld+json">${JSON.stringify(organization(origin, SITE_NAME))}</script>` : "",
     header: `<header><a href="/">${SITE_NAME}</a></header>`,
+    nav: "",
     h1: `<h1>${esc(pageH1(path))}</h1>`,
     text: `<p>${paragraph(path)}</p>`,
     body,
@@ -74,7 +94,7 @@ export function cleanParts(path: string, origin: string, body = ""): Parts {
 
 export const renderParts = (p: Parts) =>
   `<!doctype html><html${p.lang}><head>${p.charset}${p.title}${p.description}${p.viewport}${p.canonical}${p.icon}${p.og}${p.twitter}${p.head}</head>` +
-  `<body>${p.header}<main>${p.wrap[0]}${p.h1}${p.text}${p.body}${p.wrap[1]}</main>${p.footer}</body></html>`;
+  `<body>${p.header}${p.nav}<main>${p.wrap[0]}${p.h1}${p.text}${p.body}${p.wrap[1]}</main>${p.footer}</body></html>`;
 
 export const links = (paths: string[]) => `<ul>${paths.map((p) => `<li><a href="${p}">${esc(p)}</a></li>`).join("")}</ul>`;
 

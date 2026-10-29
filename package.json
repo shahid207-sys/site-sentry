@@ -16,7 +16,8 @@
     "worker": "tsx src/worker/crawl-worker.ts",
     "worker:analysis": "tsx src/worker/analysis-worker.ts",
     "gate:p1": "tsx scripts/gate-p1.ts",
-    "gate:p2a": "tsx scripts/gate-p2a.ts"
+    "gate:p2a": "tsx scripts/gate-p2a.ts",
+    "gate:p2b": "tsx scripts/gate-p2b.ts"
   },
   "dependencies": {
     "bullmq": "6.3.14",

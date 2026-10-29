@@ -17,6 +17,10 @@
 //   alt2.test         robots.txt without a Sitemap line, no sitemap, no favicon, no llms.txt; www.alt2.test serves 200 too,
 //                     and so does plain http (IDX-020 positive)
 //   alt3.test         a 50,001-URL sitemap (IDX-030) and an llms.txt served as HTML (AIS-003)
+//   ext.test          external link targets (520 of them, over the 500-URL budget); ext2.test: /gone 404 (LNK-010), /ok 200
+//
+// Every host but alt2.test sends HSTS, nosniff and a frame-ancestors CSP; alt2.test's home page is the SEC-004,
+// SEC-005 and SD-007 positive (those rules judge the start page only).
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import { createServer as createNetServer, type AddressInfo, type Socket } from "node:net";
@@ -26,6 +30,7 @@ import { gzipSync } from "node:zlib";
 import {
   DEEP_CHAIN_DEPTH,
   deepChainPath,
+  EXT_HOSTS,
   manifestPaths,
   noindexPaths,
   REDIRECTS,
@@ -36,6 +41,7 @@ import {
   SSRF_TARGETS,
 } from "./definition";
 import { applyDefect, INDEX_EXTRAS, noindexKind } from "./defects";
+import { ENV_BODY, GIT_HEAD_BODY, IMAGE_BUDGET_PAGES, imageBudgetBody, imageFile, PLAIN_HTTP_PAGE, SCHEMA_DEEP, schemaDeepParts } from "./defects-2b";
 import { cleanParts, FAVICON, links, png, renderParts, SITE_NAME, type Parts } from "./pages";
 
 export interface Hit {
@@ -78,6 +84,7 @@ export const HOSTS = {
   alt2: "alt2.test",
   www2: "www.alt2.test",
   alt3: "alt3.test",
+  ...EXT_HOSTS,
 } as const;
 export type HostKey = keyof typeof HOSTS;
 
@@ -161,6 +168,13 @@ export function fixtureSitemaps(): Sitemap[] {
   return out;
 }
 
+/** Sent by every host but alt2.test: SEC-004 and SEC-005 negatives. */
+const SECURITY_HEADERS = {
+  "strict-transport-security": "max-age=31536000; includeSubDomains",
+  "x-content-type-options": "nosniff",
+  "content-security-policy": "frame-ancestors 'self'",
+};
+
 export interface Router {
   (host: string, pathAndQuery: string, scheme?: "http" | "https"): Response;
   origins: Record<HostKey, string>;
@@ -191,7 +205,14 @@ export function createRouter(port: number, canaryPort: number): Router {
       return text(`<?xml version="1.0" encoding="UTF-8"?><sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${children}</sitemapindex>`, "application/xml");
     }
     if (sitemaps.has(path)) return { status: 200, type: "application/x-gzip", headers: {}, body: sitemapBody(origin, sitemaps.get(path)!) };
-    if (path === "/.env") return text("DB_PASSWORD=fixture-not-a-secret\n"); // the spec's exposed file; never linked
+    // The spec's exposed files (SEC-006), never linked: the crawler meets them only as probes.
+    if (path === "/.env") return text(ENV_BODY);
+    if (path === "/.git/HEAD") return text(GIT_HEAD_BODY);
+    if (path.startsWith("/img/")) {
+      const f = imageFile(path);
+      return f ? { status: 200, type: f.type, headers: {}, body: f.body } : notFound();
+    }
+    if (path === "/assets/app.js") return text("void 0;", "text/javascript");
     if (path === "/llms.txt") return text(LLMS_TXT, "text/markdown; charset=utf-8");
     if (path === "/favicon.ico") return { status: 200, type: "image/x-icon", headers: {}, body: FAVICON };
     if (path === "/assets/og.png") return { status: 200, type: "image/png", headers: {}, body: png(1200, 630) };
@@ -219,11 +240,30 @@ export function createRouter(port: number, canaryPort: number): Router {
       const p = cleanParts(path, origin);
       if ("meta" in redirect) p.head += `<meta http-equiv="refresh" content="0; url=${redirect.meta}">`;
       else p.body += `<script>location.replace(${JSON.stringify(redirect.js)})</script>`;
+      p.nav = navOf(SECTIONS.find((s) => s.path === "/redirects/")!, path, bySection.get("/redirects/")!);
       return html(p);
     }
     if (path.startsWith("/ssrf/p-")) {
       const target = SSRF_TARGETS[Number(path.slice("/ssrf/p-".length)) - 1];
       if (target) return redirectTo(302, target.replace("{canary}", String(canaryPort)));
+    }
+    if (path === PLAIN_HTTP_PAGE) {
+      const p = cleanParts(path, origin.replace("https:", "http:"), "");
+      // Absolute links: relative ones would resolve to http URLs that redirect (LNK-002).
+      p.header = p.header.replace('href="/"', `href="${origin}/"`);
+      p.nav = nav([`${origin}/security/`], "Security pages");
+      return html(p);
+    }
+    if (IMAGE_BUDGET_PAGES.includes(path)) {
+      const p = cleanParts(path, origin, imageBudgetBody(path));
+      p.nav = nav(["/images/"], "Image pages");
+      return html(p);
+    }
+    if (SCHEMA_DEEP.includes(path)) {
+      const p = cleanParts(path, origin);
+      p.nav = nav(SCHEMA_DEEP.filter((x) => x !== path), "Related guide");
+      schemaDeepParts(p, path, origin);
+      return html(p);
     }
     if (!manifest.has(path)) return notFound();
 
@@ -238,25 +278,56 @@ export function createRouter(port: number, canaryPort: number): Router {
         body = `<div id="nav"></div><script>for (let i = 1; i < ${paths.length}; i++) { const a = document.createElement("a"); a.href = "/js/p-" + i; a.textContent = String(i); document.getElementById("nav").append(a); }</script>`;
       }
       if (section.path === "/products/") body += productListing(new URLSearchParams());
+      if (section.path === "/schema/") body += links(SCHEMA_DEEP); // three segments deep, not in any sitemap
     }
+    if (path === "/index/p-20") body += links(INDEX_EXTRAS.filter((e) => e.status === 200).map((e) => e.path)); // a second inbound link
+    if (path === "/images/p-58" || path === "/images/p-59") body += links(IMAGE_BUDGET_PAGES);
     if (section.linking === "chain") {
       const depth = path === "/deep/" ? 1 : Number(/^\/deep\/d-(\d+)$/.exec(path)?.[1] ?? 0);
       const out: string[] = [];
       if (depth && depth < DEEP_CHAIN_DEPTH) out.push(deepChainPath(depth + 1));
       if (depth) out.push(...paths.filter((p) => p.startsWith(`/deep/d-${depth}-s-`)));
-      body = links(out);
-    }
-    if (section.path === "/links/" && path !== section.path) {
-      const i = Number(path.slice("/links/p-".length));
-      if (i <= 10) body += links([`/links/missing-${i}`, "/redirects/s301-1"]); // a broken internal link and one to a redirect
+      body = out.length ? links(out) : "";
     }
 
     const p = applyDefect(path, origin, body);
+    p.nav = navOf(section, path, paths);
     if (noindex.has(path)) {
       if (noindexKind(path) === "header") p.headers["x-robots-tag"] = "noindex";
       else p.head += '<meta name="robots" content="noindex">';
     }
     return html(p);
+  }
+
+  /**
+   * Links to neighbouring pages, so no page fires LNK-005 (one inbound link) by accident. Index-linked sections: the
+   * previous and next page (/redirects/: its HTML pages only). /deep/: the parent chain page, and side pages their
+   * siblings (click depth is unchanged). Orphans and /js/ pages link out only: they stay orphans.
+   */
+  function navOf(section: (typeof SECTIONS)[number], path: string, paths: string[]): string {
+    if (section.path === "/ssrf/") return "";
+    if (section.path === "/redirects/") return prevNext(paths.filter((x) => x === section.path || !("status" in REDIRECTS[x])), path);
+    if (section.linking === "index") return prevNext(paths, path);
+    if (section.linking === "chain") {
+      const m = /^\/deep\/d-(\d+)(-s-\d+)?$/.exec(path);
+      if (!m) return "";
+      const depth = Number(m[1]);
+      if (!m[2]) return nav([deepChainPath(depth - 1)], "Up one level");
+      return nav([deepChainPath(depth), ...paths.filter((x) => x !== path && x.startsWith(`/deep/d-${depth}-s-`))], "Related page");
+    }
+    return nav([section.linking === "js" ? section.path : "/clean/", "/clean/p-1"], "Related pages");
+  }
+  const prevNext = (list: string[], path: string) => {
+    const i = list.indexOf(path);
+    return i < 0 ? "" : `<nav>${i > 0 ? `<a href="${list[i - 1]}">Previous page</a>` : ""}${i < list.length - 1 ? `<a href="${list[i + 1]}">Next page</a>` : ""}</nav>`;
+  };
+  const nav = (targets: string[], label: string) => `<nav>${targets.map((t) => `<a href="${t}">${label}</a>`).join("")}</nav>`;
+
+  /** External link targets: robots allows everything; /gone is 404, every other path a small page. */
+  function extSite(path: string): Response {
+    if (path === "/robots.txt") return text("User-agent: *\nDisallow:\n");
+    if (path === "/gone") return notFound();
+    return { status: 200, type: "text/html; charset=utf-8", headers: {}, body: `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Partner ${path}</title></head><body><p>Partner page.</p></body></html>` };
   }
 
   /** A minimal clean site for the alt hosts: a home page, plus /item-N pages on alt3. */
@@ -273,11 +344,16 @@ export function createRouter(port: number, canaryPort: number): Router {
       return { status: 200, type: "application/x-gzip", headers: {}, body: sitemapBody(o, { path, paths }) };
     }
     if (key === "alt3" && path === "/llms.txt") return text(`<!doctype html><html><body><h1>${SITE_NAME}</h1></body></html>`, "text/html; charset=utf-8");
+    // A soft 200: HTML for /.env and /.git/HEAD, with no file behind it (SEC-006 negative).
+    if (key === "alt3" && (path === "/.env" || path === "/.git/HEAD")) return text(`<!doctype html><html><body><h1>${SITE_NAME}</h1><p>Page not found.</p></body></html>`, "text/html; charset=utf-8");
     if (path === "/assets/og.png") return { status: 200, type: "image/png", headers: {}, body: png(1200, 630) };
     if (key !== "alt2" && key !== "www2" && path === "/favicon.ico") return { status: 200, type: "image/x-icon", headers: {}, body: FAVICON };
     if (path === "/" || (key === "alt3" && /^\/item-\d+$/.test(path))) {
       const p = cleanParts(path, o);
-      if (key === "alt2" || key === "www2") p.icon = "";
+      if (key === "alt2" || key === "www2") {
+        p.icon = "";
+        p.head = ""; // no Organization structured data on the home page (SD-007 positive)
+      }
       // Page text differs per host, so alt pages never look like copies of fixture.test pages.
       p.title = p.title.replace("</title>", ` on ${HOSTS[key]}</title>`);
       return html(p);
@@ -289,10 +365,14 @@ export function createRouter(port: number, canaryPort: number): Router {
     const host = hostHeader.replace(/:\d+$/, "").toLowerCase();
     const url = new URL(target, "http://x");
     const key = (Object.keys(HOSTS) as HostKey[]).find((k) => HOSTS[k] === host) ?? "main";
-    if (key === "www") return redirectTo(301, `${origin}${url.pathname}${url.search}`);
-    if (scheme === "http" && key !== "alt2" && key !== "www2") return redirectTo(301, `${origins[key]}${url.pathname}${url.search}`);
-    if (key === "main") return mainSite(url.pathname, url.searchParams, url.search);
-    return altSite(key, url.pathname);
+    const secure = (r: Response): Response => (key === "alt2" || key === "www2" ? r : { ...r, headers: { ...SECURITY_HEADERS, ...r.headers } });
+    if (key === "www") return secure(redirectTo(301, `${origin}${url.pathname}${url.search}`));
+    if (key === "ext" || key === "ext2") return extSite(url.pathname);
+    // Plain http answers 301 to https, except on alt2 (both schemes serve 200) and the one plain-http page (SEC-001).
+    const plain = key === "main" && url.pathname === PLAIN_HTTP_PAGE;
+    if (scheme === "http" && key !== "alt2" && key !== "www2" && !plain) return secure(redirectTo(301, `${origins[key]}${url.pathname}${url.search}`));
+    if (key === "main") return secure(mainSite(url.pathname, url.searchParams, url.search));
+    return secure(altSite(key, url.pathname));
   }) as Router;
   route.origins = origins;
   return route;
@@ -349,7 +429,8 @@ export async function startFixtureSite(opts: { port?: number } = {}): Promise<Fi
     requests.push(log(0));
     const send = (r: Response) => {
       hits.push(log(r.status));
-      res.writeHead(r.status, { "content-type": r.type, ...r.headers }).end(req.method === "HEAD" ? undefined : r.body);
+      // Content-Length on HEAD too, as real servers send it: the resource phase reads image sizes from HEAD.
+      res.writeHead(r.status, { "content-type": r.type, "content-length": String(Buffer.byteLength(r.body)), ...r.headers }).end(req.method === "HEAD" ? undefined : r.body);
     };
     const r = router!(host, req.url ?? "/", scheme);
     const path = new URL(req.url ?? "/", "http://x").pathname;

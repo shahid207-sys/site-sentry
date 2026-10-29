@@ -35,6 +35,9 @@ export const SECTIONS: Section[] = [
 /** The spec's table sums to 1,170 pages ("about 1,200 URLs"); the home page makes 1,171 manifest URLs. */
 export const SECTION_PAGE_TOTAL = SECTIONS.reduce((n, s) => n + s.pages, 0);
 
+/** External hosts for the resource phase: ext.test (the 520-link budget page) and ext2.test (/gone 404, /ok 200). */
+export const EXT_HOSTS = { ext: "ext.test", ext2: "ext2.test" } as const;
+
 /** Deepest link depth of the /deep/ chain (home = 0, /deep/ = 1). */
 export const DEEP_CHAIN_DEPTH = 12;
 /** robots.txt blocks this subsection for every crawler, and the whole site for GPTBot. */

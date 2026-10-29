@@ -2,6 +2,7 @@
 // findings it must produce. The expectations are declared here by hand (cascades included, e.g. a canonicalised
 // sitemap URL is also IDX-029); they are not computed from rule code, so the gate compares two independent things.
 import { NOINDEX_COUNT, noindexPaths, REDIRECTS, SECTIONS, sectionPaths, type RedirectSpec } from "./definition";
+import { DEFECTS_2B, EXTRAS_2B, structuralExpectations } from "./defects-2b";
 import { cleanParts, OG_IMAGE, type Parts } from "./pages";
 import { paragraph, topic } from "./text";
 
@@ -254,7 +255,7 @@ export const DEFECTS: Record<string, Defect> = (() => {
   for (const [section, list] of [["/meta/", META], ["/index/", INDEX], ["/content/", CONTENT]] as const) {
     list.forEach((d, i) => (out[`${section}p-${i + 1}`] = d));
   }
-  return out;
+  return { ...out, ...DEFECTS_2B };
 })();
 
 export const DEFECT_COUNTS = { meta: META.length, index: INDEX.length, content: CONTENT.length };
@@ -301,8 +302,24 @@ export function applyDefect(path: string, origin: string, body: string): Parts {
   return p;
 }
 
-/** Sections whose findings the gate compares exactly (every other section is presence-checked only). */
-export const EXACT_SECTIONS = ["/clean/", "/meta/", "/index/", "/redirects/", "/content/"] as const;
+/** Sections whose findings the gates compare exactly. /slow/ (timing-dependent 429 and 503 answers) and /ssrf/
+ * (redirects to blocked addresses) are Phase 1 subjects and presence-checked only. */
+export const EXACT_SECTIONS = [
+  "/clean/",
+  "/meta/",
+  "/index/",
+  "/redirects/",
+  "/content/",
+  "/links/",
+  "/deep/",
+  "/orphans/",
+  "/images/",
+  "/schema/",
+  "/intl/",
+  "/js/",
+  "/products/",
+  "/security/",
+] as const;
 
 /**
  * Every finding the fixture site's main host must produce on the pages of EXACT_SECTIONS, the home page and the
@@ -323,5 +340,7 @@ export function expectedFindings(): Map<string, RuleId[]> {
   }
   for (const [path, e] of Object.entries(redirectExpectations())) out.set(path, e);
   for (const x of INDEX_EXTRAS) out.set(x.path, [...x.expect]);
+  for (const p of EXTRAS_2B) out.set(p, []);
+  for (const [path, e] of structuralExpectations()) out.set(path, [...new Set([...(out.get(path) ?? []), ...e])]);
   return out;
 }
