@@ -1,12 +1,13 @@
 // Finding states across audits (docs/SPEC.md "Finding states across audits"). A project's history is its crawls of
 // one workspace and site (crawls.site_id, or the site origin for crawls from before Phase 3), in creation order.
 //
-// For crawl C, every occurrence C observed gets a state from the fingerprint's latest state in an earlier crawl:
+// For crawl C, every occurrence C observed gets a state from the fingerprint's latest conclusive state in an
+// earlier crawl (inconclusive results are skipped):
 //   inconclusive outcome            → inconclusive
 //   earlier state open (new, persistent, regressed, not_rechecked) → persistent
 //   earlier state resolved          → regressed
-//   otherwise (never seen, or last inconclusive) → new
-// Every fingerprint open in the previous audit that C did not observe is carried over:
+//   never seen                      → new
+// Every fingerprint whose latest conclusive state is open and that C did not observe is carried over:
 //   C re-checked it (`rechecked`)   → resolved
 //   otherwise                       → not_rechecked (stays open)
 // A URL C did not fetch can therefore never resolve a finding.
@@ -70,19 +71,18 @@ export async function writeIssueStates(db: Exec, crawlId: string, complete: bool
     from finding_occurrences o join crawls c on c.id = o.crawl_id
     left join lateral (
       select s.state, s.first_seen_at from issue_states s join crawls p on p.id = s.crawl_id
-      where s.fingerprint = o.fingerprint and p.workspace = c.workspace and ${projectKey("p")} = ${projectKey("c")}
+      where s.fingerprint = o.fingerprint and s.state <> 'inconclusive' and p.workspace = c.workspace and ${projectKey("p")} = ${projectKey("c")}
         and (p.created_at, p.id) < (c.created_at, c.id)
       order by p.created_at desc, p.id desc limit 1) last on true
     where o.crawl_id = ${crawlId}::uuid`);
-  const prev = await previousAudit(db, crawlId);
-  if (prev) {
-    await db.execute(sql`insert into issue_states (crawl_id, fingerprint, rule_id, url, evidence_key, template_id, outcome, state, first_seen_at)
-      select ${crawlId}::uuid, s.fingerprint, s.rule_id, s.url, s.evidence_key, s.template_id, null,
-        case when ${rechecked(crawlId, complete)} then 'resolved' else 'not_rechecked' end, s.first_seen_at
-      from issue_states s
-      where s.crawl_id = ${prev}::uuid and s.state in (${OPEN})
-        and not exists (select 1 from finding_occurrences o where o.crawl_id = ${crawlId}::uuid and o.fingerprint = s.fingerprint)`);
-  }
+  await db.execute(sql`insert into issue_states (crawl_id, fingerprint, rule_id, url, evidence_key, template_id, outcome, state, first_seen_at)
+    select ${crawlId}::uuid, s.fingerprint, s.rule_id, s.url, s.evidence_key, s.template_id, null,
+      case when ${rechecked(crawlId, complete)} then 'resolved' else 'not_rechecked' end, s.first_seen_at
+    from (select distinct on (s.fingerprint) s.* from issue_states s join crawls p on p.id = s.crawl_id join crawls c on c.id = ${crawlId}::uuid
+          where s.state <> 'inconclusive' and p.workspace = c.workspace and ${projectKey("p")} = ${projectKey("c")} and (p.created_at, p.id) < (c.created_at, c.id)
+          order by s.fingerprint, p.created_at desc, p.id desc) s
+    where s.state in (${OPEN})
+      and not exists (select 1 from finding_occurrences o where o.crawl_id = ${crawlId}::uuid and o.fingerprint = s.fingerprint)`);
   return stateCounts(db, crawlId);
 }
 
