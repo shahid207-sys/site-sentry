@@ -118,6 +118,46 @@ describe("crawl worker", () => {
   });
 });
 
+describe("crawl job takeover at the production lock settings", () => {
+  it("a second worker picks up a killed worker's crawl within 40 s (lock 25 s + stall check 15 s)", async () => {
+    // Production defaults: no CRAWL_JOB_LOCK_MS / CRAWL_JOB_STALLED_MS (an empty value falls back to the default).
+    // One request a second, so the crawl is still running when worker 1 is killed.
+    const prod = { CRAWL_JOB_LOCK_MS: "", CRAWL_JOB_STALLED_MS: "", CRAWLER_HOST_RATE: "1" };
+    const origin = `http://kill.test:${srv.port}`;
+    const c = await newCrawl(db, { siteOrigin: origin, status: "queued" });
+    process.env.CRAWL_QUEUE_NAME = queueName;
+    const queue = createCrawlQueue();
+    const started = (w: { output: () => string }) => w.output().includes(`"event":"crawl.start","crawlId":"${c}"`);
+    const w1 = startWorker(prod);
+    let w2: ReturnType<typeof startWorker> | null = null;
+    try {
+      await until(() => w1.output().includes('"event":"worker.boot"'), 60_000, "worker 1 to boot");
+      await enqueueCrawl(queue, c);
+      await until(() => started(w1), 30_000, "worker 1 to start the crawl");
+      w2 = startWorker(prod);
+      await until(() => w2!.output().includes('"event":"worker.boot"'), 60_000, "worker 2 to boot");
+      expect(started(w2)).toBe(false); // the job is worker 1's
+      w1.child.kill("SIGKILL"); // no shutdown handlers: the job lock is left to expire
+      await w1.exited;
+      const killedAt = Date.now();
+      await until(() => started(w2!), 60_000, "worker 2 to take over the crawl");
+      const takeoverS = (Date.now() - killedAt) / 1000;
+      console.log(JSON.stringify({ takeoverS }));
+      expect(takeoverS).toBeLessThanOrEqual(40);
+    } finally {
+      w1.child.kill("SIGKILL");
+      if (w2) {
+        w2.child.kill("SIGKILL");
+        await w2.exited;
+      }
+      // Never leave a running crawl for the workers of later tests to resume at boot.
+      await db.execute(sql`update crawls set status = 'cancelled', finished_at = now() where id = ${c}::uuid`);
+      await queue.obliterate({ force: true });
+      await queue.close();
+    }
+  });
+});
+
 describe("crawl workers sharing a host", () => {
   // Two crawls of one host in two worker processes. Every response takes 200 ms, and the rate cap is lifted, so
   // concurrency is the only limit: without a shared budget each worker would keep 3 requests in flight (6 in all).
