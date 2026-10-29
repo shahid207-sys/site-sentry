@@ -2,7 +2,7 @@ import type { LookupAddress, LookupOptions } from "node:dns";
 import { lookup as dnsLookupAsync } from "node:dns/promises";
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
-import { connect as tlsConnect, rootCertificates, type PeerCertificate } from "node:tls";
+import { connect as tlsConnect, createSecureContext, rootCertificates, type PeerCertificate, type SecureContext } from "node:tls";
 import { gunzipSync } from "node:zlib";
 import type { ReadableStream } from "node:stream/web";
 import { Agent, fetch } from "undici";
@@ -159,6 +159,20 @@ function pinnedLookup(ip: string) {
   };
 }
 
+/**
+ * One TLS context per set of extra CAs. A `ca` option on a connection makes Node build a new native context (the whole
+ * root store parsed again) for every socket; each closed body (a ranged image read, a HEAD) opens a new socket, so
+ * thousands of contexts piled up outside the V8 heap. Without extra CAs Node's own cached default context is used.
+ */
+const secureContexts = new Map<string, SecureContext>();
+function caContext(ca: string[] | undefined): { secureContext: SecureContext } | Record<string, never> {
+  if (!ca?.length) return {};
+  const key = createHash("sha256").update(ca.join("\n")).digest("hex");
+  let c = secureContexts.get(key);
+  if (!c) secureContexts.set(key, (c = createSecureContext({ ca: [...rootCertificates, ...ca] })));
+  return { secureContext: c };
+}
+
 const MAX_PINNED_AGENTS = 256;
 const pinnedAgents = new Map<string, Agent>();
 
@@ -173,7 +187,7 @@ export function pinnedAgent(hostname: string, ip: string, ca?: string[]): Agent 
     return a;
   }
   a = new Agent({
-    connect: { lookup: pinnedLookup(ip), timeout: CONNECT_TIMEOUT_MS, ...(ca?.length ? { ca: [...rootCertificates, ...ca] } : {}) },
+    connect: { lookup: pinnedLookup(ip), timeout: CONNECT_TIMEOUT_MS, ...caContext(ca) },
     headersTimeout: SOCKET_IDLE_BACKSTOP_MS,
     bodyTimeout: SOCKET_IDLE_BACKSTOP_MS,
     connections: 8,
@@ -561,7 +575,7 @@ export function createPeerCertReader(policy: FetchPolicy = DEFAULT_POLICY): Peer
 function handshake(ip: string, port: number, servername: string | undefined, ca: string[] | undefined, timeoutMs: number, signal?: AbortSignal): Promise<PeerCertificateInfo> {
   return new Promise((resolve, reject) => {
     signal?.throwIfAborted();
-    const socket = tlsConnect({ host: ip, port, servername, rejectUnauthorized: false, ALPNProtocols: ["http/1.1"], ...(ca?.length ? { ca: [...rootCertificates, ...ca] } : {}) });
+    const socket = tlsConnect({ host: ip, port, servername, rejectUnauthorized: false, ALPNProtocols: ["http/1.1"], ...caContext(ca) });
     const finish = (err: unknown, value?: PeerCertificateInfo) => {
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
