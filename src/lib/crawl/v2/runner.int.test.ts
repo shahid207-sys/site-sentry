@@ -718,6 +718,45 @@ describe("runCrawl crawl-level probes", () => {
     expect(imgRequests).toEqual(imgs.slice(0, 3).flatMap((u) => [`127.0.0.1:${port} HEAD ${new URL(u).pathname}`, `127.0.0.1:${port} GET ${new URL(u).pathname} range=bytes=0-65535`]));
   });
 
+  it("checks external resources while pages are still being fetched, and the site's own images only after the URL phase", async () => {
+    const port = srv.port;
+    const o = srv.origin;
+    const events: { at: number; what: string }[] = [];
+    const t0 = Date.now();
+    const note = (what: string) => events.push({ at: Date.now() - t0, what });
+    // 8 slow pages in a chain; the first links to 4 external URLs and carries 2 own-host images.
+    const pages = Array.from({ length: 8 }, (_, i) => `/p${i}`);
+    const ext = [0, 1, 2, 3].map((i) => `http://ext${i}.test:${port}/x/${i}`);
+    srv.routes.set("/", send(`<!doctype html><title>t</title><body><a href="/p0">p</a>${ext.map((l) => `<a href="${l}">x</a>`).join("")}<img src="/img/a.png" alt=""><img src="/img/b.png" alt=""></body>`));
+    pages.forEach((p, i) =>
+      srv.routes.set(p, (req, res) => {
+        note(`page ${p}`);
+        setTimeout(() => res.writeHead(200, { "content-type": "text/html" }).end(`<!doctype html><title>${p}</title><body>${i + 1 < pages.length ? `<a href="${pages[i + 1]}">n</a>` : ""}</body>`), 250);
+      }),
+    );
+    for (const l of ext) srv.routes.set(new URL(l).pathname, (req, res) => (note(`ext ${req.method} ${new URL(l).pathname}`), res.writeHead(200).end()));
+    for (const i of ["/img/a.png", "/img/b.png"]) srv.routes.set(i, (req, res) => (note(`img ${req.method} ${i}`), res.writeHead(200, { "content-type": "image/svg+xml" }).end()));
+    srv.routes.set("/robots.txt", send("User-agent: *\nAllow: /\n", "text/plain"));
+
+    const c = await newCrawl(db, { siteOrigin: o, status: "queued" });
+    expect(await runCrawl(opts(), c)).toBe("completed");
+    const lastPage = Math.max(...events.filter((e) => e.what.startsWith("page")).map((e) => e.at));
+    const extEvents = events.filter((e) => e.what.startsWith("ext"));
+    const imgEvents = events.filter((e) => e.what.startsWith("img"));
+    expect(extEvents.length).toBe(4);
+    // External links ran beside the page crawl, not after it…
+    expect(extEvents.every((e) => e.at < lastPage), JSON.stringify(events)).toBe(true);
+    // …and the crawled host's own images waited for the URL phase to end.
+    expect(imgEvents.length).toBe(2);
+    expect(imgEvents.every((e) => e.at > lastPage), JSON.stringify(events)).toBe(true);
+    const row = (await db.execute(sql`select resources from crawls where id = ${c}::uuid`)).rows[0] as { resources: import("./resources").CrawlResourcesSummary };
+    expect(row.resources).toMatchObject({ planned: true, external: { found: 4, planned: 4, overBudget: 0 }, images: { found: 2, planned: 2, overBudget: 0 } });
+    expect(row.resources.urlPhaseFinishedAt).toEqual(expect.any(String));
+    expect(row.resources.finishedAt).toEqual(expect.any(String));
+    const rs = (await db.execute(sql`select state from resources where crawl_id = ${c}::uuid`)).rows as { state: string }[];
+    expect(rs.every((r) => r.state === "done")).toBe(true);
+  });
+
   it("never re-sends a resource an earlier run started", async () => {
     const o = srv.origin;
     srv.routes.set("/", send(`<!doctype html><title>t</title><body><img src="/i.png" alt=""><img src="/j.png" alt=""></body>`));

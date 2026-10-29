@@ -1,9 +1,15 @@
-// Resource phase (docs/SPEC.md "Phase 2"; LNK-010 and IMG-004..010): after the URL crawl and its probes, check the
-// external links and the images the crawled pages reference, and store the results in `resources`.
+// Resource phase (docs/SPEC.md "Phase 2"; LNK-010 and IMG-004..010): check the external links and the images the
+// crawled pages reference, and store the results in `resources`.
 //
-// - Budgets: at most MAX_EXTERNAL_LINKS unique external link URLs and MAX_IMAGE_URLS unique image URLs per crawl. External
-//   links are picked round-robin across hosts (one site linking 2,000 times to one domain cannot use the whole
-//   budget); images in first-seen order. What is over budget is counted in the crawl's summary, not requested.
+// - In parallel with the URL crawl (ResourcePhase.during): every window plans the snapshots stored since the last
+//   one, and queued rows on other hosts are checked. Rows on the crawled site's own host (its images) wait until the
+//   URL phase ends (ResourcePhase.finish, after the probes), so resource checks never take a slot from the crawled
+//   host while pages are fetched. Each external host has its own throttle.
+// - Budgets: at most MAX_EXTERNAL_LINKS unique external link URLs and MAX_IMAGE_URLS unique image URLs per crawl. Within
+//   each window, external links are picked round-robin across hosts (one site linking 2,000 times to one domain cannot
+//   use the whole budget); images in first-seen order. The final pass re-reads every snapshot: it plans what the
+//   windows missed, within the remaining budget, and counts found / over budget, referrers and sample pages exactly.
+//   What is over budget is counted in the crawl's summary, not requested.
 // - Every request goes through the crawl's fetcher (SSRF guards on every hop) inside the target host's throttle (the
 //   same Redis politeness as crawled URLs), and obeys that host's robots.txt, read once per host. None is charged to
 //   the URL budget (fetches_committed).
@@ -11,7 +17,8 @@
 //   Redirects are followed. Images: HEAD for type and size; for raster images, then a GET of the first
 //   MAX_IMAGE_HEAD_BYTES with a Range header, for the intrinsic size (and the total size from Content-Range).
 // - At most once: a row is marked started just before its first request. A resumed crawl marks a started row
-//   interrupted and never re-sends it; queued rows are sent.
+//   interrupted and never re-sends it; queued rows are sent. The window cursor is stored, so a resumed crawl does not
+//   plan a window twice.
 import { sql } from "drizzle-orm";
 import type { Db } from "../../db/client";
 import { MAX_IMAGE_HEAD_BYTES, SafeFetchError, type FetchOptions, type FetchResult } from "../../fetch/safe-fetch";
@@ -43,9 +50,12 @@ export interface ResourceKindSummary {
 
 /** crawls.resources */
 export interface CrawlResourcesSummary {
-  /** When the URL crawl (and probes) ended and this phase began. */
-  urlPhaseFinishedAt: string;
+  /** When the URL crawl ended. */
+  urlPhaseFinishedAt?: string;
+  /** True once the final pass planned the whole crawl; until then `external` and `images` describe the windows so far. */
   planned: boolean;
+  /** The last page_snapshots.id a window planned. */
+  cursor?: number;
   external: ResourceKindSummary;
   images: ResourceKindSummary;
   finishedAt?: string;
@@ -97,11 +107,12 @@ class Tally {
 }
 
 /** External <a href> targets and image URLs of every HTML snapshot, in crawl order, without loading all snapshots. */
-async function collect(ctx: ResourceContext): Promise<{ links: Tally; images: Tally }> {
+async function collect(ctx: ResourceContext, from = 0): Promise<{ links: Tally; images: Tally; last: number }> {
   const own = new URL(ctx.origin).hostname;
   const links = new Tally();
   const images = new Tally();
-  for (let after = 0; ; ) {
+  let last = from;
+  for (let after = from; ; ) {
     const r = await ctx.db.execute(sql`select s.id, u.normalised_url as page, s.links, s.images from page_snapshots s join crawl_urls u on u.id = s.url_id
       where s.crawl_id = ${ctx.crawlId}::uuid and s.facts is not null and s.id > ${after} order by s.id limit ${BATCH}`);
     for (const row of r.rows as { id: number; page: string; links: SnapshotLink[] | null; images: SnapshotImage[] | null }[]) {
@@ -119,10 +130,11 @@ async function collect(ctx: ResourceContext): Promise<{ links: Tally; images: Ta
         images.add(i.resolved, row.page);
       }
     }
+    if (r.rows.length) last = Number((r.rows[r.rows.length - 1] as { id: number }).id);
     if (r.rows.length < BATCH) break;
-    after = Number((r.rows[r.rows.length - 1] as { id: number }).id);
+    after = last;
   }
-  return { links, images };
+  return { links, images, last };
 }
 
 /** Up to `budget` URLs, taking one per host in turn (hosts in first-seen order, URLs in first-seen order per host). */
@@ -160,27 +172,6 @@ async function insertRows(ctx: ResourceContext, kind: ResourceKind, urls: string
 
 async function saveSummary(ctx: ResourceContext, s: CrawlResourcesSummary) {
   await ctx.db.execute(sql`update crawls set resources = ${JSON.stringify(s)}::jsonb where id = ${ctx.crawlId}::uuid`);
-}
-
-/** Plan once per crawl: the rows to check, within budget. A resumed crawl keeps the earlier plan. */
-async function plan(ctx: ResourceContext): Promise<CrawlResourcesSummary> {
-  if (ctx.existing?.planned) return ctx.existing;
-  const extBudget = ctx.limits?.externalLinks ?? MAX_EXTERNAL_LINKS;
-  const imgBudget = ctx.limits?.images ?? MAX_IMAGE_URLS;
-  const { links, images } = await collect(ctx);
-  const ext = roundRobin([...links.urls.keys()], extBudget);
-  const img = [...images.urls.keys()].slice(0, imgBudget);
-  await insertRows(ctx, "external_link", ext, links);
-  await insertRows(ctx, "image", img, images);
-  const summary: CrawlResourcesSummary = {
-    urlPhaseFinishedAt: ctx.existing?.urlPhaseFinishedAt ?? new Date().toISOString(),
-    planned: true,
-    external: { found: links.found, planned: ext.length, overBudget: links.found - ext.length, budget: extBudget },
-    images: { found: images.found, planned: img.length, overBudget: images.found - img.length, budget: imgBudget },
-  };
-  await saveSummary(ctx, summary);
-  ctx.log("crawl.resources_planned", { crawlId: ctx.crawlId, external: summary.external, images: summary.images });
-  return summary;
 }
 
 /** RFC 9309 decision function for one host, from its robots.txt (read once). */
@@ -283,13 +274,14 @@ async function check(ctx: ResourceContext, row: Row, throttle: HostThrottle): Pr
   return true;
 }
 
-/** All queued rows of one host, one at a time (the throttle spaces them). False when the crawl started stopping. */
-async function runHost(ctx: ResourceContext, host: string, rows: Row[]): Promise<boolean> {
-  const throttle = ctx.throttle(host);
-  const robots = await hostRobots(ctx, host, rows[0].url, throttle);
-  if (!robots) return false;
+/**
+ * Queued rows of one host, one at a time (the throttle spaces them). False when the crawl started stopping; when
+ * `yieldNow()` turns true the rest stay queued for the final pass.
+ */
+async function runHost(ctx: ResourceContext, robots: HostRobots, rows: Row[], throttle: HostThrottle, yieldNow: () => boolean): Promise<boolean> {
   for (const row of rows) {
     if (ctx.signal.aborted) return false;
+    if (yieldNow()) return true;
     if ("noAnswer" in robots) {
       // The host does not answer at all (e.g. DNS): that is every URL's answer too.
       await setRow(ctx, row.id, { state: "done", error: robots.noAnswer });
@@ -305,30 +297,155 @@ async function runHost(ctx: ResourceContext, host: string, rows: Row[]): Promise
   return true;
 }
 
-/** Plan (once) and check every queued resource. Returns false when the crawl started stopping before all were sent. */
-export async function runResources(ctx: ResourceContext): Promise<boolean> {
-  // Rows a stopped run had already started are never re-sent.
-  await ctx.db.execute(sql`update resources set state = 'interrupted', error = ${JSON.stringify({ code: "INTERRUPTED", message: "interrupted before the response was stored" })}::jsonb, updated_at = now()
-    where crawl_id = ${ctx.crawlId}::uuid and state = 'started'`);
-  const summary = await plan(ctx);
-  const r = await ctx.db.execute(sql`select id, kind, url, host from resources where crawl_id = ${ctx.crawlId}::uuid and state = 'queued' order by id`);
-  const byHost = new Map<string, Row[]>();
-  for (const x of r.rows as { id: number; kind: ResourceKind; url: string; host: string }[]) {
-    if (!byHost.has(x.host)) byHost.set(x.host, []);
-    byHost.get(x.host)!.push({ id: Number(x.id), kind: x.kind, url: x.url, host: x.host });
+const sleep = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const t = setTimeout(resolve, ms);
+    signal.addEventListener("abort", () => (clearTimeout(t), resolve()), { once: true });
+  });
+
+/** One run's resource phase: windows during the URL crawl (`during`), then the final pass (`finish`). */
+export class ResourcePhase {
+  /** robots.txt per host, read once per run. */
+  private readonly robots = new Map<string, HostRobots>();
+  private readonly throttles = new Map<string, HostThrottle>();
+  private planned: Set<string> | null = null;
+  private readonly count: Record<ResourceKind, number> = { external_link: 0, image: 0 };
+  private summary: CrawlResourcesSummary;
+
+  constructor(private readonly ctx: ResourceContext) {
+    this.summary = ctx.existing ?? { planned: false, cursor: 0, external: this.kindSummary("external_link", 0), images: this.kindSummary("image", 0) };
   }
-  const hosts = [...byHost.keys()];
-  let next = 0;
-  let stopped = false;
-  const lane = async () => {
-    while (!stopped && next < hosts.length) {
-      const h = hosts[next++];
-      if (!(await runHost(ctx, h, byHost.get(h)!))) stopped = true;
+
+  private budget(kind: ResourceKind) {
+    return kind === "external_link" ? (this.ctx.limits?.externalLinks ?? MAX_EXTERNAL_LINKS) : (this.ctx.limits?.images ?? MAX_IMAGE_URLS);
+  }
+
+  private kindSummary(kind: ResourceKind, found: number, planned = found): ResourceKindSummary {
+    return { found, planned, overBudget: found - planned, budget: this.budget(kind) };
+  }
+
+  /** Once per run: rows a stopped run had already started are never re-sent; the plan so far is loaded. */
+  private async load() {
+    if (this.planned) return;
+    await this.ctx.db.execute(sql`update resources set state = 'interrupted', error = ${JSON.stringify({ code: "INTERRUPTED", message: "interrupted before the response was stored" })}::jsonb, updated_at = now()
+      where crawl_id = ${this.ctx.crawlId}::uuid and state = 'started'`);
+    const r = await this.ctx.db.execute(sql`select kind, url from resources where crawl_id = ${this.ctx.crawlId}::uuid`);
+    this.planned = new Set();
+    for (const x of r.rows as { kind: ResourceKind; url: string }[]) {
+      this.planned.add(`${x.kind} ${x.url}`);
+      this.count[x.kind]++;
     }
-  };
-  await Promise.all(Array.from({ length: Math.min(HOST_LANES, hosts.length) }, lane));
-  if (stopped || ctx.signal.aborted) return false;
-  await saveSummary(ctx, { ...summary, finishedAt: new Date().toISOString() });
-  ctx.log("crawl.resources_done", { crawlId: ctx.crawlId, hosts: hosts.length });
-  return true;
+  }
+
+  /** Plan the URLs of `links` and `images` not planned yet, within the remaining budget. */
+  private async planNew(links: Tally, images: Tally) {
+    const fresh = (kind: ResourceKind, t: Tally) => [...t.urls.keys()].filter((u) => !this.planned!.has(`${kind} ${u}`));
+    const ext = roundRobin(fresh("external_link", links), Math.max(0, this.budget("external_link") - this.count.external_link));
+    const img = fresh("image", images).slice(0, Math.max(0, this.budget("image") - this.count.image));
+    await insertRows(this.ctx, "external_link", ext, links);
+    await insertRows(this.ctx, "image", img, images);
+    for (const u of ext) this.planned!.add(`external_link ${u}`);
+    for (const u of img) this.planned!.add(`image ${u}`);
+    this.count.external_link += ext.length;
+    this.count.image += img.length;
+  }
+
+  private throttle(host: string) {
+    if (!this.throttles.has(host)) this.throttles.set(host, this.ctx.throttle(host));
+    return this.throttles.get(host)!;
+  }
+
+  /** Check the queued rows on hosts `include` accepts, HOST_LANES hosts at a time. `ok` is false when the crawl started stopping. */
+  private async checkQueued(include: (host: string) => boolean, yieldNow: () => boolean): Promise<{ ok: boolean; rows: number }> {
+    const r = await this.ctx.db.execute(sql`select id, kind, url, host from resources where crawl_id = ${this.ctx.crawlId}::uuid and state = 'queued' order by id`);
+    const byHost = new Map<string, Row[]>();
+    for (const x of r.rows as { id: number; kind: ResourceKind; url: string; host: string }[]) {
+      if (!include(x.host)) continue;
+      if (!byHost.has(x.host)) byHost.set(x.host, []);
+      byHost.get(x.host)!.push({ id: Number(x.id), kind: x.kind, url: x.url, host: x.host });
+    }
+    const hosts = [...byHost.keys()];
+    let next = 0;
+    let stopped = false;
+    const lane = async () => {
+      while (!stopped && next < hosts.length && !yieldNow()) {
+        const h = hosts[next++];
+        const rows = byHost.get(h)!;
+        const throttle = this.throttle(h);
+        let robots = this.robots.get(h);
+        if (!robots) {
+          const got = await hostRobots(this.ctx, h, rows[0].url, throttle);
+          if (!got) {
+            stopped = true;
+            return;
+          }
+          this.robots.set(h, (robots = got));
+        }
+        if (!(await runHost(this.ctx, robots, rows, throttle, yieldNow))) stopped = true;
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(HOST_LANES, hosts.length) }, lane));
+    return { ok: !stopped && !this.ctx.signal.aborted, rows: hosts.reduce((n, h) => n + byHost.get(h)!.length, 0) };
+  }
+
+  /**
+   * While the URL phase runs (until `urlPhaseOver()` or the crawl stops): plan each window of new snapshots and check
+   * the queued rows on other hosts. Never requests anything on the crawled host.
+   */
+  async during(urlPhaseOver: () => boolean, pollMs = 1000): Promise<void> {
+    if (this.summary.planned) return; // resumed after the URL phase
+    await this.load();
+    const own = new URL(this.ctx.origin).host;
+    while (!urlPhaseOver() && !this.ctx.signal.aborted) {
+      const { links, images, last } = await collect(this.ctx, this.summary.cursor ?? 0);
+      if (last !== (this.summary.cursor ?? 0)) {
+        await this.planNew(links, images);
+        this.summary = { ...this.summary, cursor: last, external: this.kindSummary("external_link", this.count.external_link), images: this.kindSummary("image", this.count.image) };
+        await saveSummary(this.ctx, this.summary);
+      }
+      const { ok, rows } = await this.checkQueued((h) => h !== own, urlPhaseOver);
+      if (!ok) return;
+      if (!rows) await sleep(pollMs, this.ctx.signal);
+    }
+  }
+
+  /** Record the end of the URL phase (before the probes). */
+  async urlPhaseFinished() {
+    if (this.summary.urlPhaseFinishedAt) return;
+    this.summary = { ...this.summary, urlPhaseFinishedAt: new Date().toISOString() };
+    await saveSummary(this.ctx, this.summary);
+  }
+
+  /** After the URL phase and the probes: plan the rest and check every queued row. False when the crawl started stopping. */
+  async finish(): Promise<boolean> {
+    await this.load();
+    if (!this.summary.planned) {
+      // Every snapshot again: rows a window missed (a snapshot committed after a later one was read), and exact counts.
+      const { links, images, last } = await collect(this.ctx);
+      await this.planNew(links, images);
+      const exact = (kind: ResourceKind, t: Tally) =>
+        [...t.urls].filter(([u]) => this.planned!.has(`${kind} ${u}`)).map(([url, x]) => ({ kind, url, referrers: x.referrers, pages: x.pages }));
+      const rows = [...exact("external_link", links), ...exact("image", images)];
+      for (let i = 0; i < rows.length; i += BATCH) {
+        await this.ctx.db.execute(sql`update resources r set referrers = v.referrers, sample_pages = v.pages
+          from jsonb_to_recordset(${JSON.stringify(rows.slice(i, i + BATCH))}::jsonb) as v(kind text, url text, referrers int, pages jsonb)
+          where r.crawl_id = ${this.ctx.crawlId}::uuid and r.kind = v.kind and r.url = v.url`);
+      }
+      this.summary = {
+        urlPhaseFinishedAt: this.summary.urlPhaseFinishedAt ?? new Date().toISOString(),
+        planned: true,
+        cursor: last,
+        external: this.kindSummary("external_link", links.found, this.count.external_link),
+        images: this.kindSummary("image", images.found, this.count.image),
+      };
+      await saveSummary(this.ctx, this.summary);
+      this.ctx.log("crawl.resources_planned", { crawlId: this.ctx.crawlId, external: this.summary.external, images: this.summary.images });
+    }
+    const { ok } = await this.checkQueued(() => true, () => false);
+    if (!ok) return false;
+    this.summary = { ...this.summary, finishedAt: new Date().toISOString() };
+    await saveSummary(this.ctx, this.summary);
+    this.ctx.log("crawl.resources_done", { crawlId: this.ctx.crawlId });
+    return true;
+  }
 }

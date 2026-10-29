@@ -39,7 +39,7 @@ import {
   type UrlResult,
 } from "./frontier";
 import { HostThrottle, parseRetryAfter, type ThrottleOptions } from "./politeness";
-import { runResources, type CrawlResourcesSummary } from "./resources";
+import { ResourcePhase, type CrawlResourcesSummary } from "./resources";
 import { runProbes } from "./probes";
 import type { ProbeRecord } from "../../rules/probe-types";
 import { crawlSecretScope, decryptSecret, secretKey } from "./secrets";
@@ -212,6 +212,10 @@ class Run {
   private host = "";
   private origin = "";
   private throttle!: HostThrottle;
+  /** The resource phase: its lane runs beside the URL crawl until `urlPhaseOver`, then finishes after the probes. */
+  private resourcePhase: ResourcePhase | null = null;
+  private resourceLane: Promise<void> | null = null;
+  private urlPhaseOver = false;
   private scope: { include: [string, RegExp][]; exclude: [string, RegExp][]; subfolder: string | null } = { include: [], exclude: [], subfolder: null };
   private authHeader: string | null = null;
   /** Aborted by a pause or cancel (crawls.status) or worker shutdown: ends every wait, and no new request starts. */
@@ -310,8 +314,11 @@ class Run {
           if (stopped) return stopped;
         }
       }
+      if (!verify) this.resourceLane = this.resources().during(() => this.urlPhaseOver).catch((e) => this.log("crawl.resources_lane_error", { crawlId: this.crawlId, error: String((e as Error)?.message ?? e) }));
       return await this.crawlLoop();
     } finally {
+      this.urlPhaseOver = true;
+      await this.resourceLane;
       unwatch();
       clearInterval(renew);
       await releaseReservations(this.db, this.owner).catch(() => {});
@@ -747,9 +754,13 @@ class Run {
   }
 
   private async finishCompleted(): Promise<RunOutcome> {
+    // The URL phase is over: the resource lane yields (its queued rows wait for the final pass below).
+    this.urlPhaseOver = true;
+    await this.resourceLane;
     let stop = await this.checkStop();
     if (stop) return stop;
     if (this.crawl.config?.verify) return this.markCompleted();
+    await this.resources().urlPhaseFinished();
     const probed = await runProbes({
       db: this.db,
       crawlId: this.crawlId,
@@ -772,7 +783,16 @@ class Run {
     stop = await this.checkStop();
     if (stop) return stop;
     if (!probed) return "shutdown";
-    const checked = await runResources({
+    const checked = await this.resources().finish();
+    stop = await this.checkStop();
+    if (stop) return stop;
+    if (!checked) return "shutdown";
+    return this.markCompleted();
+  }
+
+  /** Built on first use, after any start redirect has moved the crawl to its final host. */
+  private resources(): ResourcePhase {
+    this.resourcePhase ??= new ResourcePhase({
       db: this.db,
       crawlId: this.crawlId,
       origin: this.crawl.site_origin,
@@ -789,10 +809,7 @@ class Run {
       log: this.log,
       limits: this.opts.resourceLimits,
     });
-    stop = await this.checkStop();
-    if (stop) return stop;
-    if (!checked) return "shutdown";
-    return this.markCompleted();
+    return this.resourcePhase;
   }
 
   private async markCompleted(): Promise<RunOutcome> {
