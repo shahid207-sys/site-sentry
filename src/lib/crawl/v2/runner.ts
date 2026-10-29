@@ -76,6 +76,19 @@ export interface CrawlConfig {
   aiCrawlers?: "allow" | "block";
   /** Pages the user marks as high-value (LNK-012); unset means the rule reports needs_config. */
   keyPages?: string[];
+  /**
+   * A fix verification (crawls.kind 'verify'): fetch the seeds and their redirect targets only. No start-URL check,
+   * no sitemaps, no probes, no resource phase; the analysis runs `ruleId` alone and writes states for `fingerprints`.
+   */
+  verify?: VerifyConfig;
+}
+
+export interface VerifyConfig {
+  /** The audit crawl whose issue group is verified. */
+  auditCrawlId: string;
+  ruleId: string;
+  /** The group's open fingerprints when verification started: the only ones whose state it may change. */
+  fingerprints: string[];
 }
 
 export interface RobotsRecord {
@@ -284,14 +297,18 @@ class Run {
       const stop = await this.checkStop();
       if (stop) return stop;
       await this.seed();
-      const start = await this.resolveStart();
+      const verify = !!crawl.config?.verify;
+      const start = verify ? null : await this.resolveStart();
       if (start === "stopped") return (await this.checkStop()) ?? "shutdown";
       if (start?.kind === "off_host") {
         return this.finishFailed({ code: "start_redirected_off_host", message: `Started at ${start.from}, which redirects to ${start.to}, another site. Start a new audit on that site to crawl it.` });
       }
       if (!crawl.discovery_done) {
-        const stopped = await this.discover();
-        if (stopped) return stopped;
+        if (verify) await this.db.execute(sql`update crawls set discovery_done = true where id = ${this.crawlId}::uuid`);
+        else {
+          const stopped = await this.discover();
+          if (stopped) return stopped;
+        }
       }
       return await this.crawlLoop();
     } finally {
@@ -732,6 +749,7 @@ class Run {
   private async finishCompleted(): Promise<RunOutcome> {
     let stop = await this.checkStop();
     if (stop) return stop;
+    if (this.crawl.config?.verify) return this.markCompleted();
     const probed = await runProbes({
       db: this.db,
       crawlId: this.crawlId,
@@ -774,6 +792,10 @@ class Run {
     stop = await this.checkStop();
     if (stop) return stop;
     if (!checked) return "shutdown";
+    return this.markCompleted();
+  }
+
+  private async markCompleted(): Promise<RunOutcome> {
     await finalizeUrls(this.db, this.crawlId, "completed", this.crawl.max_depth, this.crawl.budget);
     await this.db.execute(sql`update crawls set status = 'completed', finished_at = now() where id = ${this.crawlId}::uuid and status = 'running'`);
     this.log("crawl.completed", { crawlId: this.crawlId });

@@ -99,6 +99,13 @@
       "when": 1793295200319,
       "tag": "0013_crawl_health",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1793295910837,
+      "tag": "0014_crawl_kind",
+      "breakpoints": true
     }
   ]
 }

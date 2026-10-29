@@ -4,11 +4,11 @@
 // redelivered or concurrent job either waits or replaces the previous result; it never leaves half a result.
 import { sql } from "drizzle-orm";
 import type { Db } from "../db/client";
-import { findings as findingsTable } from "../db/schema";
+import { findings as findingsTable, type CrawlKind } from "../db/schema";
 import { normaliseUrl } from "../crawl/normalise";
 import { isAllowed, parseRobots } from "../crawl/robots";
 import type { SitemapDocRecord } from "../crawl/v2/discovery";
-import type { RobotsRecord } from "../crawl/v2/runner";
+import type { RobotsRecord, VerifyConfig } from "../crawl/v2/runner";
 import type { DiscoverySource, UrlState } from "../crawl/v2/types";
 import type { CanonicalTag } from "../snapshot/types";
 import { NeedsConfig, type CrawlView, type Finding, type Hreflang, type PageRule, type PageView, type ResourceFacts, type ResourceRule, type Rule, type SiteCtx, type SiteRule, type SiteView, type UrlFacts } from "./contract";
@@ -17,7 +17,7 @@ import type { ProbeRecord } from "./probe-types";
 import { clusterTemplates, type ShapedPage } from "../snapshot/template";
 import { crawlComplete } from "../results/coverage";
 import { writeHealth } from "../results/health";
-import { laterAudits, writeIssueStates } from "../results/states";
+import { laterAudits, writeIssueStates, writeVerifyStates } from "../results/states";
 import { insertOccurrences, occurrenceOf, reachBasis, writeIssueGroups, type Occurrence } from "../results/occurrences";
 import { fingerprintOf } from "./fingerprint";
 import { TemplateGroups } from "./group";
@@ -51,7 +51,8 @@ export interface CrawlRow {
   id: string;
   site_origin: string;
   status: string;
-  config: { aiCrawlers?: "allow" | "block"; keyPages?: string[] };
+  kind?: CrawlKind;
+  config: { aiCrawlers?: "allow" | "block"; keyPages?: string[]; verify?: VerifyConfig };
   robots: RobotsRecord | null;
   sitemaps: (SitemapDocRecord | { started: string })[];
   probes: ProbeRecord[];
@@ -374,14 +375,16 @@ async function insertFindings(tx: Exec, crawlId: string, list: Finding[], byId: 
 }
 
 export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule[]; batchSize?: number; log?: (e: string, d?: Record<string, unknown>) => void } = {}): Promise<AnalysisResult> {
-  const rules = opts.rules ?? RULES;
   const batch = opts.batchSize ?? ANALYSIS_BATCH;
   const log = opts.log ?? (() => {});
   const empty = (outcome: AnalysisResult["outcome"]): AnalysisResult => ({ outcome, pages: 0, findings: 0, stats: [], msPerPage: 0 });
 
-  const r0 = await db.execute(sql`select id, site_origin, status, config, robots, sitemaps, probes, started_at, created_at from crawls where id = ${crawlId}::uuid`);
+  const r0 = await db.execute(sql`select id, kind, site_origin, status, config, robots, sitemaps, probes, started_at, created_at from crawls where id = ${crawlId}::uuid`);
   const row = r0.rows[0] as unknown as CrawlRow | undefined;
   if (!row) return empty("missing");
+  // A fix verification runs its group's rule alone and writes states for its target fingerprints only.
+  const verify = row.kind === "verify" ? row.config.verify : undefined;
+  const rules = verify ? (opts.rules ?? RULES).filter((r) => r.id === verify.ruleId) : (opts.rules ?? RULES);
   if (row.status !== "completed" && row.status !== "cancelled") return empty("not_ready");
   const startedAt = new Date().toISOString();
   await db.execute(sql`update crawls set analysis = ${JSON.stringify({ status: "running", startedAt })}::jsonb where id = ${crawlId}::uuid`);
@@ -472,7 +475,7 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
       );
       total += siteFound.length;
       if (duplicates) log("analysis.duplicate_fingerprints", { crawlId, duplicates });
-      const issueGroups = await writeIssueGroups(tx, crawlId, rules, basis.indexable);
+      const issueGroups = verify ? 0 : await writeIssueGroups(tx, crawlId, rules, basis.indexable);
 
       const list = stats.all();
       for (const s of list) {
@@ -480,14 +483,17 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
           values (${crawlId}::uuid, ${s.ruleId}, ${s.version}, ${s.status}, ${s.evaluated}, ${s.findings}, ${s.totalMs}, ${s.detail ?? null})`);
       }
       // After rule_runs: a fingerprint counts as re-checked only when its rule ran in this crawl.
-      const states = await writeIssueStates(tx, crawlId, crawl.complete);
-      const health = await writeHealth(tx, crawlId, rules);
+      const states = verify ? await writeVerifyStates(tx, crawlId, verify) : await writeIssueStates(tx, crawlId, crawl.complete);
+      const health = verify ? null : await writeHealth(tx, crawlId, rules);
       // fetched → analysed: every snapshot was read by the page rules above.
       await tx.execute(sql`update crawl_urls set state = 'analysed', updated_at = now() where crawl_id = ${crawlId}::uuid and state = 'fetched'`);
       const msPerPage = pages ? Math.round((list.reduce((n, s) => n + s.totalMs, 0) / pages) * 1000) / 1000 : 0;
-      await tx.execute(sql`update crawls set analysis = ${JSON.stringify({ status: "completed", startedAt, finishedAt: new Date().toISOString(), pages, findings: total, msPerPage, issueGroups, duplicateFingerprints: duplicates, states, health: health.score, partialCoverage: health.partialCoverage })}::jsonb where id = ${crawlId}::uuid`);
+      await tx.execute(sql`update crawls set analysis = ${JSON.stringify({ status: "completed", startedAt, finishedAt: new Date().toISOString(), pages, findings: total, msPerPage, issueGroups, duplicateFingerprints: duplicates, states, health: health?.score ?? null, partialCoverage: health?.partialCoverage ?? null })}::jsonb where id = ${crawlId}::uuid`);
       // Later audits of the project read this one's states: recompute them, oldest first.
-      for (const later of await laterAudits(tx, crawlId)) await writeIssueStates(tx, later.id, await crawlComplete(tx, later.id, later.status));
+      for (const later of await laterAudits(tx, crawlId)) {
+        if (later.kind === "verify" && later.config.verify) await writeVerifyStates(tx, later.id, later.config.verify);
+        else await writeIssueStates(tx, later.id, await crawlComplete(tx, later.id, later.status));
+      }
       return { outcome: "analysed" as const, pages, findings: total, stats: list, msPerPage };
     });
     log("analysis.completed", { crawlId, pages: result.pages, findings: result.findings, msPerPage: result.msPerPage });

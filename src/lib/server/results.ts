@@ -1,7 +1,9 @@
 import "server-only";
+import { getCrawlQueue } from "../crawl/v2/audit-bridge";
 import { getDb } from "../db/client";
 import type { Workspace } from "../model";
-import { compareCrawls, ResultsError, type Comparison } from "../results/queries";
+import { compareCrawls, latestVerification, ResultsError, type Comparison, type VerificationResult } from "../results/queries";
+import { startVerification, type StartedVerification } from "../results/verify";
 import { previousAudit } from "../results/states";
 import { WorkflowError } from "../workflow/deps";
 import { getStore } from "../workspace";
@@ -34,4 +36,25 @@ export async function getGroupComparison(ws: Workspace, headAuditId: string, bas
     if (e instanceof ResultsError) throw new WorkflowError(e.code, e.message);
     throw e;
   }
+}
+
+async function mapped<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e instanceof ResultsError) throw new WorkflowError(e.code, e.message);
+    throw e;
+  }
+}
+
+/** Re-crawl the URLs of one issue group of a v2 audit and update their states. */
+export async function verifyIssueGroup(ws: Workspace, auditId: string, ruleId: string): Promise<StartedVerification> {
+  const { crawlId } = await crawlOf(ws, auditId);
+  return mapped(() => startVerification(getDb(), getCrawlQueue(), crawlId, ruleId));
+}
+
+/** The latest verification of one issue group of a v2 audit. */
+export async function getGroupVerification(ws: Workspace, auditId: string, ruleId: string): Promise<VerificationResult | null> {
+  const { crawlId } = await crawlOf(ws, auditId);
+  return mapped(() => latestVerification(getDb(), crawlId, ruleId));
 }

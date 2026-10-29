@@ -9,6 +9,9 @@ const list = (values: readonly string[]) => sql.raw(values.map((v) => `'${v}'`).
 export const CRAWL_STATUSES = ["queued", "running", "paused", "cancelling", "completed", "cancelled", "failed"] as const;
 export type CrawlStatus = (typeof CRAWL_STATUSES)[number];
 
+export const CRAWL_KINDS = ["audit", "verify"] as const;
+export type CrawlKind = (typeof CRAWL_KINDS)[number];
+
 export const crawls = pgTable(
   "crawls",
   {
@@ -21,6 +24,12 @@ export const crawls = pgTable(
      * states, comparisons). Null on crawls created before Phase 3: their project is their site origin.
      */
     siteId: text("site_id"),
+    /**
+     * 'audit': a crawl of the site. 'verify': a fix verification that re-fetches one issue group's URLs
+     * (config.verify); it writes issue states only for that group's fingerprints and is never an audit itself
+     * (no comparison base, no overview, no health).
+     */
+    kind: text("kind").$type<CrawlKind>().notNull().default("audit"),
     siteOrigin: text("site_origin").notNull(),
     profile: text("profile").notNull(),
     /** Snapshot of the resolved crawl config (profile values plus overrides) at start. */
@@ -57,6 +66,7 @@ export const crawls = pgTable(
     uniqueIndex("crawls_audit_uq").on(t.workspace, t.auditId),
     index("crawls_status_idx").on(t.status),
     check("crawls_status_ck", sql`${t.status} in (${list(CRAWL_STATUSES)})`),
+    check("crawls_kind_ck", sql`${t.kind} in (${list(CRAWL_KINDS)})`),
   ],
 );
 

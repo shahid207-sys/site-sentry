@@ -6,7 +6,7 @@ import type { IssueState } from "../db/schema";
 import type { Priority } from "./priority";
 import { crawlComplete, crawlCoverage, type Coverage } from "./coverage";
 import type { Health } from "./health";
-import { projectKey, rechecked, stateCounts, type StateCounts } from "./states";
+import { OPEN_STATES, projectKey, rechecked, type StateCounts } from "./states";
 
 type Exec = Pick<Db, "execute">;
 
@@ -17,6 +17,26 @@ export class ResultsError extends Error {
   ) {
     super(message);
   }
+}
+
+/**
+ * SQL: an audit's issue states as shown everywhere (API, report): the audit's own state, except that a fingerprint a
+ * later fix verification of this audit resolved (its latest verification result) shows as resolved. Columns:
+ * fingerprint, rule_id, url, evidence_key, template_id, outcome, state, audit_state, verify_state, verified_by.
+ */
+export const effectiveStates = (auditCrawlId: string) => sql`(select s.fingerprint, s.rule_id, s.url, s.evidence_key, s.template_id, s.outcome,
+    case when v.state = 'resolved' then 'resolved' else s.state end as state, s.state as audit_state, v.state as verify_state, v.crawl_id as verified_by
+  from issue_states s left join lateral (
+    select vs.state, vs.crawl_id from issue_states vs join crawls vc on vc.id = vs.crawl_id
+    where vc.kind = 'verify' and vc.config->'verify'->>'auditCrawlId' = ${auditCrawlId} and vs.fingerprint = s.fingerprint
+    order by vc.created_at desc, vc.id desc limit 1) v on true
+  where s.crawl_id = ${auditCrawlId}::uuid)`;
+
+export async function effectiveStateCounts(db: Exec, auditCrawlId: string): Promise<StateCounts> {
+  const r = await db.execute(sql`select state, count(*)::int as n from ${effectiveStates(auditCrawlId)} e group by state`);
+  const out: StateCounts = { new: 0, persistent: 0, resolved: 0, regressed: 0, not_rechecked: 0, inconclusive: 0 };
+  for (const x of r.rows as { state: IssueState; n: number }[]) out[x.state] = x.n;
+  return out;
 }
 
 export interface CrawlOverview {
@@ -30,8 +50,10 @@ export interface CrawlOverview {
   analysed: boolean;
   coverage: Coverage;
   health: Health | null;
-  /** issue_states per state. */
+  /** Issue states per state, verified fixes included (effectiveStates). */
   states: StateCounts;
+  /** Fingerprints a fix verification resolved. */
+  verifiedResolved: number;
   /** Issue groups with at least one affected URL, per priority. */
   priorities: Record<Priority, number>;
   issueGroups: number;
@@ -40,10 +62,12 @@ export interface CrawlOverview {
 }
 
 export async function crawlOverview(db: Exec, crawlId: string): Promise<CrawlOverview> {
-  const r = await db.execute(sql`select id, workspace, ${projectKey("c")} as project, site_origin, profile, status, created_at, analysis->>'status' as analysis, health
+  const r = await db.execute(sql`select id, kind, workspace, ${projectKey("c")} as project, site_origin, profile, status, created_at, analysis->>'status' as analysis, health
     from crawls c where id = ${crawlId}::uuid`);
-  const c = r.rows[0] as { id: string; workspace: string; project: string; site_origin: string; profile: string; status: string; created_at: Date | string; analysis: string | null; health: Health | null } | undefined;
+  const c = r.rows[0] as { id: string; kind: string; workspace: string; project: string; site_origin: string; profile: string; status: string; created_at: Date | string; analysis: string | null; health: Health | null } | undefined;
   if (!c) throw new ResultsError("NOT_FOUND", "Crawl not found.");
+  if (c.kind !== "audit") throw new ResultsError("INVALID", "This crawl is a fix verification, not an audit.");
+  const verified = await db.execute(sql`select count(*)::int as n from ${effectiveStates(crawlId)} e where e.verify_state = 'resolved'`);
   const g = await db.execute(sql`select priority, count(*)::int as n from issue_groups where crawl_id = ${crawlId}::uuid and affected_urls > 0 group by priority`);
   const priorities: Record<Priority, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
   for (const x of g.rows as { priority: Priority; n: number }[]) priorities[x.priority] = x.n;
@@ -59,7 +83,8 @@ export async function crawlOverview(db: Exec, crawlId: string): Promise<CrawlOve
     analysed: c.analysis === "completed",
     coverage: await crawlCoverage(db, crawlId),
     health: c.health,
-    states: await stateCounts(db, crawlId),
+    states: await effectiveStateCounts(db, crawlId),
+    verifiedResolved: (verified.rows[0] as { n: number }).n,
     priorities,
     issueGroups: Object.values(priorities).reduce((a, b) => a + b, 0),
     rulesRan: (ran.rows[0] as { n: number }).n,
@@ -98,7 +123,7 @@ export async function issueGroups(db: Exec, crawlId: string, opts: { ruleIds?: s
   const r = await db.execute(sql`select g.*,
       coalesce((select jsonb_agg(jsonb_build_object('templateId', t.template_id, 'affectedUrls', t.affected_urls, 'sampleUrls', t.sample_urls) order by t.affected_urls desc, t.template_id collate "C")
         from issue_group_templates t where t.crawl_id = g.crawl_id and t.rule_id = g.rule_id), '[]'::jsonb) as templates,
-      coalesce((select jsonb_object_agg(x.state, x.n) from (select state, count(*)::int as n from issue_states s where s.crawl_id = g.crawl_id and s.rule_id = g.rule_id group by state) x), '{}'::jsonb) as states
+      coalesce((select jsonb_object_agg(x.state, x.n) from (select state, count(*)::int as n from ${effectiveStates(crawlId)} e where e.rule_id = g.rule_id group by state) x), '{}'::jsonb) as states
     from issue_groups g where g.crawl_id = ${crawlId}::uuid and g.affected_urls > 0 ${only}
     order by g.score desc, g.rule_id collate "C"`);
   return (r.rows as Record<string, unknown>[]).map((g) => ({
@@ -191,4 +216,54 @@ export async function compareCrawls(db: Exec, a: string, b: string): Promise<Com
   if (cb === null || ch === null || Math.abs(cb - ch) > SCOPE_TOLERANCE)
     warnings.push(`Coverage differs by more than ${SCOPE_TOLERANCE} points (${cb ?? "n/a"}% and ${ch ?? "n/a"}%): changes may reflect what was crawled, not what was fixed.`);
   return { base, head, groups, totals, scopeMismatch: warnings.length > 0, warnings };
+}
+
+export interface VerificationResult {
+  verifyCrawlId: string;
+  auditCrawlId: string;
+  ruleId: string;
+  status: string;
+  analysed: boolean;
+  createdAt: string;
+  /** Target fingerprints. */
+  targets: number;
+  /** Target fingerprints per result state (empty until analysed). */
+  states: Partial<Record<IssueState, number>>;
+  urls: { url: string; state: IssueState }[];
+}
+
+/** A fix verification and its per-fingerprint results. */
+export async function verificationResult(db: Exec, verifyCrawlId: string): Promise<VerificationResult> {
+  const r = await db.execute(sql`select id, status, created_at, analysis->>'status' as analysis, config->'verify' as verify from crawls where id = ${verifyCrawlId}::uuid and kind = 'verify'`);
+  const c = r.rows[0] as { id: string; status: string; created_at: Date | string; analysis: string | null; verify: { auditCrawlId: string; ruleId: string; fingerprints: string[] } } | undefined;
+  if (!c) throw new ResultsError("NOT_FOUND", "Verification not found.");
+  const rows = (await db.execute(sql`select url, state from issue_states where crawl_id = ${verifyCrawlId}::uuid order by url collate "C", fingerprint`)).rows as { url: string; state: IssueState }[];
+  const states: Partial<Record<IssueState, number>> = {};
+  for (const x of rows) states[x.state] = (states[x.state] ?? 0) + 1;
+  return {
+    verifyCrawlId: c.id,
+    auditCrawlId: c.verify.auditCrawlId,
+    ruleId: c.verify.ruleId,
+    status: c.status,
+    analysed: c.analysis === "completed",
+    createdAt: new Date(c.created_at).toISOString(),
+    targets: c.verify.fingerprints.length,
+    states,
+    urls: rows,
+  };
+}
+
+/** The latest verification of an audit's issue group, or null. */
+export async function latestVerification(db: Exec, auditCrawlId: string, ruleId: string): Promise<VerificationResult | null> {
+  const r = await db.execute(sql`select id from crawls where kind = 'verify' and config->'verify'->>'auditCrawlId' = ${auditCrawlId} and config->'verify'->>'ruleId' = ${ruleId}
+    order by created_at desc, id desc limit 1`);
+  const id = (r.rows[0] as { id: string } | undefined)?.id;
+  return id ? verificationResult(db, id) : null;
+}
+
+/** The open fingerprints (effective state) of an audit's issue group: what a verification targets. */
+export async function openFingerprints(db: Exec, auditCrawlId: string, ruleId: string): Promise<{ fingerprint: string; url: string }[]> {
+  const open = sql.raw(OPEN_STATES.map((x) => `'${x}'`).join(", "));
+  const r = await db.execute(sql`select fingerprint, url from ${effectiveStates(auditCrawlId)} e where e.rule_id = ${ruleId} and e.state in (${open}) order by url collate "C", fingerprint`);
+  return r.rows as { fingerprint: string; url: string }[];
 }
