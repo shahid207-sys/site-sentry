@@ -22,6 +22,7 @@ import { insertOccurrences, occurrenceOf, reachBasis, writeIssueGroups, type Occ
 import { fingerprintOf } from "./fingerprint";
 import { TemplateGroups } from "./group";
 import { RULES } from "./registry";
+import { keepSmallest } from "./site";
 
 export const ANALYSIS_BATCH = 500;
 
@@ -449,7 +450,7 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
             if (!pageIssues.has(rule.id)) pageIssues.set(rule.id, new Map());
             const t = pageIssues.get(rule.id)!.get(page.templateFingerprint) ?? { count: 0, sample: [] };
             t.count++;
-            if (t.sample.length < 5) t.sample.push(page.url);
+            keepSmallest(t.sample, page.url);
             pageIssues.get(rule.id)!.set(page.templateFingerprint, t);
           }
         }

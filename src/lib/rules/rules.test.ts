@@ -12,6 +12,7 @@ import { LEGACY_TO_CATALOG } from "./legacy-map";
 import type { ProbeRecord } from "./probe-types";
 import { DEFERRED_RULES, RULES, RULES_BY_ID } from "./registry";
 import { NEAR_DUPLICATE, NEAR_DUPLICATE_MIN_WORDS } from "./cnt";
+import { keepSmallest } from "./site";
 import { simhash, simhashSimilarity } from "../snapshot/text";
 import { paragraph } from "../../../fixtures/site/text";
 import { ENGLISH_PROSE, MIXED_PROSE } from "../../../fixtures/site/defects";
@@ -663,6 +664,19 @@ describe("Phase 2b details", () => {
     expect(run("SITE-001", cleanSite(...templated(4, "T1")), crawlOf(), { pageIssues: issues("IMG-007", "T1", 4) })).toEqual([]);
     const [f] = run("SITE-001", cleanSite(...templated(300, "T1")), crawlOf(), { pageIssues: issues("IMG-007", "T1", 300) });
     expect(f.evidence).toMatchObject({ ruleId: "IMG-007", pages: 300, groupSize: 300, share: 1 });
+  });
+
+  it("SITE-001's sample (and so its URL and fingerprint) does not depend on crawl order", () => {
+    const urls = Array.from({ length: 12 }, (_, i) => `https://example.test/p/${String(i).padStart(2, "0")}`);
+    const order = (xs: string[]) => {
+      const sample: string[] = [];
+      for (const u of xs) keepSmallest(sample, u);
+      return sample;
+    };
+    const forward = order(urls);
+    expect(forward).toEqual(urls.slice(0, 5));
+    expect(order([...urls].reverse())).toEqual(forward);
+    expect(order([urls[7], urls[3], urls[11], urls[0], urls[3], urls[9], urls[1], urls[2], urls[4], urls[5]])).toEqual([urls[0], urls[1], urls[2], urls[3], urls[4]]);
   });
 });
 

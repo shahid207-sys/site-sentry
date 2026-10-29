@@ -13,9 +13,21 @@ export const MIN_TEMPLATE_PAGES = 5;
 export const MIN_INDEXABLE_RATIO = 0.5;
 const SAMPLE = 10;
 
+/**
+ * The `max` smallest URLs seen (code-unit order), kept sorted in place. SITE-001 reports at the first: a page that
+ * does not depend on crawl order, so the finding's fingerprint is the same in every audit of the site.
+ */
+export function keepSmallest(sample: string[], url: string, max = 5): void {
+  if (sample.length >= max && url >= sample[max - 1]) return;
+  if (sample.includes(url)) return;
+  sample.push(url);
+  sample.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  if (sample.length > max) sample.length = max;
+}
+
 const SITE001 = site({
   id: "SITE-001",
-  version: 1,
+  version: 2,
   confidence: "verified",
   impact: 3,
   needs: ["graph"],
