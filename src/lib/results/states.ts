@@ -35,8 +35,9 @@ export const projectKey = (alias: string) => sql.raw(`coalesce(${alias}.site_id,
  * The rule must have run in that crawl (rule_runs status 'ran': not needs_config, not error), and its subject must
  * have been examined: a page rule's URL answered (an ANSWERED state: a page that now redirects or is no longer HTML
  * no longer has the page defect), a resource rule's resource answered (resources.state = 'done'), and for a site
- * rule, a crawl that left no URL of the host unfetched (`complete`). Robots-blocked, failed, budget- or
- * depth-limited URLs are never re-checked.
+ * rule, a crawl that left no URL of the host unfetched (`complete`) and, when the subject is a URL of the crawl
+ * inventory (page_subject), that URL answered: a narrower crawl that never fetched a page cannot resolve a site-rule
+ * finding about it. Robots-blocked, excluded, failed, budget- or depth-limited URLs are never re-checked.
  */
 export function rechecked(checker: string, complete: boolean, s = "s") {
   const c = sql`${checker}::uuid`;
@@ -45,7 +46,8 @@ export function rechecked(checker: string, complete: boolean, s = "s") {
     and case (select scope from rules where id = ${row}.rule_id)
       when 'page' then exists (select 1 from crawl_urls u where u.crawl_id = ${c} and u.normalised_url = ${row}.url and u.state in (${ANSWERED_SQL}))
       when 'resource' then exists (select 1 from resources r where r.crawl_id = ${c} and r.url = ${row}.url and r.state = 'done')
-      else ${complete}
+      else ${complete} and (not ${row}.page_subject
+        or exists (select 1 from crawl_urls u where u.crawl_id = ${c} and u.normalised_url = ${row}.url and u.state in (${ANSWERED_SQL})))
     end)`;
 }
 
@@ -70,13 +72,13 @@ export async function stateCounts(db: Exec, crawlId: string): Promise<StateCount
 /** (Re)computes crawl `crawlId`'s states from its occurrences and the project's history. `complete`: see rechecked. */
 export async function writeIssueStates(db: Exec, crawlId: string, complete: boolean): Promise<StateCounts> {
   await db.execute(sql`delete from issue_states where crawl_id = ${crawlId}::uuid`);
-  await db.execute(sql`insert into issue_states (crawl_id, fingerprint, rule_id, url, evidence_key, template_id, outcome, state, first_seen_at)
+  await db.execute(sql`insert into issue_states (crawl_id, fingerprint, rule_id, url, evidence_key, template_id, outcome, state, first_seen_at, page_subject)
     select o.crawl_id, o.fingerprint, o.rule_id, o.url, o.evidence_key, o.template_id, o.outcome,
       case when o.outcome = 'inconclusive' then 'inconclusive'
            when last.state in (${OPEN}) then 'persistent'
            when last.state = 'resolved' then 'regressed'
            else 'new' end,
-      coalesce(last.first_seen_at, c.created_at)
+      coalesce(last.first_seen_at, c.created_at), o.reach_pages is not null
     from finding_occurrences o join crawls c on c.id = o.crawl_id
     left join lateral (
       select s.state, s.first_seen_at from issue_states s join crawls p on p.id = s.crawl_id
@@ -84,9 +86,9 @@ export async function writeIssueStates(db: Exec, crawlId: string, complete: bool
         and (p.created_at, p.id) < (c.created_at, c.id)
       order by p.created_at desc, p.id desc limit 1) last on true
     where o.crawl_id = ${crawlId}::uuid`);
-  await db.execute(sql`insert into issue_states (crawl_id, fingerprint, rule_id, url, evidence_key, template_id, outcome, state, first_seen_at)
+  await db.execute(sql`insert into issue_states (crawl_id, fingerprint, rule_id, url, evidence_key, template_id, outcome, state, first_seen_at, page_subject)
     select ${crawlId}::uuid, s.fingerprint, s.rule_id, s.url, s.evidence_key, s.template_id, null,
-      case when ${rechecked(crawlId, complete)} then 'resolved' else 'not_rechecked' end, s.first_seen_at
+      case when ${rechecked(crawlId, complete)} then 'resolved' else 'not_rechecked' end, s.first_seen_at, s.page_subject
     from (select distinct on (s.fingerprint) s.* from issue_states s join crawls p on p.id = s.crawl_id join crawls c on c.id = ${crawlId}::uuid
           where s.state <> 'inconclusive' and p.workspace = c.workspace and ${projectKey("p")} = ${projectKey("c")} and (p.created_at, p.id) < (c.created_at, c.id)
           order by s.fingerprint, p.created_at desc, p.id desc) s
@@ -111,13 +113,13 @@ export async function laterAudits(db: Exec, crawlId: string): Promise<{ id: stri
  */
 export async function writeVerifyStates(db: Exec, crawlId: string, v: VerifyConfig): Promise<StateCounts> {
   await db.execute(sql`delete from issue_states where crawl_id = ${crawlId}::uuid`);
-  await db.execute(sql`insert into issue_states (crawl_id, fingerprint, rule_id, url, evidence_key, template_id, outcome, state, first_seen_at)
+  await db.execute(sql`insert into issue_states (crawl_id, fingerprint, rule_id, url, evidence_key, template_id, outcome, state, first_seen_at, page_subject)
     select ${crawlId}::uuid, s.fingerprint, s.rule_id, s.url, s.evidence_key, s.template_id, o.outcome,
       case when o.outcome = 'issue' then 'persistent'
            when o.outcome = 'inconclusive' then 'inconclusive'
            when ${rechecked(crawlId, false)} then 'resolved'
            else 'not_rechecked' end,
-      s.first_seen_at
+      s.first_seen_at, s.page_subject
     from (select distinct on (s.fingerprint) s.* from issue_states s join crawls p on p.id = s.crawl_id join crawls c on c.id = ${crawlId}::uuid
           where s.fingerprint in (select jsonb_array_elements_text(${JSON.stringify(v.fingerprints)}::jsonb))
             and p.workspace = c.workspace and ${projectKey("p")} = ${projectKey("c")} and (p.created_at, p.id) < (c.created_at, c.id)

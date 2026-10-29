@@ -185,7 +185,7 @@ export async function compareCrawls(db: Exec, a: string, b: string): Promise<Com
   if (!x.analysed || !y.analysed) throw new ResultsError("INVALID", "Both audits must be analysed before they can be compared.");
   const [base, head] = x.createdAt <= y.createdAt ? [x, y] : [y, x];
   const complete = await crawlComplete(db, head.crawlId, head.status);
-  const r = await db.execute(sql`with b as (select fingerprint, rule_id, url from issue_states where crawl_id = ${base.crawlId}::uuid and state in ('new', 'persistent', 'regressed', 'not_rechecked')),
+  const r = await db.execute(sql`with b as (select fingerprint, rule_id, url, page_subject from issue_states where crawl_id = ${base.crawlId}::uuid and state in ('new', 'persistent', 'regressed', 'not_rechecked')),
       h as (select fingerprint, rule_id, outcome, first_seen_at from issue_states where crawl_id = ${head.crawlId}::uuid and outcome is not null),
       f as (select coalesce(b.rule_id, h.rule_id) as rule_id,
         case when h.outcome = 'inconclusive' then 'inconclusive'

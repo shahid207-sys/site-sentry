@@ -113,6 +113,13 @@
       "when": 1793298477381,
       "tag": "0015_report_shares",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1793299061535,
+      "tag": "0016_issue_state_subject",
+      "breakpoints": true
     }
   ]
 }

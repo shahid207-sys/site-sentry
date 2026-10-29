@@ -336,6 +336,12 @@ export const issueStates = pgTable(
     state: text("state").$type<IssueState>().notNull(),
     /** When the fingerprint was first observed in this project. */
     firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull(),
+    /**
+     * Whether the subject is a URL of the crawl inventory (a page, a redirect, a 404), rather than robots.txt, a
+     * sitemap, llms.txt or a probe (finding_occurrences.reach_pages null). Set when observed, carried over unchanged.
+     * A site rule re-checks a URL subject only when the checking crawl answered that URL (states.ts rechecked).
+     */
+    pageSubject: boolean("page_subject").notNull().default(true),
   },
   (t) => [
     primaryKey({ columns: [t.crawlId, t.fingerprint] }),
