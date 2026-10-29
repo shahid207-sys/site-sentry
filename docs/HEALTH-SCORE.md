@@ -61,3 +61,69 @@ Worked example: a verified impact-4 rule on 100 of 1,000 indexable pages scores 
 High. The same rule as a heuristic scores 4 × 0.668 × 0.6 = 1.60, which is Medium.
 
 Code: `src/lib/results/priority.ts` (formula and bands), `src/lib/results/occurrences.ts` (reach pages, groups).
+
+## Groups by template
+
+Each issue group is split by template (`issue_group_templates`). Every split stores:
+
+- the affected URL count for that template;
+- the first 5 affected URLs in byte order.
+
+URLs outside any template are stored under template `''`. The group itself also stores:
+
+- `template_count`: the number of distinct templates among its affected URLs;
+- `sample_urls`: its first 5 affected URLs.
+
+## Health score
+
+The health score runs from 0 to 100 and is computed only over the rules that ran in the crawl. A rule with
+status `needs_config` or `error` in `rule_runs` counts neither for nor against the score.
+
+```
+category score = 100 × (1 − Σ group score / Σ (impact × confidence weight))   over the category's rules that ran
+health         = Σ (weight × category score) / Σ weight                        over categories with a rule that ran
+```
+
+- **Group score:** the issue group's priority score from above, or 0 when the rule found nothing.
+- **Category maximum:** `impact × confidence weight`, summed over the category's rules that ran. This is the
+  deduction if every rule of the category hit every indexable page.
+- **Rounding:** category and overall scores are rounded to one decimal.
+- **Excluded categories:** a category with no rule that ran is left out of the score and out of the weights.
+- **Inconclusive results:** they deduct nothing.
+
+| Category | Weight |
+| --- | --- |
+| Indexability | 25 |
+| Content | 15 |
+| Metadata | 12 |
+| Links | 12 |
+| Structured data | 8 |
+| Images | 8 |
+| International | 6 |
+| Security | 6 |
+| AI search | 4 |
+| Site | 4 |
+
+**Coverage** is the share of eligible URLs that were answered:
+
+- **Answered** URLs have one of these states: `fetched`, `analysed`, `redirected`, `non_html`, `oversized`.
+- **Eligible** URLs are every URL found, minus those the site owner or the audit's own rules ruled out:
+  `blocked_robots`, `excluded_by_rule`, `cdn_managed`.
+
+When coverage is below 50%, the score is stored with `partialCoverage: true` and the report shows it as "partial
+coverage" instead of a confident number.
+
+Worked example: four rules ran.
+
+| Category | Rules that ran | Calculation | Score |
+| --- | --- | --- | --- |
+| Indexability | A verified impact-5 rule with group score 2.5, and a heuristic impact-4 rule that found nothing | 100 × (1 − 2.5 / (5 + 2.4)) | 66.2 |
+| Metadata | An advisory impact-3 rule with group score 0.45 | 100 × (1 − 0.45 / 0.9) | 50.0 |
+| Links | A clean verified rule | | 100 |
+
+Overall health is (25 × 66.2 + 12 × 50 + 12 × 100) / 49 = 70.5. The worked example is
+`src/lib/results/health.test.ts`.
+
+Stored in `crawls.health`, with per-category weight, rules that ran, deduction, maximum and score.
+
+Code: `src/lib/results/health.ts`, `src/lib/results/coverage.ts`.

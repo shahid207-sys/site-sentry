@@ -9,6 +9,9 @@ import { redisConnection } from "@/lib/crawl/v2/queue";
 import { runCrawl, type RunnerOptions } from "@/lib/crawl/v2/runner";
 import { analyseCrawl } from "./analyse";
 import { RULES } from "./registry";
+import { ANSWERED, NOT_OURS } from "@/lib/results/coverage";
+import { CATEGORY_WEIGHTS, type Health } from "@/lib/results/health";
+import { CONFIDENCE_WEIGHT } from "@/lib/results/priority";
 
 const db = testDb();
 const redis = testRedis();
@@ -125,6 +128,32 @@ describe("analyseCrawl", () => {
     }
     const cntTemplates = new Set(tpl.filter((t) => ["/", "/a", "/new"].includes(new URL(t.url).pathname)).map((t) => t.template_id));
     expect(at("CNT-005").template_count).toBe(cntTemplates.size);
+
+    // Health: per category 100 × (1 − Σ group score / Σ impact × confidence weight) over the rules that ran,
+    // weighted mean over those categories; coverage from URL states (the private URL is robots-blocked: not ours).
+    const health = ((await db.execute(sql`select health from crawls where id = ${c}::uuid`)).rows[0] as { health: Health }).health;
+    const ran = (await db.execute(sql`select rule_id from rule_runs where crawl_id = ${c}::uuid and status = 'ran'`)).rows.map((x) => RULES.find((r) => r.id === (x as { rule_id: string }).rule_id)!);
+    const cats = new Map<string, { d: number; m: number }>();
+    for (const r of ran) {
+      const e = cats.get(r.category) ?? { d: 0, m: 0 };
+      e.d += Number(groups.find((g) => g.rule_id === r.id)?.score ?? 0);
+      e.m += r.impact * CONFIDENCE_WEIGHT[r.confidence];
+      cats.set(r.category, e);
+    }
+    let num = 0;
+    let den = 0;
+    for (const [cat, e] of cats) {
+      const score = Math.round(1000 * (1 - e.d / e.m)) / 10;
+      expect(health.categories[cat as keyof Health["categories"]]?.score, cat).toBe(score);
+      num += CATEGORY_WEIGHTS[cat as keyof typeof CATEGORY_WEIGHTS] * score;
+      den += CATEGORY_WEIGHTS[cat as keyof typeof CATEGORY_WEIGHTS];
+    }
+    expect(health.score).toBe(Math.round((10 * num) / den) / 10);
+    const answered = states.filter((x) => ANSWERED.includes(x.state)).reduce((n, x) => n + x.n, 0);
+    const eligible = states.filter((x) => !NOT_OURS.includes(x.state)).reduce((n, x) => n + x.n, 0);
+    expect(health.coveragePercent).toBe(Math.round((1000 * answered) / eligible) / 10);
+    expect(health.partialCoverage).toBe(answered / eligible < 0.5);
+    expect(crawl.analysis).toMatchObject({ health: health.score, partialCoverage: health.partialCoverage });
   });
 
   it("is idempotent and gives the same result whatever the batch size", async () => {

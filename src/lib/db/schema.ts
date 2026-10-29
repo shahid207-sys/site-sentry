@@ -45,6 +45,8 @@ export const crawls = pgTable(
     resources: jsonb("resources"),
     /** Analysis job progress: { status, startedAt, finishedAt, pages, findings, error }. */
     analysis: jsonb("analysis"),
+    /** Health score written by the analysis job: Health in src/lib/results/health.ts. */
+    health: jsonb("health"),
     error: jsonb("error"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     startedAt: timestamp("started_at", { withTimezone: true }),

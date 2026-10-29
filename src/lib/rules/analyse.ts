@@ -16,6 +16,7 @@ import { bfsDepth, pageRank } from "./graph";
 import type { ProbeRecord } from "./probe-types";
 import { clusterTemplates, type ShapedPage } from "../snapshot/template";
 import { crawlComplete } from "../results/coverage";
+import { writeHealth } from "../results/health";
 import { laterAudits, writeIssueStates } from "../results/states";
 import { insertOccurrences, occurrenceOf, reachBasis, writeIssueGroups, type Occurrence } from "../results/occurrences";
 import { fingerprintOf } from "./fingerprint";
@@ -480,10 +481,11 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
       }
       // After rule_runs: a fingerprint counts as re-checked only when its rule ran in this crawl.
       const states = await writeIssueStates(tx, crawlId, crawl.complete);
+      const health = await writeHealth(tx, crawlId, rules);
       // fetched → analysed: every snapshot was read by the page rules above.
       await tx.execute(sql`update crawl_urls set state = 'analysed', updated_at = now() where crawl_id = ${crawlId}::uuid and state = 'fetched'`);
       const msPerPage = pages ? Math.round((list.reduce((n, s) => n + s.totalMs, 0) / pages) * 1000) / 1000 : 0;
-      await tx.execute(sql`update crawls set analysis = ${JSON.stringify({ status: "completed", startedAt, finishedAt: new Date().toISOString(), pages, findings: total, msPerPage, issueGroups, duplicateFingerprints: duplicates, states })}::jsonb where id = ${crawlId}::uuid`);
+      await tx.execute(sql`update crawls set analysis = ${JSON.stringify({ status: "completed", startedAt, finishedAt: new Date().toISOString(), pages, findings: total, msPerPage, issueGroups, duplicateFingerprints: duplicates, states, health: health.score, partialCoverage: health.partialCoverage })}::jsonb where id = ${crawlId}::uuid`);
       // Later audits of the project read this one's states: recompute them, oldest first.
       for (const later of await laterAudits(tx, crawlId)) await writeIssueStates(tx, later.id, await crawlComplete(tx, later.id, later.status));
       return { outcome: "analysed" as const, pages, findings: total, stats: list, msPerPage };
