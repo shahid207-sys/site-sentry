@@ -4,7 +4,7 @@
 import { sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { ANSWERED, NOT_OURS } from "../results/coverage";
-import { compareCrawls, duplicateClusters, effectiveStates } from "../results/queries";
+import { compareCrawls, duplicateClusters, effectiveStates, type Comparison, type CrawlOverview, type IssueGroupRow } from "../results/queries";
 import { PRIORITY_PAGES } from "../results/report";
 import { previousAudit } from "../results/states";
 
@@ -78,4 +78,51 @@ export async function checkReportMetrics(db: Exec, crawlId: string, html: string
     if (Number.isFinite(Number(value)) && Number.isFinite(Number(want)) ? Number(value) !== Number(want) : value !== want) mismatches.push({ key, report: value, database: want });
   }
   return { checked: metrics.length, keys: cache.size, mismatches };
+}
+
+/** The value the API returns for a report metric key, or undefined when no API response carries it. */
+export function apiMetric(api: { overview: CrawlOverview; groups: IssueGroupRow[]; comparison: Comparison | null }, key: string): string | undefined {
+  const o = api.overview;
+  const s = (v: number | null | undefined) => (v === null || v === undefined ? "n/a" : String(v));
+  let x: RegExpMatchArray | null;
+  if (key === "health.score") return s(o.health?.score);
+  if ((x = key.match(/^health\.category\.(\w+)$/))) return s(o.health?.categories[x[1] as keyof NonNullable<CrawlOverview["health"]>["categories"]]?.score);
+  if ((x = key.match(/^coverage\.state\.(\w+)$/))) return s(o.coverage.states[x[1]] ?? 0);
+  if (key === "coverage.total") return s(o.coverage.total);
+  if (key === "coverage.answered") return s(o.coverage.answered);
+  if (key === "coverage.eligible") return s(o.coverage.eligible);
+  if (key === "coverage.percent") return s(o.coverage.percent);
+  if ((x = key.match(/^states\.(\w+)$/))) return s(o.states[x[1] as keyof CrawlOverview["states"]]);
+  if (key === "verifiedResolved") return s(o.verifiedResolved);
+  if (key === "issueGroups") return s(o.issueGroups);
+  if ((x = key.match(/^priority\.(\w+)$/))) return s(o.priorities[x[1] as keyof CrawlOverview["priorities"]]);
+  if (key === "rulesRan") return s(o.rulesRan);
+  if ((x = key.match(/^group\.([A-Z0-9]+-\d{3})\.(\w+)(?:\.(\w+))?$/))) {
+    const g = api.groups.find((y) => y.ruleId === x![1]);
+    if (!g) return "missing";
+    if (x[2] === "affected") return s(g.affectedUrls);
+    if (x[2] === "inconclusive") return s(g.inconclusiveUrls);
+    if (x[2] === "templates") return s(g.templateCount);
+    if (x[2] === "score") return s(g.score);
+    if (x[2] === "state") return s(g.states[x[3] as keyof IssueGroupRow["states"]] ?? 0);
+  }
+  if ((x = key.match(/^compare\.(\w+)$/))) return api.comparison ? s(api.comparison.totals[x[1] as keyof Comparison["totals"]]) : "missing";
+  return undefined;
+}
+
+/** Compares the report's metrics with the API's responses: `apiBacked` keys must match, the rest are listed. */
+export function checkAgainstApi(html: string, api: Parameters<typeof apiMetric>[0]): { apiBacked: number; notInApi: string[]; mismatches: { key: string; report: string; api: string }[] } {
+  const notInApi = new Set<string>();
+  const mismatches: { key: string; report: string; api: string }[] = [];
+  let apiBacked = 0;
+  for (const { key, value } of reportMetrics(html)) {
+    const want = apiMetric(api, key);
+    if (want === undefined) {
+      notInApi.add(key.replace(/\.\d+$/, ".N"));
+      continue;
+    }
+    apiBacked++;
+    if (Number.isFinite(Number(value)) && Number.isFinite(Number(want)) ? Number(value) !== Number(want) : value !== want) mismatches.push({ key, report: value, api: want });
+  }
+  return { apiBacked, notInApi: [...notInApi].sort(), mismatches };
 }

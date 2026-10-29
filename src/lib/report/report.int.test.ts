@@ -11,7 +11,8 @@ import { THIN_WORDS } from "@/lib/rules/cnt";
 import { INLINE_URLS, reportData } from "@/lib/results/report";
 import { groupUrlsCsv } from "./csv";
 import { renderReport } from "./html";
-import { checkReportMetrics, reportMetrics } from "./metrics";
+import { compareCrawls, crawlOverview, issueGroups } from "@/lib/results/queries";
+import { checkAgainstApi, checkReportMetrics, reportMetrics } from "./metrics";
 import { pdfPageCount, renderPdf } from "./pdf";
 
 const db = testDb();
@@ -67,6 +68,12 @@ describe("audit report", () => {
     const check = await checkReportMetrics(db, crawl, html);
     expect(check.mismatches, JSON.stringify(check.mismatches)).toEqual([]);
     expect(check.keys).toBeGreaterThan(30);
+    // The same numbers as the API: overview, groups and comparison responses.
+    const api = { overview: await crawlOverview(db, crawl), groups: await issueGroups(db, crawl), comparison: data.comparison && (await compareCrawls(db, data.comparison.base.crawlId, crawl)) };
+    const vsApi = checkAgainstApi(html, api);
+    expect(vsApi.mismatches).toEqual([]);
+    expect(vsApi.apiBacked).toBeGreaterThan(50);
+    expect(vsApi.notInApi, JSON.stringify(vsApi.notInApi)).toEqual(["crawl.fetchesCommitted", "depth.N", "duplicates.clusters", "priorityPages", "resources.external.found", "resources.external.planned", "resources.images.found", "resources.images.planned", "rulesNotRan"]);
     const keys = new Set(reportMetrics(html).map((x) => x.key));
     for (const k of ["health.score", "coverage.answered", "coverage.eligible", "group.CNT-005.affected", "group.CNT-005.state.resolved", "compare.persistent", "states.resolved", "depth.1", "duplicates.clusters"]) expect(keys, k).toContain(k);
     expect(reportMetrics(html).find((x) => x.key === "group.CNT-005.state.resolved")?.value).toBe("3");
