@@ -14,6 +14,7 @@ import type { CanonicalTag } from "../snapshot/types";
 import { NeedsConfig, type CrawlView, type Finding, type Hreflang, type PageRule, type PageView, type ResourceFacts, type ResourceRule, type Rule, type SiteCtx, type SiteRule, type SiteView, type UrlFacts } from "./contract";
 import { bfsDepth, pageRank } from "./graph";
 import type { ProbeRecord } from "./probe-types";
+import { clusterTemplates, type ShapedPage } from "../snapshot/template";
 import { TemplateGroups } from "./group";
 import { RULES } from "./registry";
 
@@ -187,13 +188,39 @@ async function linkGraph(db: Exec, crawlId: string, origin: string, batch: numbe
   }
 }
 
-/** Pages grouped by DOM-skeleton fingerprint (snapshot template_fingerprint) into `templates`; crawl_urls.template_id set. */
-async function templates(db: Exec, crawlId: string): Promise<void> {
+/**
+ * HTML pages clustered into `templates` by shape (clusterTemplates: exact shapes, then near-identical ones, the URL
+ * pattern breaking ties); crawl_urls.template_id is the page's template id, which the rules read as its fingerprint.
+ */
+async function templates(db: Exec, crawlId: string, batch: number): Promise<void> {
+  const pages: ShapedPage[] = [];
+  for (let after = 0; ; ) {
+    const r = await db.execute(sql`select s.id, u.normalised_url as url, s.template_fingerprint as fingerprint, s.template_shape as shape
+      from page_snapshots s join crawl_urls u on u.id = s.url_id
+      where s.crawl_id = ${crawlId}::uuid and s.facts is not null and s.template_fingerprint is not null and s.id > ${after} order by s.id limit ${batch}`);
+    const rows = r.rows as { id: number; url: string; fingerprint: string; shape: number[] | null }[];
+    for (const x of rows) pages.push({ url: x.url, fingerprint: x.fingerprint, shape: x.shape });
+    if (rows.length < batch) break;
+    after = Number(rows[rows.length - 1].id);
+  }
+  const ids = clusterTemplates(pages);
+  const counts = new Map<string, { n: number; sample: string }>();
+  for (const [url, id] of ids) {
+    const c = counts.get(id);
+    counts.set(id, { n: (c?.n ?? 0) + 1, sample: c && c.sample < url ? c.sample : url });
+  }
   await db.execute(sql`delete from templates where crawl_id = ${crawlId}::uuid`);
-  await db.execute(sql`insert into templates (crawl_id, fingerprint, page_count, sample_url)
-    select s.crawl_id, s.template_fingerprint, count(*)::int, min(u.normalised_url) from page_snapshots s join crawl_urls u on u.id = s.url_id
-    where s.crawl_id = ${crawlId}::uuid and s.facts is not null and s.template_fingerprint is not null group by s.crawl_id, s.template_fingerprint`);
-  await db.execute(sql`update crawl_urls u set template_id = s.template_fingerprint from page_snapshots s where s.url_id = u.id and u.crawl_id = ${crawlId}::uuid`);
+  await db.execute(sql`update crawl_urls set template_id = null where crawl_id = ${crawlId}::uuid and template_id is not null`);
+  const entries = [...counts].map(([fingerprint, c]) => ({ fingerprint, n: c.n, sample: c.sample }));
+  for (let i = 0; i < entries.length; i += batch) {
+    await db.execute(sql`insert into templates (crawl_id, fingerprint, page_count, sample_url)
+      select ${crawlId}::uuid, v.fingerprint, v.n, v.sample from jsonb_to_recordset(${JSON.stringify(entries.slice(i, i + batch))}::jsonb) as v(fingerprint text, n int, sample text)`);
+  }
+  const assigned = [...ids].map(([url, id]) => ({ url, id }));
+  for (let i = 0; i < assigned.length; i += batch) {
+    await db.execute(sql`update crawl_urls u set template_id = v.id from jsonb_to_recordset(${JSON.stringify(assigned.slice(i, i + batch))}::jsonb) as v(url text, id text)
+      where u.crawl_id = ${crawlId}::uuid and u.normalised_url = v.url`);
+  }
 }
 
 async function loadSiteView(db: Exec, crawlId: string, batch: number): Promise<SiteView> {
@@ -202,7 +229,7 @@ async function loadSiteView(db: Exec, crawlId: string, batch: number): Promise<S
     const r = await db.execute(sql`
       select u.id, u.normalised_url, u.state, u.status_code, u.redirect_target, u.discovered_via, u.inbound, u.link_depth, u.pagerank,
         s.facts is not null as html,
-        (select coalesce(jsonb_agg(jsonb_build_object('lang', l->>'hreflang', 'href', l->>'href')), '[]'::jsonb) from jsonb_array_elements(s.links) l where l->>'via' = 'hreflang') as hreflang, s.robots, s.canonicals, s.title, s.description, s.text_hash, s.simhash, s.template_fingerprint, s.word_count,
+        (select coalesce(jsonb_agg(jsonb_build_object('lang', l->>'hreflang', 'href', l->>'href')), '[]'::jsonb) from jsonb_array_elements(s.links) l where l->>'via' = 'hreflang') as hreflang, s.robots, s.canonicals, s.title, s.description, s.text_hash, s.simhash, coalesce(u.template_id, s.template_fingerprint) as template_fingerprint, s.word_count,
         s.facts->'og'->>'image' as og_image, s.facts->'icons' as icons,
         (select e->>'text' from jsonb_array_elements(s.outline) e where e->>'level' = '1' limit 1) as h1
       from crawl_urls u left join page_snapshots s on s.url_id = u.id
@@ -373,7 +400,7 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
           on conflict (id) do update set version = excluded.version, category = excluded.category, scope = excluded.scope, confidence = excluded.confidence, impact = excluded.impact, updated_at = now()`);
       }
       await linkGraph(tx, crawlId, row.site_origin, batch);
-      await templates(tx, crawlId);
+      await templates(tx, crawlId, batch);
       const crawl = crawlView(row, { complete: await crawlComplete(tx, crawlId, row.status), resources: await loadResources(tx, crawlId, batch) });
       const site = await loadSiteView(tx, crawlId, batch);
 
@@ -395,7 +422,7 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
       let pages = 0;
       let total = 0;
       for (let after = 0; ; ) {
-        const r = await tx.execute(sql`select s.*, u.normalised_url, u.state, u.depth, u.discovered_via from page_snapshots s join crawl_urls u on u.id = s.url_id
+        const r = await tx.execute(sql`select s.*, coalesce(u.template_id, s.template_fingerprint) as template_fingerprint, u.normalised_url, u.state, u.depth, u.discovered_via from page_snapshots s join crawl_urls u on u.id = s.url_id
           where s.crawl_id = ${crawlId}::uuid and s.id > ${after} order by s.id limit ${batch}`);
         const found: Finding[] = [];
         for (const x of r.rows as Record<string, unknown>[]) {

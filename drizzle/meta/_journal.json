@@ -57,6 +57,13 @@
       "when": 1793292327623,
       "tag": "0007_cdn_managed_state",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793293114982,
+      "tag": "0008_template_shape",
+      "breakpoints": true
     }
   ]
 }

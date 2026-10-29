@@ -223,6 +223,8 @@ export const pageSnapshots = pgTable(
     textHash: text("text_hash"),
     simhash: text("simhash"),
     templateFingerprint: text("template_fingerprint"),
+    /** Template shape as 32-bit path hashes (src/lib/snapshot/template.ts); null before Phase 3. */
+    templateShape: jsonb("template_shape"),
     timings: jsonb("timings"),
     facts: jsonb("facts"),
     outlinkCount: integer("outlink_count").notNull().default(0),

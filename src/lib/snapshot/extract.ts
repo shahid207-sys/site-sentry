@@ -1,10 +1,10 @@
 // HTML → snapshot fields. Pure: no network, no clock. Runs in the crawl worker on the document it already parsed
 // for outlinks, so each page is parsed once. Main-content text reuses the legacy content rule's extraction.
-import { createHash } from "node:crypto";
 import { detect } from "tinyld";
 import { blockText, BOILERPLATE, mainContentSource, mainContentText } from "../audit/rules/content";
 import type { Doc } from "../audit/parse";
 import type { Outlink } from "../crawl/v2/discovery";
+import { templateShape } from "./template";
 import { simhash, textHash, words } from "./text";
 import type { CanonicalTag, ExtractedHtml, HeadingEntry, HeadTag, JsonLdBlock, PageFacts, RobotsDirective, RobotsSnapshot, SnapshotImage } from "./types";
 
@@ -84,24 +84,6 @@ function canonicalsOf($: Doc, base: string, headers: Record<string, string>): Ca
     if (tokens(m[2]).includes("canonical")) out.push({ href: m[1], resolved: resolve(m[1], base), location: "header", absolute: /^https?:\/\//i.test(m[1].trim()) });
   }
   return out;
-}
-
-/** DOM skeleton hash: the set of element paths from <body> down six levels, so list lengths and text do not matter. */
-function templateFingerprint($: Doc): string | null {
-  const body = $("body").get(0);
-  if (!body) return null;
-  const paths = new Set<string>();
-  const walk = (el: El, path: string, depth: number) => {
-    for (const child of $(el).children().toArray()) {
-      const tag = (child as { tagName?: string }).tagName?.toLowerCase();
-      if (!tag || tag === "script" || tag === "style") continue;
-      const p = `${path}>${tag}`;
-      paths.add(p);
-      if (depth < 6) walk(child, p, depth + 1);
-    }
-  };
-  walk(body, "body", 1);
-  return createHash("sha256").update([...paths].sort().join("\n")).digest("hex").slice(0, 16);
 }
 
 const JS_REDIRECT = [
@@ -302,6 +284,7 @@ export function extractHtml({ $, html, pageUrl, headers, bytes, outlinks }: Extr
     }
   });
 
+  const shape = templateShape($);
   return {
     head,
     canonicals: canonicalsOf($, base, headers),
@@ -317,7 +300,8 @@ export function extractHtml({ $, html, pageUrl, headers, bytes, outlinks }: Extr
     jsonLd,
     textHash: textHash(main),
     simhash: simhash(main),
-    templateFingerprint: templateFingerprint($),
+    templateFingerprint: shape?.fingerprint ?? null,
+    templateShape: shape?.shape ?? null,
     facts: factsOf($, html, base, headers, main.length, bytes),
   };
 }

@@ -302,12 +302,12 @@ async function insertSnapshot(tx: Exec, crawlId: string, urlId: number, s: Snaps
   await tx.execute(sql`
     insert into page_snapshots (crawl_id, url_id, requested_url, final_url, status_code, content_type, headers, raw_html_key, blob_status, bytes, truncated,
       elapsed_ms, content_hash, outlink_count, fetched_at, head, canonicals, robots, title, titles, description, descriptions, outline,
-      main_text, word_count, language, links, images, json_ld, text_hash, simhash, template_fingerprint, timings, facts)
+      main_text, word_count, language, links, images, json_ld, text_hash, simhash, template_fingerprint, template_shape, timings, facts)
     values (${crawlId}::uuid, ${urlId}, ${s.requestedUrl}, ${s.finalUrl}, ${s.statusCode}, ${s.contentType}, ${json(s.headers)}, ${s.rawHtmlKey}, ${s.blobStatus}, ${s.bytes}, ${s.truncated},
       ${s.elapsedMs}, ${s.contentHash}, ${s.outlinkCount}, now(), ${json(x?.head ?? [])}, ${json(x?.canonicals ?? [])}, ${x ? json(x.robots) : null},
       ${x?.titles[0] ?? null}, ${json(x?.titles ?? [])}, ${x?.descriptions[0] ?? null}, ${json(x?.descriptions ?? [])}, ${json(x?.outline ?? [])},
       ${x?.mainText ?? null}, ${x?.wordCount ?? null}, ${x ? json(x.language) : null}, ${json(x?.links ?? [])}, ${json(x?.images ?? [])}, ${json(x?.jsonLd ?? [])},
-      ${x?.textHash ?? null}, ${x?.simhash ?? null}, ${x?.templateFingerprint ?? null}, ${json({ fetchMs: s.elapsedMs, extractMs: s.extractMs })}, ${x ? json(x.facts) : null})`);
+      ${x?.textHash ?? null}, ${x?.simhash ?? null}, ${x?.templateFingerprint ?? null}, ${x?.templateShape ? json(x.templateShape) : null}, ${json({ fetchMs: s.elapsedMs, extractMs: s.extractMs })}, ${x ? json(x.facts) : null})`);
 }
 
 /** Return this worker's unsent reservations to the frontier (pause, cancel, shutdown). */

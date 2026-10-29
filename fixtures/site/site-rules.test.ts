@@ -15,6 +15,7 @@ import { TemplateGroups } from "../../src/lib/rules/group";
 import { RULES } from "../../src/lib/rules/registry";
 import { extractHtml } from "../../src/lib/snapshot/extract";
 import { imageSize } from "../../src/lib/snapshot/image-size";
+import { clusterTemplates } from "../../src/lib/snapshot/template";
 import { simhashSimilarity } from "../../src/lib/snapshot/text";
 import { manifestPaths, ROBOTS_BLOCKED_PREFIX } from "./definition";
 import { DEFECTS, EXACT_SECTIONS, expectedFindings, findingKey, INDEX_EXTRAS } from "./defects";
@@ -72,6 +73,9 @@ for (const p of [...manifestPaths(), ...INDEX_EXTRAS.map((e) => e.path), ...EXTR
   const v = render(urlOf(ORIGIN, p));
   if (v) pages.set(v.url, v);
 }
+// As the site pass does: pages read their template id (clustered shapes) as their fingerprint.
+const templateIds = clusterTemplates([...pages.values()].filter((p) => p.facts && p.templateFingerprint).map((p) => ({ url: p.url, fingerprint: p.templateFingerprint!, shape: p.templateShape ?? null })));
+for (const p of pages.values()) p.templateFingerprint = templateIds.get(p.url) ?? null;
 const renderMs = performance.now() - t0;
 
 // ---------- the site pass: every internal URL a page links to, with what the server answers ----------
@@ -253,6 +257,14 @@ describe("fixture site against its manifest (no crawl)", () => {
     expect(site001.map((f) => ({ ruleId: f.evidence.ruleId, pages: f.evidence.pages, groupSize: f.evidence.groupSize, url: new URL(f.url).pathname.startsWith("/products/") }))).toEqual([
       { ruleId: "IMG-007", pages: 300, groupSize: 300, url: true },
     ]);
+  });
+
+  it("clusters the 300 /products/ pages into one template that no other page shares", () => {
+    const products = [...pages.values()].filter((p) => new URL(p.url).pathname.startsWith("/products/"));
+    const ids = new Set(products.map((p) => p.templateFingerprint));
+    expect(products).toHaveLength(300);
+    expect(ids.size).toBe(1);
+    expect([...pages.values()].filter((p) => ids.has(p.templateFingerprint) && !new URL(p.url).pathname.startsWith("/products/"))).toEqual([]);
   });
 
   it("the other sections stay silent on content and metadata rules (their defects are later phases)", () => {

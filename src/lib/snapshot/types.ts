@@ -150,7 +150,13 @@ export interface PageSnapshot {
   /** sha256 of the normalised main-content text; null under 50 words. */
   textHash: string | null;
   simhash: string | null;
+  /**
+   * Exact template-shape fingerprint (src/lib/snapshot/template.ts). On a page read by the rules it is the page's
+   * template id after clustering (crawl_urls.template_id), when the site pass has run.
+   */
   templateFingerprint: string | null;
+  /** The shape as 32-bit path hashes, for clustering near-identical layouts. Absent on snapshots from before Phase 3. */
+  templateShape?: number[] | null;
   timings: { fetchMs: number; extractMs: number };
   facts: PageFacts;
 }
