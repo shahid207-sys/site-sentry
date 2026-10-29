@@ -6,7 +6,9 @@ import { liveFetcher, SafeFetchError, type Fetcher } from "./fetch/safe-fetch";
 import type { Workspace } from "./model";
 import { sampleFetcher } from "./sample/fetcher";
 import { buildSampleSeed, SEED_VERSION } from "./sample/seed";
+import { getDb } from "./db/client";
 import { migrateLegacyFile } from "./store/migrate";
+import { PgStore } from "./store/pg-store";
 import { JsonFileStore, MemoryStore, StoreUnavailableError, type AuditBlob, type Store, type StoreData } from "./store/store";
 import { WorkflowError, type Deps } from "./workflow/deps";
 
@@ -22,7 +24,13 @@ export function dataDir(): string {
   return path.join(/* turbopackIgnore: true */ process.cwd(), ".data");
 }
 
-export const dataIsEphemeral = () => !process.env.SITE_SENTRY_DATA_DIR && !!process.env.VERCEL;
+export const dataIsEphemeral = () => !storeIsPostgres() && !process.env.SITE_SENTRY_DATA_DIR && !!process.env.VERCEL;
+
+/**
+ * SITE_SENTRY_STORE=postgres keeps sites, audits, tasks and settings in Postgres (DATABASE_URL); anything else keeps
+ * the JSON files under dataDir(). Move existing JSON data first: `npx tsx scripts/migrate-json-store.ts --dry-run`.
+ */
+export const storeIsPostgres = () => (process.env.SITE_SENTRY_STORE ?? "").toLowerCase() === "postgres";
 
 // ---------- live scan policy ----------
 
@@ -61,7 +69,7 @@ function policyFetcher(inner: Fetcher): Fetcher {
 class SampleStore implements Store {
   private inner: Store | null = null;
   private init: Promise<Store> | null = null;
-  constructor(private dir: string) {}
+  constructor(private backing: () => Store) {}
 
   get persistent() {
     return this.inner?.persistent ?? false;
@@ -70,7 +78,7 @@ class SampleStore implements Store {
   private async seeded(): Promise<Store> {
     if (this.inner) return this.inner;
     this.init ??= (async () => {
-      const file = new JsonFileStore(this.dir);
+      const file = this.backing();
       try {
         const current = await file.read();
         if (current.seedVersion === SEED_VERSION) return file;
@@ -130,8 +138,8 @@ const g = globalThis as unknown as { __siteSentry?: { live: Store; sample: Sampl
 
 function stores() {
   g.__siteSentry ??= {
-    live: new JsonFileStore(path.join(dataDir(), "live"), () => migrateLegacyFile(dataDir())),
-    sample: new SampleStore(path.join(dataDir(), "sample")),
+    live: storeIsPostgres() ? new PgStore(getDb().$client, "live") : new JsonFileStore(path.join(dataDir(), "live"), () => migrateLegacyFile(dataDir())),
+    sample: new SampleStore(() => (storeIsPostgres() ? new PgStore(getDb().$client, "sample") : new JsonFileStore(path.join(dataDir(), "sample")))),
   };
   return g.__siteSentry;
 }

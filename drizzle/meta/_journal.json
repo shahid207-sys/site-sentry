@@ -64,6 +64,13 @@
       "when": 1793293114982,
       "tag": "0008_template_shape",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793293699612,
+      "tag": "0009_app_store",
+      "breakpoints": true
     }
   ]
 }

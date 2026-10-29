@@ -284,3 +284,52 @@ export const ruleRuns = pgTable(
   },
   (t) => [primaryKey({ columns: [t.crawlId, t.ruleId] })],
 );
+
+// ---------- app store (was .data/<workspace>/state.json): one row per entity, the entity itself in `data` ----------
+// The columns beside `data` are copies for queries; `data` is what the app reads (src/lib/store/pg-store.ts).
+
+/** A workspace ("live", "sample") and its settings. */
+export const workspaces = pgTable("workspaces", {
+  id: text("id").primaryKey(),
+  schemaVersion: integer("schema_version").notNull().default(2),
+  settings: jsonb("settings").notNull(),
+  sampleState: text("sample_state"),
+  seedVersion: text("seed_version"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+const storeRow = <C extends Record<string, ReturnType<typeof text>>>(name: string, extra: C) =>
+  pgTable(
+    name,
+    {
+      workspace: text("workspace")
+        .notNull()
+        .references(() => workspaces.id, { onDelete: "cascade" }),
+      id: text("id").notNull(),
+      ...extra,
+      data: jsonb("data").notNull(),
+      updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (t) => [primaryKey({ columns: [t.workspace, t.id] })],
+  );
+
+export const sites = storeRow("sites", { origin: text("origin").notNull() });
+export const pageIntents = storeRow("page_intents", { siteId: text("site_id").notNull(), url: text("url").notNull() });
+export const audits = storeRow("audits", { siteId: text("site_id").notNull(), status: text("status").notNull(), createdAt: text("created_at").notNull() });
+export const tasks = storeRow("tasks", { siteId: text("site_id").notNull(), workflowStatus: text("workflow_status").notNull() });
+
+/** An audit's snapshots and findings (was .data/<workspace>/audits/<id>.json). */
+export const auditResults = pgTable(
+  "audit_results",
+  {
+    workspace: text("workspace")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    auditId: text("audit_id").notNull(),
+    snapshots: jsonb("snapshots").notNull(),
+    findings: jsonb("findings").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.workspace, t.auditId] })],
+);
