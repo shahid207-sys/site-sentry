@@ -73,6 +73,8 @@ export interface CrawlConfig {
   auth?: { username: string; password: string };
   /** The user's intent for AI crawlers (AIS-002); unset means the rule reports needs_config. */
   aiCrawlers?: "allow" | "block";
+  /** Pages the user marks as high-value (LNK-012); unset means the rule reports needs_config. */
+  keyPages?: string[];
 }
 
 export interface RobotsRecord {

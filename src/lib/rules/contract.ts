@@ -6,7 +6,7 @@ import type { DiscoverySource, UrlState } from "../crawl/v2/types";
 import type { LanguageSnapshot, PageFacts, PageSnapshot, RobotsSnapshot } from "../snapshot/types";
 import type { ProbeRecord } from "./probe-types";
 
-export type Category = "indexability" | "metadata" | "content" | "ai_search";
+export type Category = "indexability" | "metadata" | "content" | "ai_search" | "links" | "international" | "images" | "structured_data" | "security" | "site";
 export type Confidence = "verified" | "heuristic" | "advisory";
 export type Need = "raw" | "rendered" | "headers" | "graph" | "lighthouse";
 
@@ -27,7 +27,15 @@ export interface Finding {
 
 export type Outcome = "issue" | "inconclusive";
 /** Machine-readable reasons a rule reports inconclusive. */
-export type InconclusiveCode = "probe_skipped_robots" | "low_confidence";
+export type InconclusiveCode =
+  | "probe_skipped_robots"
+  | "low_confidence"
+  // The crawl did not reach every URL, so a site-wide absence (zero inbound links) cannot be proven.
+  | "partial_crawl"
+  // A response that does not prove the resource is broken or fine (403, 429, 999, 5xx, timeout).
+  | "ambiguous_status"
+  // The server sent no Content-Length, so the size is unknown.
+  | "size_unknown";
 
 /** What a rule knows about the crawl as a whole. */
 export interface CrawlView {
@@ -42,6 +50,38 @@ export interface CrawlView {
   robotsAllows(url: string, agent: string): boolean | null;
   sitemaps: SitemapDocRecord[];
   probes: ProbeRecord[];
+  /** Pages the user marked as high-value (crawl setting keyPages, normalised); null when unset. */
+  keyPages: string[] | null;
+  /** True when no URL of the crawled host was left unfetched (budget, depth, failure, cancellation). */
+  complete: boolean;
+  /** Checked external links and images (resource phase), by URL. */
+  resources: { links: Map<string, ResourceFacts>; images: Map<string, ResourceFacts> };
+}
+
+/** One external link or image the resource phase planned (resources table). */
+export interface ResourceFacts {
+  kind: "external_link" | "image";
+  url: string;
+  /** done: a response or a transport error was recorded; skipped: not requested (skipCode says why). */
+  state: "queued" | "started" | "done" | "skipped";
+  skipCode: string | null;
+  method: string | null;
+  status: number | null;
+  contentType: string | null;
+  /** Bytes, from Content-Length (or the total in Content-Range); null when the server sent neither. */
+  contentLength: number | null;
+  width: number | null;
+  height: number | null;
+  error: { code: string; message: string } | null;
+  /** Pages that reference it, and the first few of them. */
+  referrers: number;
+  samplePages: string[];
+}
+
+/** hreflang annotation on a page: the language code as written and the resolved, normalised target. */
+export interface Hreflang {
+  lang: string;
+  href: string;
 }
 
 /** A fetched URL with its snapshot: what page rules read. Extraction fields are empty/null when `html` is false. */
@@ -81,7 +121,14 @@ export interface UrlFacts {
     wordCount: number;
     ogImage: string | null;
     icons: string[];
+    hreflang: Hreflang[];
   } | null;
+  /** Distinct crawled pages with an <a href> to this URL (self-links excluded). */
+  inbound: number;
+  /** Clicks from the start URL over <a href> links and redirects; null when unreachable. */
+  linkDepth: number | null;
+  /** Internal PageRank, 0–100 log-scaled (graph.ts); null for URLs outside the link graph. */
+  pagerank: number | null;
 }
 
 export interface SiteView {
@@ -92,10 +139,19 @@ export interface SiteView {
 export interface PageCtx {
   page: PageView;
   crawl: CrawlView;
+  /** The compact view of every URL, for rules that judge a page's links by their targets. */
+  site: SiteView;
 }
 
 export interface SiteCtx {
   site: SiteView;
+  crawl: CrawlView;
+  /** Page-rule issues per rule and template fingerprint: how many pages, and the first few (SITE-001). */
+  pageIssues: Map<string, Map<string, { count: number; sample: string[] }>>;
+}
+
+export interface ResourceCtx {
+  resource: ResourceFacts;
   crawl: CrawlView;
 }
 
@@ -113,7 +169,9 @@ interface RuleBase<C> {
 
 export type PageRule = RuleBase<PageCtx> & { scope: "page" };
 export type SiteRule = RuleBase<SiteCtx> & { scope: "site" };
-export type Rule = PageRule | SiteRule;
+/** Judges one checked external link or image (resource phase); the finding's subject is the resource URL. */
+export type ResourceRule = RuleBase<ResourceCtx> & { scope: "resource"; kind: ResourceFacts["kind"] };
+export type Rule = PageRule | SiteRule | ResourceRule;
 
 /** Thrown by evaluate() when the rule cannot judge without a setting the user has not made. */
 export class NeedsConfig extends Error {

@@ -272,7 +272,7 @@ export function extractOutlinks($: Doc, pageUrl: string, opts: NormaliseOptions 
     }
     const rel = extra.rel ?? "";
     const location = locationOf($, el);
-    const key = `${via}\u0000${n.url}\u0000${extra.anchor ?? ""}\u0000${location}\u0000${rel}`;
+    const key = `${via}\u0000${n.url}\u0000${extra.anchor ?? ""}\u0000${location}\u0000${rel}\u0000${extra.hreflang ?? ""}`; // en and x-default often share a URL
     if (dedupe.has(key)) return;
     if (links.length >= MAX_OUTLINKS_PER_PAGE) {
       capped = true;

@@ -105,6 +105,37 @@ describe("analyseCrawl", () => {
     expect(runs.n).toBe(RULES.length);
   });
 
+  it("site pass: inbound links, click depth, PageRank and templates, streamed in small batches", async () => {
+    const c = await crawlSmallSite();
+    const o = srv.origin;
+    expect((await analyseCrawl(db, c, { batchSize: 2 })).outcome).toBe("analysed");
+    const rows = (await db.execute(sql`select normalised_url as url, inbound, link_depth, pagerank, template_id from crawl_urls where crawl_id = ${c}::uuid order by id`)).rows as {
+      url: string;
+      inbound: number;
+      link_depth: number | null;
+      pagerank: number | null;
+      template_id: string | null;
+    }[];
+    const at = (p: string) => rows.find((r) => r.url === `${o}${p}`)!;
+    expect(at("/")).toMatchObject({ inbound: 0, link_depth: 0 });
+    expect(at("/a")).toMatchObject({ inbound: 1, link_depth: 1 });
+    expect(at("/missing")).toMatchObject({ inbound: 1, link_depth: 1 });
+    // The link to /old is credited to its redirect target; the click path runs through the redirect.
+    expect(at("/old")).toMatchObject({ inbound: 0, link_depth: 1 });
+    expect(at("/new")).toMatchObject({ inbound: 1, link_depth: 2 });
+    // Blocked by robots.txt: never fetched, so no page links from it and no path to it beyond the sitemap.
+    expect(at("/private/listed")).toMatchObject({ inbound: 0, link_depth: null });
+    for (const r of rows) expect(r.pagerank, r.url).toBeGreaterThanOrEqual(0);
+    expect(Math.max(...rows.map((r) => r.pagerank!))).toBe(100);
+    expect(at("/a").pagerank).toBe(at("/b").pagerank); // same position in the graph
+
+    const html = rows.filter((r) => ["/", "/a", "/b", "/new"].some((p) => r.url === `${o}${p}`));
+    for (const r of html) expect(r.template_id, r.url).toEqual(expect.any(String));
+    const t = (await db.execute(sql`select sum(page_count)::int as n, count(*)::int as groups from templates where crawl_id = ${c}::uuid`)).rows[0] as { n: number; groups: number };
+    expect(t.n).toBe(html.length);
+    expect(t.groups).toBe(new Set(html.map((r) => r.template_id)).size);
+  });
+
   it("refuses a crawl that is still running", async () => {
     const c = await newCrawl(db, { status: "running" });
     expect((await analyseCrawl(db, c)).outcome).toBe("not_ready");

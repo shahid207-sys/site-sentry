@@ -92,7 +92,12 @@ const urls: UrlFacts[] = [...pages.values()].map((p, i) => ({
     wordCount: p.wordCount,
     ogImage: p.facts?.og.image ?? null,
     icons: p.facts?.icons ?? [],
+    hreflang: p.links.filter((l) => l.via === "hreflang" && l.hreflang).map((l) => ({ lang: l.hreflang!, href: l.href })),
   },
+  // Graph metrics need a crawl's url_edges (gate:p2b); here every page counts as well linked.
+  inbound: 2,
+  linkDepth: 1,
+  pagerank: 50,
 }));
 const site = { urls, byUrl: new Map(urls.map((u) => [u.url, u])) };
 
@@ -100,8 +105,8 @@ const found = new Map<string, Set<string>>();
 const t1 = performance.now();
 for (const r of RULES) {
   const list: Finding[] = [];
-  if (r.scope === "page") for (const p of pages.values()) list.push(...r.evaluate({ page: p, crawl }));
-  else if (SITE_RULES.has(r.id)) list.push(...r.evaluate({ site, crawl }));
+  if (r.scope === "page") for (const p of pages.values()) list.push(...r.evaluate({ page: p, crawl, site }));
+  else if (r.scope === "site" && SITE_RULES.has(r.id)) list.push(...r.evaluate({ site, crawl, pageIssues: new Map() }));
   for (const f of list) {
     const u = new URL(f.url);
     const key = u.pathname + u.search;

@@ -7,7 +7,7 @@ import type { RobotsRecord } from "../crawl/v2/runner";
 import type { DiscoverySource, UrlState } from "../crawl/v2/types";
 import { extractHtml } from "../snapshot/extract";
 import { crawlView, effectiveCanonical } from "./analyse";
-import { NeedsConfig, type CrawlView, type Finding, type PageView, type Rule, type SiteView, type UrlFacts } from "./contract";
+import { NeedsConfig, type CrawlView, type Finding, type PageView, type ResourceFacts, type Rule, type SiteCtx, type SiteView, type UrlFacts } from "./contract";
 import { LEGACY_TO_CATALOG } from "./legacy-map";
 import type { ProbeRecord } from "./probe-types";
 import { DEFERRED_RULES, RULES, RULES_BY_ID } from "./registry";
@@ -101,9 +101,15 @@ function bare(path: string, status: number, o: PageOpts = {}): PageView {
   return { ...p, statusCode: status, html: false, facts: null, robots: null, language: null, titles: [], descriptions: [], outline: [], canonicals: [], mainText: "", wordCount: 0 };
 }
 
+/** Graph metrics of a well-linked page; tests of the graph rules override them. */
+type Graph = Pick<UrlFacts, "inbound" | "linkDepth" | "pagerank">;
+const LINKED: Graph = { inbound: 2, linkDepth: 1, pagerank: 50 };
+
 /** The site-rule projection of a page, as analyse.ts loads it. */
-function facts(p: PageView, id: number): UrlFacts {
+function facts(p: PageView, id: number, g: Partial<Graph> = {}): UrlFacts {
   return {
+    ...LINKED,
+    ...g,
     id,
     url: p.url,
     state: p.state,
@@ -123,12 +129,14 @@ function facts(p: PageView, id: number): UrlFacts {
           wordCount: p.wordCount,
           ogImage: p.facts?.og.image ?? null,
           icons: p.facts?.icons ?? [],
+          hreflang: p.links.filter((l) => l.via === "hreflang" && l.hreflang).map((l) => ({ lang: l.hreflang!, href: l.href })),
         }
       : null,
   };
 }
-const redirect = (path: string, status: number, to: string, id: number): UrlFacts => ({ id, url: U(path), state: "redirected", statusCode: status, redirectTarget: U(to), discoveredVia: ["link"], page: null });
-const other = (path: string, state: UrlState, id: number, via: DiscoverySource[] = ["link"]): UrlFacts => ({ id, url: U(path), state, statusCode: null, redirectTarget: null, discoveredVia: via, page: null });
+const NO_GRAPH: Graph = { inbound: 0, linkDepth: null, pagerank: null };
+const redirect = (path: string, status: number, to: string, id: number): UrlFacts => ({ id, url: U(path), state: "redirected", statusCode: status, redirectTarget: U(to), discoveredVia: ["link"], page: null, ...NO_GRAPH });
+const other = (path: string, state: UrlState, id: number, via: DiscoverySource[] = ["link"]): UrlFacts => ({ id, url: U(path), state, statusCode: null, redirectTarget: null, discoveredVia: via, page: null, ...NO_GRAPH });
 
 function siteOf(...xs: (PageView | UrlFacts)[]): SiteView {
   const urls = xs.map((x, i) => ("html" in x ? facts(x, i + 1) : x));
@@ -164,6 +172,9 @@ interface CrawlOpts {
   sitemaps?: SitemapDocRecord[];
   probes?: ProbeRecord[];
   aiCrawlers?: "allow" | "block";
+  keyPages?: string[];
+  complete?: boolean;
+  resources?: ResourceFacts[];
 }
 function crawlOf(o: CrawlOpts = {}): CrawlView {
   const robots: RobotsRecord | null =
@@ -172,12 +183,18 @@ function crawlOf(o: CrawlOpts = {}): CrawlView {
     id: "c1",
     site_origin: ORIGIN,
     status: "completed",
-    config: o.aiCrawlers ? { aiCrawlers: o.aiCrawlers } : {},
+    config: { ...(o.aiCrawlers ? { aiCrawlers: o.aiCrawlers } : {}), ...(o.keyPages ? { keyPages: o.keyPages } : {}) },
     robots,
     sitemaps: o.sitemaps ?? [sitemap()],
     probes: o.probes ?? GOOD_PROBES,
     started_at: new Date("2026-06-01T00:00:00Z"),
     created_at: new Date("2026-06-01T00:00:00Z"),
+  }, {
+    complete: o.complete ?? true,
+    resources: {
+      links: new Map((o.resources ?? []).filter((r) => r.kind === "external_link").map((r) => [r.url, r])),
+      images: new Map((o.resources ?? []).filter((r) => r.kind === "image").map((r) => [r.url, r])),
+    },
   });
 }
 
@@ -186,14 +203,22 @@ const rule = (id: string): Rule => {
   if (!r) throw new Error(`no rule ${id}`);
   return r;
 };
-function run(id: string, x: PageView | SiteView, crawl: CrawlView = crawlOf()): Finding[] {
+/**
+ * Run one rule. A page rule sees `site` (default: a site of just that page); a site rule sees `pageIssues` (default:
+ * none); a resource rule takes a ResourceFacts.
+ */
+function run(id: string, x: PageView | SiteView | ResourceFacts, crawl: CrawlView = crawlOf(), o: { site?: SiteView; pageIssues?: SiteCtx["pageIssues"] } = {}): Finding[] {
   const r = rule(id);
   if (r.scope === "page") {
     if (!("html" in x)) throw new Error(`${id} is a page rule`);
-    return r.evaluate({ page: x, crawl });
+    return r.evaluate({ page: x, crawl, site: o.site ?? siteOf(x) });
   }
-  if ("html" in x) throw new Error(`${id} is a site rule`);
-  return r.evaluate({ site: x, crawl });
+  if (r.scope === "resource") {
+    if (!("kind" in x)) throw new Error(`${id} is a resource rule`);
+    return r.evaluate({ resource: x, crawl });
+  }
+  if (!("urls" in x)) throw new Error(`${id} is a site rule`);
+  return r.evaluate({ site: x, crawl, pageIssues: o.pageIssues ?? new Map() });
 }
 
 // The clean home and two clean content pages: distinct titles, descriptions and text.
@@ -233,6 +258,59 @@ const PAGE = (id: string, pos: () => PageView, neg: () => PageView = () => pageF
 const SITE = (id: string, pos: () => [SiteView, CrawlView?], neg: () => [SiteView, CrawlView?] = () => [cleanSite()]): Case => ({
   pos: () => run(id, ...(pos() as [SiteView, CrawlView?])),
   neg: () => run(id, ...(neg() as [SiteView, CrawlView?])),
+});
+
+/** A page rule judged against a site (its links' targets). */
+const PS = (id: string, pos: () => [PageView, SiteView, CrawlView?], neg: () => [PageView, SiteView, CrawlView?]): Case => ({
+  pos: () => {
+    const [p, site, c] = pos();
+    return run(id, p, c, { site });
+  },
+  neg: () => {
+    const [p, site, c] = neg();
+    return run(id, p, c, { site });
+  },
+});
+/** A resource rule (external link or image, as the resource phase stored it). */
+const RES = (id: string, pos: () => ResourceFacts, neg: () => ResourceFacts, crawl?: () => CrawlView): Case => ({
+  pos: () => run(id, pos(), crawl?.()),
+  neg: () => run(id, neg(), crawl?.()),
+});
+const res = (kind: ResourceFacts["kind"], url: string, over: Partial<ResourceFacts> = {}): ResourceFacts => ({
+  kind,
+  url,
+  state: "done",
+  skipCode: null,
+  method: "HEAD",
+  status: 200,
+  contentType: kind === "image" ? "image/png" : "text/html",
+  contentLength: 10_000,
+  width: null,
+  height: null,
+  error: null,
+  referrers: 1,
+  samplePages: [U("/x/")],
+  ...over,
+});
+/** A page body with main text plus extra markup. */
+const withBody = (extra: string) => ({ body: `<main><p>${TEXT}</p>${extra}</main>` });
+const IMGTAG = (attrs: string) => withBody(`<img ${attrs}>`);
+const ld = (...blocks: unknown[]) => ({ head: blocks.map((b) => `<script type="application/ld+json">${typeof b === "string" ? b : JSON.stringify(b)}</script>`).join("") });
+const crawlWithImage = (r: Partial<ResourceFacts>) => () => crawlOf({ resources: [res("image", U("/big.png"), r)] });
+const tls = (daysLeft: number) => probe("tls_cert", U("/"), { status: null, cert: { subject: "a.test", issuer: "CA", validFrom: "2026-01-01T00:00:00.000Z", validTo: new Date(Date.parse("2026-06-01T00:00:00Z") + daysLeft * 86_400_000).toISOString(), altNames: ["a.test"], authorized: true, authorizationError: null } });
+const exposed = (kind: "env_file" | "git_head", secret: ProbeRecord["secret"]) => probe(kind, U(kind === "env_file" ? "/.env" : "/.git/HEAD"), { contentType: "text/plain", secret });
+/** pageIssues as analyse.ts tallies them: rule → template → pages. */
+const issues = (ruleId: string, template: string, count: number) => new Map([[ruleId, new Map([[template, { count, sample: [U("/p/1/")] }]])]]);
+const templated = (n: number, template: string) => Array.from({ length: n }, (_, i) => ({ ...facts(pageFrom(`/p/${i}/`), 100 + i), page: { ...facts(pageFrom(`/p/${i}/`), 100 + i).page!, template } }));
+const SITE_ISSUES = (id: string, pos: () => [SiteView, SiteCtx["pageIssues"]], neg: () => [SiteView, SiteCtx["pageIssues"]]): Case => ({
+  pos: () => {
+    const [site, pageIssues] = pos();
+    return run(id, site, crawlOf(), { pageIssues });
+  },
+  neg: () => {
+    const [site, pageIssues] = neg();
+    return run(id, site, crawlOf(), { pageIssues });
+  },
 });
 
 const textOf = (n: number) => Array.from({ length: n }, (_, i) => `word${i}`).join(" ");
@@ -319,13 +397,99 @@ const CASES: Record<string, Case> = {
   "AIS-001": SITE("AIS-001", () => [cleanSite()], () => [cleanSite(), crawlOf({ robots: { status: 503, outcome: "disallow_all", body: undefined } })]),
   "AIS-002": SITE("AIS-002", () => [cleanSite(), crawlOf({ aiCrawlers: "allow", robotsBody: ROBOTS_OK + "\nUser-agent: GPTBot\nDisallow: /\n" })], () => [cleanSite(), crawlOf({ aiCrawlers: "block", robotsBody: ROBOTS_OK + "\nUser-agent: GPTBot\nDisallow: /\n" })]),
   "AIS-003": SITE("AIS-003", () => [cleanSite(), crawlOf({ probes: [probe("llms_txt", U("/llms.txt"), { status: 404 })] })]),
+
+  // ---------- LNK ----------
+  "LNK-001": PS(
+    "LNK-001",
+    () => [pageFrom("/x/", withBody('<a href="/gone">Old guide to spades</a>')), cleanSite(bare("/gone", 404))],
+    () => [pageFrom("/x/", withBody('<a href="/a/">Pruning shears guide</a>')), cleanSite()],
+  ),
+  "LNK-002": PS(
+    "LNK-002",
+    () => [pageFrom("/x/", withBody('<a href="/r">Pruning shears guide</a>')), cleanSite(redirect("/r", 301, "/a/", 10))],
+    () => [pageFrom("/x/", withBody('<a href="/a/">Pruning shears guide</a>')), cleanSite(redirect("/r", 301, "/a/", 10))],
+  ),
+  "LNK-003": SITE("LNK-003", () => [cleanSite(facts(pageFrom("/o/", {}, { via: ["sitemap"] }), 10, { inbound: 0 }))], () => [cleanSite(facts(pageFrom("/o/", {}, { via: ["sitemap"] }), 10, { inbound: 2 }))]),
+  "LNK-004": SITE("LNK-004", () => [cleanSite(facts(pageFrom("/d/"), 10, { linkDepth: 5 }))], () => [cleanSite(facts(pageFrom("/d/"), 10, { linkDepth: 4 }))]),
+  "LNK-005": SITE("LNK-005", () => [cleanSite(facts(pageFrom("/w/"), 10, { inbound: 1 }))], () => [cleanSite(facts(pageFrom("/w/"), 10, { inbound: 2 }))]),
+  "LNK-006": PAGE("LNK-006", () => pageFrom("/x/", withBody('<a href="/a/" rel="nofollow">Pruning shears guide</a>')), () => pageFrom("/x/", withBody('<a href="https://other.test/" rel="nofollow">A partner site</a><a href="/a/">Pruning shears guide</a>'))),
+  "LNK-007": PAGE("LNK-007", () => pageFrom("/x/", withBody('<a href="/a/">Click here</a>')), () => pageFrom("/x/", withBody('<a href="/a/">Pruning shears compared</a>'))),
+  "LNK-008": PAGE("LNK-008", () => pageFrom("/x/", withBody(Array.from({ length: 301 }, (_, i) => `<a href="/l${i}/">Tool guide ${i}</a>`).join(""))), () => pageFrom("/x/", withBody(Array.from({ length: 300 }, (_, i) => `<a href="/l${i}/">Tool guide ${i}</a>`).join("")))),
+  "LNK-010": RES("LNK-010", () => res("external_link", "https://gone.test/page", { status: 404 }), () => res("external_link", "https://ok.test/page", { status: 200 })),
+  "LNK-011": PAGE("LNK-011", () => pageFrom("/x/", withBody('<a href="http://a.test/a/">Pruning shears guide</a>')), () => pageFrom("/x/", withBody('<a href="https://a.test/a/">Pruning shears guide</a>'))),
+  "LNK-012": SITE(
+    "LNK-012",
+    () => [cleanSite(facts(pageFrom("/k/"), 10, { pagerank: 10 })), crawlOf({ keyPages: [U("/k/")] })],
+    () => [cleanSite(facts(pageFrom("/k/"), 10, { pagerank: 60 })), crawlOf({ keyPages: [U("/k/")] })],
+  ),
+  "LNK-013": PAGE("LNK-013", () => pageFrom("/x/", { head: '<link rel="next" href="/x/2/">' }), () => pageFrom("/x/", { head: '<link rel="next" href="/x/2/">', ...withBody('<a href="/x/2/">Next page of guides</a>') })),
+  "LNK-014": SITE("LNK-014", () => [cleanSite(...Array.from({ length: 101 }, (_, i) => other(`/f?c=${i}`, "fetched", 10 + i)))], () => [cleanSite(...Array.from({ length: 100 }, (_, i) => other(`/f?c=${i}`, "fetched", 10 + i)))]),
+
+  // ---------- I18N ----------
+  "I18N-001": SITE(
+    "I18N-001",
+    () => [cleanSite(pageFrom("/en/", { head: '<link rel="alternate" hreflang="en" href="/en/"><link rel="alternate" hreflang="de" href="/de/">' }), bare("/de/", 404))],
+    () => [cleanSite(pageFrom("/en/", { head: '<link rel="alternate" hreflang="en" href="/en/"><link rel="alternate" hreflang="de" href="/de/">' }), pageFrom("/de/", { head: '<link rel="alternate" hreflang="en" href="/en/"><link rel="alternate" hreflang="de" href="/de/">' }))],
+  ),
+  "I18N-002": SITE(
+    "I18N-002",
+    () => [cleanSite(pageFrom("/en/", { head: '<link rel="alternate" hreflang="en" href="/en/"><link rel="alternate" hreflang="de" href="/de/">' }), pageFrom("/de/", { head: '<link rel="alternate" hreflang="de" href="/de/">' }))],
+    () => [cleanSite(pageFrom("/en/", { head: '<link rel="alternate" hreflang="en" href="/en/"><link rel="alternate" hreflang="de" href="/de/">' }), pageFrom("/de/", { head: '<link rel="alternate" hreflang="en" href="/en/"><link rel="alternate" hreflang="de" href="/de/">' }))],
+  ),
+  "I18N-003": PAGE("I18N-003", () => pageFrom("/x/", { head: '<link rel="alternate" hreflang="en-UK" href="/x/">' }), () => pageFrom("/x/", { head: '<link rel="alternate" hreflang="en-GB" href="/x/">' })),
+  "I18N-004": PAGE("I18N-004", () => pageFrom("/x/", { head: '<link rel="alternate" hreflang="de" href="/de/">' }), () => pageFrom("/x/", { head: '<link rel="alternate" hreflang="en" href="/x/"><link rel="alternate" hreflang="de" href="/de/">' })),
+  "I18N-005": PAGE("I18N-005", () => pageFrom("/x/", { head: '<link rel="alternate" hreflang="en" href="/x/">' }), () => pageFrom("/x/", { head: '<link rel="alternate" hreflang="en" href="/x/"><link rel="alternate" hreflang="x-default" href="/x/">' })),
+  "I18N-006": SITE(
+    "I18N-006",
+    () => [cleanSite(pageFrom("/en/", { head: '<link rel="alternate" hreflang="en" href="/en/"><link rel="alternate" hreflang="de" href="/de/">' }), pageFrom("/de/", { canonical: `<link rel="canonical" href="${U("/en/")}">` }))],
+    () => [cleanSite(pageFrom("/en/", { head: '<link rel="alternate" hreflang="en" href="/en/"><link rel="alternate" hreflang="de" href="/de/">' }), pageFrom("/de/"))],
+  ),
+
+  // ---------- IMG ----------
+  "IMG-001": PAGE("IMG-001", () => pageFrom("/x/", IMGTAG('src="/a.png" width="10" height="10"')), () => pageFrom("/x/", IMGTAG('src="/a.png" alt="A spade" width="10" height="10"'))),
+  "IMG-002": PAGE("IMG-002", () => pageFrom("/x/", withBody('<a href="/a/"><img src="/a.png" alt="" width="10" height="10"></a>')), () => pageFrom("/x/", { body: `<main><p>${TEXT}</p></main><footer><img src="/dot.png" alt="" width="10" height="10"></footer>` })),
+  "IMG-003": PAGE("IMG-003", () => pageFrom("/x/", IMGTAG('src="/img/IMG_2041.jpg" alt="IMG_2041.jpg" width="10" height="10"')), () => pageFrom("/x/", IMGTAG('src="/img/IMG_2041.jpg" alt="A worn spade" width="10" height="10"'))),
+  "IMG-004": RES("IMG-004", () => res("image", U("/missing.png"), { status: 404 }), () => res("image", U("/ok.png"))),
+  "IMG-005": RES("IMG-005", () => res("image", U("/big.png"), { contentLength: 300 * 1024 }), () => res("image", U("/small.png"), { contentLength: 200 * 1024 })),
+  "IMG-006": RES("IMG-006", () => res("image", U("/photo.jpg"), { contentType: "image/jpeg", contentLength: 150 * 1024 }), () => res("image", U("/photo.webp"), { contentType: "image/webp", contentLength: 150 * 1024 })),
+  "IMG-007": PAGE("IMG-007", () => pageFrom("/x/", IMGTAG('src="/a.png" alt="A spade"')), () => pageFrom("/x/", IMGTAG('src="/a.png" alt="A spade" width="10" height="10"'))),
+  "IMG-008": PAGE("IMG-008", () => pageFrom("/x/", IMGTAG('src="/big.png" alt="A spade" width="300" height="200"')), () => pageFrom("/x/", IMGTAG('src="/big.png" alt="A spade" width="600" height="400"')), crawlWithImage({ width: 1200, height: 800 })),
+  "IMG-010": PAGE("IMG-010", () => pageFrom("/x/", IMGTAG('src="/big.png" alt="A spade" width="600" height="400"')), () => pageFrom("/x/", IMGTAG('src="/big.png" srcset="/big.png 1200w, /small.png 600w" alt="A spade" width="600" height="400"')), crawlWithImage({ width: 1200, height: 800 })),
+  "IMG-011": PAGE("IMG-011", () => pageFrom("/x/", withBody('<video src="/v.mp4"></video>')), () => pageFrom("/x/", withBody('<video src="/v.mp4" poster="/v.jpg"></video>'))),
+
+  // ---------- SD ----------
+  "SD-001": PAGE("SD-001", () => pageFrom("/x/", ld("{\"@type\": \"Thing\",}")), () => pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "Thing", name: "Spade" }))),
+  "SD-002": PAGE("SD-002", () => pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "Thing", nmae: "Spade" })), () => pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "Thing", name: "Spade" }))),
+  "SD-003": PAGE("SD-003", () => pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "Event", name: "Show", location: { "@type": "Place", address: "1 Road" } })), () => pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "Event", name: "Show", startDate: "2026-07-01", location: { "@type": "Place", address: "1 Road" } }))),
+  "SD-004": PAGE("SD-004", () => pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "BreadcrumbList", itemListElement: [{ "@type": "ListItem", position: 1, item: U("/") }] }, { "@context": "https://schema.org", "@type": "Article", headline: "Spades" })), () => pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "BreadcrumbList", itemListElement: [{ "@type": "ListItem", position: 1, item: U("/") }] }))),
+  "SD-005": PAGE("SD-005", () => pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "Organization", name: "Fixture Site" }, { "@context": "https://schema.org", "@type": "Organization", name: "Fixture Ltd" })), () => pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "Organization", name: "Fixture Site" }, { "@context": "https://schema.org", "@type": "Organization", name: "Fixture Site", url: U("/") }))),
+  "SD-006": PAGE("SD-006", () => pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "Product", name: "Spade", aggregateRating: { "@type": "AggregateRating", ratingValue: "4.8", reviewCount: "212" } })), () => pageFrom("/x/", { ...ld({ "@context": "https://schema.org", "@type": "Product", name: "Spade", aggregateRating: { "@type": "AggregateRating", ratingValue: "4.8", reviewCount: "212" } }), ...withBody("<p>Rated 4.8 out of 5 from 212 reviews.</p>") })),
+  "SD-007": PAGE("SD-007", () => home(), () => pageFrom("/", { ...ld({ "@context": "https://schema.org", "@type": "Organization", name: "Fixture Site", url: U("/") }) })),
+  "SD-008": PAGE("SD-008", () => pageFrom("/guides/spades/"), () => pageFrom("/guides/spades/", ld({ "@context": "https://schema.org", "@type": "BreadcrumbList", itemListElement: [{ "@type": "ListItem", position: 1, name: "Guides", item: U("/guides/") }] }))),
+  "SD-009": PAGE("SD-009", () => pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "Product", name: "Spade", review: { "@type": "Review", author: "A", reviewRating: { "@type": "Rating", ratingValue: 5 } } })), () => pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "Product", name: "Spade", offers: { "@type": "Offer", price: "25.00", priceCurrency: "GBP" } }))),
+  "SD-010": PAGE("SD-010", () => pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "HowTo", name: "Sharpen a spade" })), () => pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "Article", headline: "Sharpen a spade" }))),
+
+  // ---------- SEC ----------
+  "SEC-001": PAGE("SEC-001", () => ({ ...pageFrom("/x/"), finalUrl: "http://a.test/x/" }), () => pageFrom("/x/")),
+  "SEC-002": PAGE("SEC-002", () => pageFrom("/x/", { head: '<script src="http://cdn.test/a.js"></script>' }), () => pageFrom("/x/", { head: '<script src="https://cdn.test/a.js"></script>', ...withBody('<a href="http://other.test/">An http link is not loaded</a>') })),
+  "SEC-003": SITE("SEC-003", () => [cleanSite(), crawlOf({ probes: [...GOOD_PROBES, tls(20)] })], () => [cleanSite(), crawlOf({ probes: [...GOOD_PROBES, tls(22)] })]),
+  "SEC-004": PAGE("SEC-004", () => pageFrom("/", {}, { headers: { "strict-transport-security": "max-age=0" } }), () => pageFrom("/", {}, { headers: { "strict-transport-security": "max-age=31536000" } })),
+  "SEC-005": PAGE("SEC-005", () => pageFrom("/", {}, { headers: { "x-content-type-options": "nosniff", "x-frame-options": "DENY" } }), () => pageFrom("/", {}, { headers: { "x-content-type-options": "nosniff", "content-security-policy": "default-src 'self'; frame-ancestors 'none'" } })),
+  "SEC-006": SITE("SEC-006", () => [cleanSite(), crawlOf({ probes: [...GOOD_PROBES, exposed("env_file", { pattern: "env_key_value", lines: 3 })] })], () => [cleanSite(), crawlOf({ probes: [...GOOD_PROBES, exposed("env_file", null), exposed("git_head", null)] })]),
+
+  // ---------- SITE ----------
+  "SITE-001": SITE_ISSUES("SITE-001", () => [cleanSite(...templated(10, "T1")), issues("IMG-007", "T1", 9)], () => [cleanSite(...templated(10, "T1")), issues("IMG-007", "T1", 8)]),
+  "SITE-002": SITE("SITE-002", () => [cleanSite(facts(pageFrom("/unlisted/"), 10))], () => [cleanSite(facts(pageFrom("/listed/", {}, { via: ["sitemap", "link"] }), 10))]),
+  "SITE-003": SITE("SITE-003", () => [cleanSite(bare("/e1", 404), bare("/e2", 404), bare("/e3", 404))], () => [cleanSite(bare("/e1", 404))]),
 };
 
 describe("rule catalog", () => {
   it("every registered rule has a test case, and every case names a registered rule", () => {
     expect(Object.keys(CASES).sort()).toEqual(RULES.map((r) => r.id).sort());
-    expect(RULES.length).toBe(31 + 19 + 12 + 3);
-    expect(Object.keys(DEFERRED_RULES)).toEqual(["IDX-018"]);
+    expect(RULES.length).toBe(31 + 19 + 12 + 3 + 13 + 6 + 10 + 10 + 6 + 3);
+    expect(Object.keys(DEFERRED_RULES)).toEqual(["IDX-018", "CNT-013", "CNT-014", "AIS-004", "LNK-009", "IMG-009", "SITE-004", "SITE-005", "PERF-*", "A11Y-*"]);
+    // A deferred rule is never also registered.
+    for (const id of Object.keys(DEFERRED_RULES)) expect(RULES_BY_ID.has(id), id).toBe(false);
   });
 
   it("ids are unique and every rule has a complete explanation", () => {
@@ -345,14 +509,14 @@ describe("clean baseline", () => {
   it("no page rule fires on a clean page", () => {
     const page = pageFrom("/clean/", {}, { via: ["sitemap", "link"] });
     const crawl = crawlOf({ aiCrawlers: "allow" });
-    const found = RULES.filter((r) => r.scope === "page").flatMap((r) => (r.scope === "page" ? r.evaluate({ page, crawl }) : []));
+    const found = RULES.filter((r) => r.scope === "page").flatMap((r) => (r.scope === "page" ? r.evaluate({ page, crawl, site: cleanSite() }) : []));
     expect(found).toEqual([]);
   });
 
   it("no site rule fires on a clean site (AIS-001 reports robots.txt, not a page)", () => {
     const site = cleanSite();
-    const crawl = crawlOf({ aiCrawlers: "allow" });
-    const found = RULES.filter((r) => r.scope === "site").flatMap((r) => (r.scope === "site" ? r.evaluate({ site, crawl }) : []));
+    const crawl = crawlOf({ aiCrawlers: "allow", keyPages: [U("/")] });
+    const found = RULES.filter((r) => r.scope === "site").flatMap((r) => (r.scope === "site" ? r.evaluate({ site, crawl, pageIssues: new Map() }) : []));
     expect(found.map((f) => f.ruleId)).toEqual(["AIS-001"]);
     expect(found[0].url).toBe(U("/robots.txt"));
   });
@@ -386,6 +550,89 @@ describe("probes skipped by robots.txt make their rules inconclusive, not silent
   });
   it("a probe skipped for another reason (over the og:image cap) stays silent", () => {
     expect(run("META-017", cleanSite(), crawlOf({ probes: [probe("og_image", U("/og.png"), { started: false, status: null, skipped: "cap", skipCode: "over_cap" })] }))).toEqual([]);
+  });
+});
+
+describe("Phase 2b details", () => {
+  it("graph rules report inconclusive, not issue, when the crawl did not reach every URL", () => {
+    const site = cleanSite(facts(pageFrom("/o/", {}, { via: ["sitemap"] }), 10, { inbound: 0 }), facts(pageFrom("/w/"), 11, { inbound: 1 }));
+    for (const id of ["LNK-003", "LNK-005"]) {
+      expect(run(id, site, crawlOf({ complete: false })).map((f) => [f.outcome, f.evidence.code]), id).toEqual([["inconclusive", "partial_crawl"]]);
+    }
+  });
+
+  it("LNK-012 needs the keyPages setting", () => {
+    expect(() => run("LNK-012", cleanSite())).toThrow(NeedsConfig);
+  });
+
+  it("LNK-010 and IMG-004: 403, 429, 5xx and transport errors are ambiguous; DNS failure is broken", () => {
+    for (const status of [403, 429, 503]) expect(run("LNK-010", res("external_link", "https://x.test/", { status }))[0].outcome, String(status)).toBe("inconclusive");
+    expect(run("LNK-010", res("external_link", "https://x.test/", { status: null, error: { code: "TIMEOUT", message: "No response within 30s." } }))[0].outcome).toBe("inconclusive");
+    expect(run("LNK-010", res("external_link", "https://x.test/", { status: null, error: { code: "DNS_FAILED", message: "no such host" } }))[0].outcome).toBe("issue");
+    expect(run("LNK-010", res("external_link", "https://x.test/", { state: "skipped", skipCode: "blocked_robots", status: null }))).toEqual([]);
+    expect(run("IMG-004", res("image", U("/a.png"), { status: 503 }))[0].outcome).toBe("inconclusive");
+    expect(run("IMG-004", res("image", U("/a.png"), { status: 403 }))[0].outcome).toBe("issue");
+  });
+
+  it("IMG-005 is inconclusive without Content-Length; IMG-008 and IMG-010 ignore images the resource phase did not check", () => {
+    expect(run("IMG-005", res("image", U("/a.png"), { contentLength: null }))[0]).toMatchObject({ outcome: "inconclusive", evidence: { code: "size_unknown" } });
+    expect(run("IMG-008", pageFrom("/x/", IMGTAG('src="/big.png" alt="A spade" width="300" height="200"')))).toEqual([]);
+    expect(run("IMG-008", pageFrom("/x/", IMGTAG('src="/big.png" alt="A spade" width="300" height="200"')), crawlWithImage({ status: 404, width: 1200 })())).toEqual([]);
+  });
+
+  it("IMG-002 needs a reason to call an empty-alt image content (pre-2b snapshots have none)", () => {
+    const p = pageFrom("/x/", withBody('<a href="/a/"><img src="/a.png" alt="" width="10" height="10"></a>'));
+    expect(run("IMG-002", { ...p, images: p.images.map(({ linked, inMain, inPicture, ...i }) => (void linked, void inMain, void inPicture, i)) })).toEqual([]);
+    expect(run("IMG-002", pageFrom("/x/", { body: `<main><p>${TEXT}</p></main><footer><img src="/big.png" alt="" width="10" height="10"></footer>` }), crawlWithImage({ width: 800, height: 600 })())[0].evidence).toMatchObject({ images: [{ why: ["large"] }] });
+  });
+
+  it("SD-003 checks nested Offer and Review, which need no itemReviewed inside the item they review", () => {
+    const product = (extra: Record<string, unknown>) => pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "Product", name: "Spade", ...extra }));
+    expect(run("SD-003", product({ offers: { "@type": "Offer", priceCurrency: "GBP" } }))[0].evidence.gaps).toEqual([expect.objectContaining({ type: "Offer", at: "offers of block 1", missing: ["price or priceSpecification"] })]);
+    expect(run("SD-003", product({ review: { "@type": "Review", author: "A", reviewRating: { "@type": "Rating", ratingValue: 5 } } }))).toEqual([]);
+    expect(run("SD-003", product({ review: { "@type": "Review", author: "A" } }))[0].evidence.gaps).toEqual([expect.objectContaining({ type: "Review", missing: ["reviewRating"] })]);
+    // A stand-alone Offer is not a Google feature by itself.
+    expect(run("SD-003", pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "Offer" })))).toEqual([]);
+    // LocalBusiness subtypes use LocalBusiness's list; @graph entries are top-level entities.
+    expect(run("SD-003", pageFrom("/x/", ld({ "@context": "https://schema.org", "@graph": [{ "@type": "Restaurant", name: "Cafe" }] })))[0].evidence.gaps).toEqual([expect.objectContaining({ type: "Restaurant", missing: ["address"] })]);
+  });
+
+  it("SD rules never claim rich-result eligibility", () => {
+    for (const r of RULES.filter((x) => x.category === "structured_data")) {
+      expect(`${r.explain.why} ${r.explain.fix} ${r.explain.acceptance}`, r.id).not.toMatch(/eligible|eligibility|will (show|appear|get)/i);
+    }
+    const f = run("SD-003", pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "Event", name: "Show" })))[0];
+    expect(f.message).not.toMatch(/eligib/i);
+    expect(f.evidence.note).toMatch(/does not by itself make a page eligible/);
+  });
+
+  it("SD-002 ignores other vocabularies and prefixed properties", () => {
+    expect(run("SD-002", pageFrom("/x/", ld({ "@context": "https://example.org/vocab", "@type": "Widget", colour: "red" })))).toEqual([]);
+    expect(run("SD-002", pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "Thing", name: "Spade", "og:x": 1 })))).toEqual([]);
+  });
+
+  it("SEC-003 reports an expired certificate and a handshake that failed", () => {
+    expect(run("SEC-003", cleanSite(), crawlOf({ probes: [tls(-1)] }))[0].message).toMatch(/expired/);
+    const failed = probe("tls_cert", U("/"), { status: null, error: { code: "TLS", message: "TLS connection failed." } });
+    expect(run("SEC-003", cleanSite(), crawlOf({ probes: [failed] }))[0]).toMatchObject({ outcome: "inconclusive" });
+  });
+
+  it("SEC-006 is inconclusive when robots.txt kept the probe from being sent, and never on a 200 without a signature", () => {
+    const skipped = probe("env_file", U("/.env"), { started: false, status: null, skipped: "blocked by robots.txt", skipCode: "probe_skipped_robots" });
+    expect(run("SEC-006", cleanSite(), crawlOf({ probes: [skipped] }))[0]).toMatchObject({ outcome: "inconclusive", evidence: { code: "probe_skipped_robots" } });
+    const f = run("SEC-006", cleanSite(), crawlOf({ probes: [exposed("git_head", { pattern: "git_head_ref", lines: 1 })] }))[0];
+    expect(f.evidence).toEqual({ status: 200, pattern: "git_head_ref", matchedLines: 1 });
+  });
+
+  it("SEC-004 and SEC-005 judge the start page only", () => {
+    expect(run("SEC-004", pageFrom("/x/"))).toEqual([]);
+    expect(run("SEC-005", pageFrom("/x/"))).toEqual([]);
+  });
+
+  it("SITE-001 needs at least 5 pages in the template group", () => {
+    expect(run("SITE-001", cleanSite(...templated(4, "T1")), crawlOf(), { pageIssues: issues("IMG-007", "T1", 4) })).toEqual([]);
+    const [f] = run("SITE-001", cleanSite(...templated(300, "T1")), crawlOf(), { pageIssues: issues("IMG-007", "T1", 300) });
+    expect(f.evidence).toMatchObject({ ruleId: "IMG-007", pages: 300, groupSize: 300, share: 1 });
   });
 });
 

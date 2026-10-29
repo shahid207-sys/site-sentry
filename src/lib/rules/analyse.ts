@@ -11,7 +11,8 @@ import type { SitemapDocRecord } from "../crawl/v2/discovery";
 import type { RobotsRecord } from "../crawl/v2/runner";
 import type { DiscoverySource, UrlState } from "../crawl/v2/types";
 import type { CanonicalTag } from "../snapshot/types";
-import { NeedsConfig, type CrawlView, type Finding, type PageRule, type PageView, type Rule, type SiteRule, type SiteView, type UrlFacts } from "./contract";
+import { NeedsConfig, type CrawlView, type Finding, type Hreflang, type PageRule, type PageView, type ResourceFacts, type ResourceRule, type Rule, type SiteCtx, type SiteRule, type SiteView, type UrlFacts } from "./contract";
+import { bfsDepth, pageRank } from "./graph";
 import type { ProbeRecord } from "./probe-types";
 import { RULES } from "./registry";
 
@@ -43,7 +44,7 @@ export interface CrawlRow {
   id: string;
   site_origin: string;
   status: string;
-  config: { aiCrawlers?: "allow" | "block" };
+  config: { aiCrawlers?: "allow" | "block"; keyPages?: string[] };
   robots: RobotsRecord | null;
   sitemaps: (SitemapDocRecord | { started: string })[];
   probes: ProbeRecord[];
@@ -60,7 +61,22 @@ export function effectiveCanonical(canonicals: CanonicalTag[]): string | null {
   return n.ok ? n.url : c.resolved;
 }
 
-export function crawlView(row: CrawlRow): CrawlView {
+/**
+ * URL states that mean a URL of the crawled host was never fetched for a reason other than the site's own rules
+ * (robots.txt, scope): graph rules cannot prove an absence (no inbound links) when any exists.
+ */
+const UNFETCHED = ["budget_exhausted", "depth_exceeded", "cancelled", "interrupted", "failed_timeout", "failed_network", "failed_dns", "failed_tls"];
+
+const normalised = (u: string) => {
+  const n = normaliseUrl(u);
+  return n.ok ? n.url : u;
+};
+
+/**
+ * The crawl as rules see it. `complete` and `resources` come from the database (analyseCrawl loads them); the
+ * defaults (complete when the crawl completed, no resources) are for callers that judge a crawl row alone.
+ */
+export function crawlView(row: CrawlRow, extra: Partial<Pick<CrawlView, "complete" | "resources">> = {}): CrawlView {
   const parsed = row.robots?.outcome === "parsed" ? parseRobots(row.robots.body ?? "") : null;
   const outcome = row.robots?.outcome;
   return {
@@ -72,15 +88,120 @@ export function crawlView(row: CrawlRow): CrawlView {
     robotsAllows: (url, agent) => (parsed ? isAllowed(parsed, agent, url).allowed : outcome === "allow_all" ? true : outcome === "disallow_all" ? false : null),
     sitemaps: (row.sitemaps ?? []).filter((d): d is SitemapDocRecord => "url" in d),
     probes: row.probes ?? [],
+    keyPages: row.config?.keyPages?.length ? row.config.keyPages.map(normalised) : null,
+    complete: extra.complete ?? row.status === "completed",
+    resources: extra.resources ?? { links: new Map(), images: new Map() },
   };
+}
+
+async function crawlComplete(db: Exec, crawlId: string, status: string): Promise<boolean> {
+  if (status !== "completed") return false;
+  const r = await db.execute(sql`select exists (select 1 from crawl_urls where crawl_id = ${crawlId}::uuid and state in (${sql.join(UNFETCHED.map((s) => sql`${s}`), sql`, `)})) as partial`);
+  return !(r.rows[0] as { partial: boolean }).partial;
+}
+
+async function loadResources(db: Exec, crawlId: string, batch: number): Promise<CrawlView["resources"]> {
+  const out: CrawlView["resources"] = { links: new Map(), images: new Map() };
+  for (let after = 0; ; ) {
+    const r = await db.execute(sql`select id, kind, url, state, skip_code, method, status, content_type, bytes, width, height, error, referrers, sample_pages
+      from resources where crawl_id = ${crawlId}::uuid and id > ${after} order by id limit ${batch}`);
+    for (const x of r.rows as Record<string, unknown>[]) {
+      const f: ResourceFacts = {
+        kind: x.kind as ResourceFacts["kind"],
+        url: x.url as string,
+        // An interrupted row has no answer: rules treat it like one never sent.
+        state: x.state === "interrupted" ? "skipped" : (x.state as ResourceFacts["state"]),
+        skipCode: x.state === "interrupted" ? "interrupted" : ((x.skip_code as string | null) ?? null),
+        method: (x.method as string | null) ?? null,
+        status: (x.status as number | null) ?? null,
+        contentType: (x.content_type as string | null) ?? null,
+        contentLength: x.bytes === null || x.bytes === undefined ? null : Number(x.bytes),
+        width: (x.width as number | null) ?? null,
+        height: (x.height as number | null) ?? null,
+        error: (x.error as ResourceFacts["error"]) ?? null,
+        referrers: Number(x.referrers),
+        samplePages: (x.sample_pages as string[]) ?? [],
+      };
+      (f.kind === "external_link" ? out.links : out.images).set(f.url, f);
+    }
+    if (r.rows.length < batch) break;
+    after = Number((r.rows[r.rows.length - 1] as { id: number }).id);
+  }
+  return out;
+}
+
+/**
+ * The site pass's link graph (docs/SPEC.md "Phase 2" item 4), written to crawl_urls: inbound (distinct pages with an
+ * <a href> to the URL, or to a URL redirecting to it, self-links excluded), click depth from the start page over
+ * links and redirects (BFS), and internal PageRank (graph.ts). Edges are streamed `batch` at a time; only integer
+ * node ids are kept in memory.
+ */
+async function linkGraph(db: Exec, crawlId: string, origin: string, batch: number): Promise<void> {
+  const index = new Map<string, number>();
+  const ids: number[] = [];
+  for (let after = 0; ; ) {
+    const r = await db.execute(sql`select id, normalised_url from crawl_urls where crawl_id = ${crawlId}::uuid and id > ${after} order by id limit ${batch}`);
+    for (const x of r.rows as { id: number; normalised_url: string }[]) {
+      index.set(x.normalised_url, ids.length);
+      ids.push(Number(x.id));
+    }
+    if (r.rows.length < batch) break;
+    after = ids[ids.length - 1];
+  }
+  const n = ids.length;
+  const adjacency: number[][] = Array.from({ length: n }, () => []);
+  const edges: [number, number][] = [];
+  for (let after = 0; ; ) {
+    const r = await db.execute(sql`select id, from_url, to_url from url_edges where crawl_id = ${crawlId}::uuid and via in ('link', 'redirect') and id > ${after} order by id limit ${batch}`);
+    for (const x of r.rows as { id: number; from_url: string; to_url: string }[]) {
+      const a = index.get(x.from_url);
+      const b = index.get(x.to_url);
+      if (a === undefined || b === undefined || a === b) continue;
+      adjacency[a].push(b);
+      edges.push([a, b]);
+    }
+    if (r.rows.length < batch) break;
+    after = Number((r.rows[r.rows.length - 1] as { id: number }).id);
+  }
+  const start = index.get(normalised(new URL("/", origin).toString())) ?? -1;
+  const depth = bfsDepth(n, adjacency, start);
+  const { score } = pageRank(n, edges);
+  edges.length = 0;
+
+  // Inbound: counted in the database (distinct source pages), a link to a redirecting URL credited to its target.
+  const inbound = new Map<number, number>();
+  const r = await db.execute(sql`
+    select coalesce(t2.id, t.id) as id, count(distinct e.from_url)::int as n
+    from url_edges e
+      join crawl_urls t on t.crawl_id = e.crawl_id and t.normalised_url = e.to_url
+      left join crawl_urls t2 on t.state = 'redirected' and t2.crawl_id = t.crawl_id and t2.normalised_url = t.redirect_target
+    where e.crawl_id = ${crawlId}::uuid and e.via = 'link' and e.from_url <> coalesce(t2.normalised_url, t.normalised_url)
+    group by 1`);
+  for (const x of r.rows as { id: number; n: number }[]) inbound.set(Number(x.id), x.n);
+
+  for (let i = 0; i < n; i += batch) {
+    const rows = ids.slice(i, i + batch).map((id, k) => ({ id, inbound: inbound.get(id) ?? 0, depth: depth[i + k] < 0 ? null : depth[i + k], pr: Math.round(score[i + k] * 100) / 100 }));
+    await db.execute(sql`update crawl_urls u set inbound = v.inbound, link_depth = v.depth, pagerank = v.pr
+      from jsonb_to_recordset(${JSON.stringify(rows)}::jsonb) as v(id bigint, inbound int, depth int, pr real) where u.id = v.id`);
+  }
+}
+
+/** Pages grouped by DOM-skeleton fingerprint (snapshot template_fingerprint) into `templates`; crawl_urls.template_id set. */
+async function templates(db: Exec, crawlId: string): Promise<void> {
+  await db.execute(sql`delete from templates where crawl_id = ${crawlId}::uuid`);
+  await db.execute(sql`insert into templates (crawl_id, fingerprint, page_count, sample_url)
+    select s.crawl_id, s.template_fingerprint, count(*)::int, min(u.normalised_url) from page_snapshots s join crawl_urls u on u.id = s.url_id
+    where s.crawl_id = ${crawlId}::uuid and s.facts is not null and s.template_fingerprint is not null group by s.crawl_id, s.template_fingerprint`);
+  await db.execute(sql`update crawl_urls u set template_id = s.template_fingerprint from page_snapshots s where s.url_id = u.id and u.crawl_id = ${crawlId}::uuid`);
 }
 
 async function loadSiteView(db: Exec, crawlId: string, batch: number): Promise<SiteView> {
   const urls: UrlFacts[] = [];
   for (let after = 0; ; ) {
     const r = await db.execute(sql`
-      select u.id, u.normalised_url, u.state, u.status_code, u.redirect_target, u.discovered_via,
-        s.facts is not null as html, s.robots, s.canonicals, s.title, s.description, s.text_hash, s.simhash, s.template_fingerprint, s.word_count,
+      select u.id, u.normalised_url, u.state, u.status_code, u.redirect_target, u.discovered_via, u.inbound, u.link_depth, u.pagerank,
+        s.facts is not null as html,
+        (select coalesce(jsonb_agg(jsonb_build_object('lang', l->>'hreflang', 'href', l->>'href')), '[]'::jsonb) from jsonb_array_elements(s.links) l where l->>'via' = 'hreflang') as hreflang, s.robots, s.canonicals, s.title, s.description, s.text_hash, s.simhash, s.template_fingerprint, s.word_count,
         s.facts->'og'->>'image' as og_image, s.facts->'icons' as icons,
         (select e->>'text' from jsonb_array_elements(s.outline) e where e->>'level' = '1' limit 1) as h1
       from crawl_urls u left join page_snapshots s on s.url_id = u.id
@@ -107,8 +228,12 @@ async function loadSiteView(db: Exec, crawlId: string, batch: number): Promise<S
               wordCount: (x.word_count as number | null) ?? 0,
               ogImage: (x.og_image as string | null) ?? null,
               icons: (x.icons as string[] | null) ?? [],
+              hreflang: (x.hreflang as Hreflang[] | null) ?? [],
             }
           : null,
+        inbound: (x.inbound as number | null) ?? 0,
+        linkDepth: (x.link_depth as number | null) ?? null,
+        pagerank: (x.pagerank as number | null) ?? null,
       });
     }
     if (r.rows.length < batch) break;
@@ -242,7 +367,9 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
         await tx.execute(sql`insert into rules (id, version, category, scope, confidence, impact, updated_at) values (${r.id}, ${r.version}, ${r.category}, ${r.scope}, ${r.confidence}, ${r.impact}, now())
           on conflict (id) do update set version = excluded.version, category = excluded.category, scope = excluded.scope, confidence = excluded.confidence, impact = excluded.impact, updated_at = now()`);
       }
-      const crawl = crawlView(row);
+      await linkGraph(tx, crawlId, row.site_origin, batch);
+      await templates(tx, crawlId);
+      const crawl = crawlView(row, { complete: await crawlComplete(tx, crawlId, row.status), resources: await loadResources(tx, crawlId, batch) });
       const site = await loadSiteView(tx, crawlId, batch);
 
       // Redirect chains are a snapshot field, filled here from the redirect rows before rules read them.
@@ -255,6 +382,9 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
       const stats = new Stats(rules);
       const pageRules = rules.filter((r): r is PageRule => r.scope === "page");
       const siteRules = rules.filter((r): r is SiteRule => r.scope === "site");
+      const resourceRules = rules.filter((r): r is ResourceRule => r.scope === "resource");
+      // Page-rule issues per rule and template, for SITE-001 (one finding for a defect a whole template shares).
+      const pageIssues: SiteCtx["pageIssues"] = new Map();
       let pages = 0;
       let total = 0;
       for (let after = 0; ; ) {
@@ -264,7 +394,16 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
         for (const x of r.rows as Record<string, unknown>[]) {
           const page = pageView(x);
           pages++;
-          for (const rule of pageRules) stats.run(rule, { page, crawl }, found);
+          for (const rule of pageRules) {
+            const before = found.length;
+            stats.run(rule, { page, crawl, site }, found);
+            if (!page.templateFingerprint || !found.slice(before).some((f) => f.outcome === "issue")) continue;
+            if (!pageIssues.has(rule.id)) pageIssues.set(rule.id, new Map());
+            const t = pageIssues.get(rule.id)!.get(page.templateFingerprint) ?? { count: 0, sample: [] };
+            t.count++;
+            if (t.sample.length < 5) t.sample.push(page.url);
+            pageIssues.get(rule.id)!.set(page.templateFingerprint, t);
+          }
         }
         await insertFindings(tx, crawlId, found);
         total += found.length;
@@ -272,7 +411,10 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
         after = Number((r.rows[r.rows.length - 1] as { id: number }).id);
       }
       const siteFound: Finding[] = [];
-      for (const rule of siteRules) stats.run(rule, { site, crawl }, siteFound);
+      for (const rule of siteRules) stats.run(rule, { site, crawl, pageIssues }, siteFound);
+      for (const rule of resourceRules) {
+        for (const resource of (rule.kind === "image" ? crawl.resources.images : crawl.resources.links).values()) stats.run(rule, { resource, crawl }, siteFound);
+      }
       await insertFindings(tx, crawlId, siteFound);
       total += siteFound.length;
 

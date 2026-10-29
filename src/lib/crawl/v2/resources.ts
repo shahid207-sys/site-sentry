@@ -271,7 +271,7 @@ async function check(ctx: ResourceContext, row: Row, throttle: HostThrottle): Pr
         if (size) Object.assign(result, { width: size.width, height: size.height });
       }
       result.bytes = totalBytes(get.headers) ?? result.bytes;
-    } catch (e) {
+    } catch {
       if (ctx.signal.aborted) {
         await setRow(ctx, row.id, { ...result, state: "done" });
         return false;
