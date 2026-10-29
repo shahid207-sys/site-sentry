@@ -14,6 +14,8 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   // BullMQ loads its Lua scripts from disk at runtime; keep it (and its Redis client) out of the server bundle.
   serverExternalPackages: ["bullmq", "ioredis"],
+  // .data holds runtime state (the JSON store, raw-HTML blobs, gate and validation runs): never part of a server trace.
+  outputFileTracingExcludes: { "/*": [".data/**/*"] },
   // Keep the dev-only indicator away from the sidebar controls at bottom-left.
   devIndicators: { position: "bottom-right" },
   async headers() {

@@ -17,7 +17,9 @@ export function dataDir(): string {
   if (process.env.SITE_SENTRY_DATA_DIR) return path.resolve(process.env.SITE_SENTRY_DATA_DIR);
   // Serverless file systems are read-only except /tmp (which is ephemeral and per-instance).
   if (process.env.VERCEL) return "/tmp/site-sentry";
-  return path.join(process.cwd(), ".data");
+  // Runtime data, not a build input: without the comment Turbopack traces every file under .data (51,077 on a dev
+  // machine after the Phase 2 runs) into the server bundle analysis.
+  return path.join(/* turbopackIgnore: true */ process.cwd(), ".data");
 }
 
 export const dataIsEphemeral = () => !process.env.SITE_SENTRY_DATA_DIR && !!process.env.VERCEL;
