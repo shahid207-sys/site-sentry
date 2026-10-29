@@ -18,6 +18,7 @@ import { cdnManagedLinks, stateCounts } from "../src/lib/crawl/v2/frontier";
 import { redisConnection } from "../src/lib/crawl/v2/queue";
 import { runCrawl, V2_USER_AGENT } from "../src/lib/crawl/v2/runner";
 import { createDb, migrateDb, type Db } from "../src/lib/db/client";
+import { ANSWERED, NOT_OURS } from "../src/lib/results/coverage";
 import { crawls } from "../src/lib/db/schema";
 import { createSafeFetch } from "../src/lib/fetch/safe-fetch";
 import { analyseCrawl } from "../src/lib/rules/analyse";
@@ -28,14 +29,7 @@ const SAMPLES = 3;
 const MEMORY_SAMPLE_MS = 10_000;
 const MAX_RSS_BYTES = 1.5 * 1024 ** 3;
 const mb = (n: number) => `${Math.round(n / 1024 ** 2)} MB`;
-/** URL states that mean the URL was requested and answered. */
-const ANSWERED = ["fetched", "analysed", "redirected", "non_html", "oversized"];
-/**
- * States the site owner or the audit's own rules ruled out; the only ones not counted against coverage. Everything
- * else found counts, including out_of_scope (reported by reason: another host is usually the site's www/apex twin,
- * which is a coverage miss, not a choice) and budget_exhausted / depth_exceeded (found but not reached).
- */
-const NOT_OURS = ["blocked_robots", "excluded_by_rule", "cdn_managed"];
+// Coverage: ANSWERED and NOT_OURS (src/lib/results/coverage.ts) are the definitions the API and report use.
 
 function args() {
   const a = process.argv.slice(2);
@@ -82,7 +76,7 @@ async function main() {
   const redis = new Redis({ ...redisConnection(), maxRetriesPerRequest: null });
   const [row] = await db
     .insert(crawls)
-    .values({ workspace: "validation", auditId: randomUUID(), siteOrigin: site, profile, config: {}, status: "queued", budget, maxDepth })
+    .values({ workspace: "validation", auditId: randomUUID(), siteId: site, siteOrigin: site, profile, config: {}, status: "queued", budget, maxDepth })
     .returning({ id: crawls.id });
   console.log(`Crawling ${site}: profile ${profile} (budget ${budget}, depth ${maxDepth}), user agent "${V2_USER_AGENT}", default politeness. Crawl ${row.id} in ${new URL(DB_URL).pathname.slice(1)}.`);
 

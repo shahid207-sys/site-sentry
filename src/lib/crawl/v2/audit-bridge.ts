@@ -66,6 +66,7 @@ export async function startCrawl(
       id,
       workspace: ws,
       auditId: audit.id,
+      siteId: audit.siteId,
       siteOrigin,
       profile: audit.config.profile ?? "form",
       config,

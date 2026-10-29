@@ -15,6 +15,8 @@ import { NeedsConfig, type CrawlView, type Finding, type Hreflang, type PageRule
 import { bfsDepth, pageRank } from "./graph";
 import type { ProbeRecord } from "./probe-types";
 import { clusterTemplates, type ShapedPage } from "../snapshot/template";
+import { crawlComplete } from "../results/coverage";
+import { laterAudits, writeIssueStates } from "../results/states";
 import { insertOccurrences, occurrenceOf, reachBasis, writeIssueGroups, type Occurrence } from "../results/occurrences";
 import { fingerprintOf } from "./fingerprint";
 import { TemplateGroups } from "./group";
@@ -65,12 +67,6 @@ export function effectiveCanonical(canonicals: CanonicalTag[]): string | null {
   return n.ok ? n.url : c.resolved;
 }
 
-/**
- * URL states that mean a URL of the crawled host was never fetched for a reason other than the site's own rules
- * (robots.txt, scope): graph rules cannot prove an absence (no inbound links) when any exists.
- */
-const UNFETCHED = ["budget_exhausted", "depth_exceeded", "cancelled", "interrupted", "failed_timeout", "failed_network", "failed_dns", "failed_tls"];
-
 const normalised = (u: string) => {
   const n = normaliseUrl(u);
   return n.ok ? n.url : u;
@@ -96,12 +92,6 @@ export function crawlView(row: CrawlRow, extra: Partial<Pick<CrawlView, "complet
     complete: extra.complete ?? row.status === "completed",
     resources: extra.resources ?? { links: new Map(), images: new Map() },
   };
-}
-
-async function crawlComplete(db: Exec, crawlId: string, status: string): Promise<boolean> {
-  if (status !== "completed") return false;
-  const r = await db.execute(sql`select exists (select 1 from crawl_urls where crawl_id = ${crawlId}::uuid and state in (${sql.join(UNFETCHED.map((s) => sql`${s}`), sql`, `)})) as partial`);
-  return !(r.rows[0] as { partial: boolean }).partial;
 }
 
 async function loadResources(db: Exec, crawlId: string, batch: number): Promise<CrawlView["resources"]> {
@@ -403,6 +393,7 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
       await tx.execute(sql`delete from finding_occurrences where crawl_id = ${crawlId}::uuid`);
       await tx.execute(sql`delete from issue_groups where crawl_id = ${crawlId}::uuid`);
       await tx.execute(sql`delete from issue_group_templates where crawl_id = ${crawlId}::uuid`);
+      await tx.execute(sql`delete from issue_states where crawl_id = ${crawlId}::uuid`);
       for (const r of rules) {
         await tx.execute(sql`insert into rules (id, version, category, scope, confidence, impact, updated_at) values (${r.id}, ${r.version}, ${r.category}, ${r.scope}, ${r.confidence}, ${r.impact}, now())
           on conflict (id) do update set version = excluded.version, category = excluded.category, scope = excluded.scope, confidence = excluded.confidence, impact = excluded.impact, updated_at = now()`);
@@ -487,10 +478,14 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
         await tx.execute(sql`insert into rule_runs (crawl_id, rule_id, rule_version, status, evaluated, findings, total_ms, detail)
           values (${crawlId}::uuid, ${s.ruleId}, ${s.version}, ${s.status}, ${s.evaluated}, ${s.findings}, ${s.totalMs}, ${s.detail ?? null})`);
       }
+      // After rule_runs: a fingerprint counts as re-checked only when its rule ran in this crawl.
+      const states = await writeIssueStates(tx, crawlId, crawl.complete);
       // fetched → analysed: every snapshot was read by the page rules above.
       await tx.execute(sql`update crawl_urls set state = 'analysed', updated_at = now() where crawl_id = ${crawlId}::uuid and state = 'fetched'`);
       const msPerPage = pages ? Math.round((list.reduce((n, s) => n + s.totalMs, 0) / pages) * 1000) / 1000 : 0;
-      await tx.execute(sql`update crawls set analysis = ${JSON.stringify({ status: "completed", startedAt, finishedAt: new Date().toISOString(), pages, findings: total, msPerPage, issueGroups, duplicateFingerprints: duplicates })}::jsonb where id = ${crawlId}::uuid`);
+      await tx.execute(sql`update crawls set analysis = ${JSON.stringify({ status: "completed", startedAt, finishedAt: new Date().toISOString(), pages, findings: total, msPerPage, issueGroups, duplicateFingerprints: duplicates, states })}::jsonb where id = ${crawlId}::uuid`);
+      // Later audits of the project read this one's states: recompute them, oldest first.
+      for (const later of await laterAudits(tx, crawlId)) await writeIssueStates(tx, later.id, await crawlComplete(tx, later.id, later.status));
       return { outcome: "analysed" as const, pages, findings: total, stats: list, msPerPage };
     });
     log("analysis.completed", { crawlId, pages: result.pages, findings: result.findings, msPerPage: result.msPerPage });

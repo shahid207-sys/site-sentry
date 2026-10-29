@@ -16,6 +16,11 @@ export const crawls = pgTable(
     /** The JSON-store audit this crawl belongs to (workspace + audit id). */
     workspace: text("workspace").notNull(),
     auditId: text("audit_id").notNull(),
+    /**
+     * The project (store site id) the crawl audits; crawls of one workspace and project form its history (issue
+     * states, comparisons). Null on crawls created before Phase 3: their project is their site origin.
+     */
+    siteId: text("site_id"),
     siteOrigin: text("site_origin").notNull(),
     profile: text("profile").notNull(),
     /** Snapshot of the resolved crawl config (profile values plus overrides) at start. */
@@ -293,6 +298,39 @@ export const findingOccurrences = pgTable(
     reachPages: integer("reach_pages"),
   },
   (t) => [primaryKey({ columns: [t.crawlId, t.fingerprint] }), index("finding_occurrences_rule_idx").on(t.crawlId, t.ruleId)],
+);
+
+/** Finding states across audits (docs/SPEC.md "Finding states across audits"). */
+export const ISSUE_STATES = ["new", "persistent", "resolved", "regressed", "not_rechecked", "inconclusive"] as const;
+export type IssueState = (typeof ISSUE_STATES)[number];
+
+/**
+ * Each finding fingerprint's state in a crawl: every occurrence of the crawl, plus the previous audit's open
+ * fingerprints this crawl did not observe (resolved when it re-checked them, else not_rechecked).
+ */
+export const issueStates = pgTable(
+  "issue_states",
+  {
+    crawlId: uuid("crawl_id")
+      .notNull()
+      .references(() => crawls.id, { onDelete: "cascade" }),
+    fingerprint: text("fingerprint").notNull(),
+    ruleId: text("rule_id").notNull(),
+    url: text("url").notNull(),
+    evidenceKey: text("evidence_key").notNull(),
+    templateId: text("template_id"),
+    /** The occurrence's outcome in this crawl; null when it was carried over (not observed this time). */
+    outcome: text("outcome"),
+    state: text("state").$type<IssueState>().notNull(),
+    /** When the fingerprint was first observed in this project. */
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.crawlId, t.fingerprint] }),
+    index("issue_states_fp_idx").on(t.fingerprint),
+    index("issue_states_crawl_state_idx").on(t.crawlId, t.state),
+    check("issue_states_state_ck", sql`${t.state} in (${list(ISSUE_STATES)})`),
+  ],
 );
 
 /** One per crawl and rule: the issue group, with the priority inputs (docs/HEALTH-SCORE.md) and the score. */

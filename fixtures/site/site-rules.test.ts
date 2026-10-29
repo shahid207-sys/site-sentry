@@ -8,13 +8,14 @@ import { parseHtml } from "../../src/lib/audit/parse";
 import { cdnManagedReason } from "../../src/lib/crawl/cdn-paths";
 import { extractOutlinks } from "../../src/lib/crawl/v2/discovery";
 import { crawlView, effectiveCanonical } from "../../src/lib/rules/analyse";
-import type { CrawlView, Finding, PageView, ResourceFacts, SiteCtx, UrlFacts } from "../../src/lib/rules/contract";
+import type { CrawlView, Finding, PageView, ResourceFacts, Rule, SiteCtx, SiteRule, UrlFacts } from "../../src/lib/rules/contract";
 import { NEAR_DUPLICATE, NEAR_DUPLICATE_MIN_WORDS } from "../../src/lib/rules/cnt";
 import { bfsDepth, pageRank } from "../../src/lib/rules/graph";
 import { TemplateGroups } from "../../src/lib/rules/group";
 import { RULES } from "../../src/lib/rules/registry";
 import { extractHtml } from "../../src/lib/snapshot/extract";
 import { imageSize } from "../../src/lib/snapshot/image-size";
+import { occurrenceOf, reachBasis, type Occurrence } from "../../src/lib/results/occurrences";
 import { clusterTemplates } from "../../src/lib/snapshot/template";
 import { simhashSimilarity } from "../../src/lib/snapshot/text";
 import { manifestPaths, ROBOTS_BLOCKED_PREFIX } from "./definition";
@@ -199,10 +200,14 @@ const add = (f: Finding) => {
 };
 const pageIssues: SiteCtx["pageIssues"] = new Map();
 const grouped = new TemplateGroups();
+// What the analysis job stores per rule × URL × evidence key (grouped rules: every page), for the fingerprint checks.
+const basis = reachBasis(site);
+const occurrences: Occurrence[] = [];
 const t1 = performance.now();
 for (const r of RULES.filter((x) => x.scope === "page")) {
   for (const p of pages.values()) {
     const own = r.evaluate({ page: p, crawl, site });
+    for (const f of own) occurrences.push(occurrenceOf(r, f, basis));
     (r.groupByTemplate ? grouped.add(own, p.templateFingerprint) : own).forEach(add);
     for (const f of own) {
       if (f.outcome !== "issue" || !p.templateFingerprint) continue;
@@ -215,9 +220,15 @@ for (const r of RULES.filter((x) => x.scope === "page")) {
   }
 }
 grouped.findings().forEach(add);
+const record = (r: Rule) => (f: Finding) => {
+  add(f);
+  occurrences.push(occurrenceOf(r, f, basis));
+};
 for (const r of RULES) {
-  if (r.scope === "site" && SITE_RULES.has(r.id)) r.evaluate({ site, crawl, pageIssues }).forEach(add);
-  if (r.scope === "resource") for (const x of (r.kind === "image" ? resources.images : resources.links).values()) r.evaluate({ resource: x, crawl }).forEach(add);
+  if (r.scope === "site" && SITE_RULES.has(r.id)) r.evaluate({ site, crawl, pageIssues }).forEach(record(r));
+  // SITE-001 is checked on its own below; only its occurrences are recorded here.
+  if (r.id === "SITE-001") for (const f of (r as SiteRule).evaluate({ site, crawl, pageIssues })) occurrences.push(occurrenceOf(r, f, basis));
+  if (r.scope === "resource") for (const x of (r.kind === "image" ? resources.images : resources.links).values()) r.evaluate({ resource: x, crawl }).forEach(record(r));
 }
 const site001 = RULES.find((r) => r.id === "SITE-001")!.scope === "site" ? (RULES.find((r) => r.id === "SITE-001") as { evaluate(c: SiteCtx): Finding[] }).evaluate({ site, crawl, pageIssues }) : [];
 const ruleMs = performance.now() - t1;
@@ -229,6 +240,22 @@ const judged = (key: string, id = key.split(":")[0]) => {
 };
 
 describe("fixture site against its manifest (no crawl)", () => {
+  it("fingerprints: no two occurrences share one, and a second evaluation gives the same set", () => {
+    const seen = new Map<string, string>();
+    const clashes: string[] = [];
+    for (const o of occurrences) {
+      const k = `${o.ruleId} ${o.url} ${o.evidenceKey}`;
+      if (seen.has(o.fingerprint) && seen.get(o.fingerprint) !== k) clashes.push(`${seen.get(o.fingerprint)} / ${k}`);
+      if (seen.has(o.fingerprint)) clashes.push(`duplicate ${k}`);
+      seen.set(o.fingerprint, k);
+    }
+    expect(clashes).toEqual([]);
+    expect(occurrences.length).toBeGreaterThan(500);
+    const again: string[] = [];
+    for (const r of RULES.filter((x) => x.scope === "page")) for (const p of pages.values()) for (const f of r.evaluate({ page: p, crawl, site })) again.push(occurrenceOf(r, f, basis).fingerprint);
+    expect(again.sort()).toEqual(occurrences.filter((o) => RULES.find((r) => r.id === o.ruleId)!.scope === "page").map((o) => o.fingerprint).sort());
+  });
+
   it("renders every manifest page", () => {
     expect(pages.size).toBeGreaterThan(1_000);
     console.log(`rendered and extracted ${pages.size} pages in ${Math.round(renderMs)} ms; ${urls.length} URLs in the graph, ${resources.images.size} images, ${resources.links.size} external links; rules in ${Math.round(ruleMs)} ms`);
