@@ -43,7 +43,7 @@ let PHASE: Phase = "2a";
 let DB_URL = "";
 let QUEUE = "";
 /** Memory: every process logs RSS and heap every 10 s; past this RSS it writes a heap snapshot and the gate stops. */
-const MEMORY_LIMIT_MB = 700;
+export const MEMORY_LIMIT_MB = 700;
 /** V8 heap cap for the worker (the gate gets the same from its npm script), so a leak fails fast with a clear error. */
 const HEAP_CAP_FLAGS = ["--max-old-space-size=768", "--heapsnapshot-near-heap-limit=1"];
 /** Rules whose positive case cannot be served by the local fixture; covered by their unit test only. */
@@ -57,8 +57,8 @@ function check(name: string, pass: boolean, detail: string) {
 }
 const info = (msg: string) => console.log(`      ${msg}`);
 
-async function setupDb(): Promise<Db> {
-  const url = new URL(DB_URL);
+export async function setupDb(dbUrl: string): Promise<Db> {
+  const url = new URL(dbUrl);
   const admin = new Client({ connectionString: Object.assign(new URL(url), { pathname: "/postgres" }).toString() });
   await admin.connect();
   const name = url.pathname.slice(1);
@@ -71,13 +71,13 @@ async function setupDb(): Promise<Db> {
 }
 
 /** A real worker (crawl + in-process analysis worker). Politeness is raised: this gate measures rules, not crawl speed. */
-function startWorker(site: FixtureSite, blobDir: string, memDir: string, onMemoryLimit: (detail: string) => void): { child: ChildProcess; booted: Promise<void>; exited: Promise<number | null> } {
+export function startWorker(site: FixtureSite, blobDir: string, memDir: string, onMemoryLimit: (detail: string) => void, dbUrl: string, queue: string): { child: ChildProcess; booted: Promise<void>; exited: Promise<number | null> } {
   const env = {} as NodeJS.ProcessEnv;
   for (const [k, v] of Object.entries(process.env)) if (!/^(CRAWL(ER)?|ANALYSIS)_/.test(k)) env[k] = v;
   Object.assign(env, {
-    DATABASE_URL: DB_URL,
-    CRAWL_QUEUE_NAME: QUEUE,
-    ANALYSIS_QUEUE_NAME: `${QUEUE}-analysis`,
+    DATABASE_URL: dbUrl,
+    CRAWL_QUEUE_NAME: queue,
+    ANALYSIS_QUEUE_NAME: `${queue}-analysis`,
     CRAWLER_LOCAL_HOSTS: LOCAL_HOSTS_ENV,
     CRAWLER_LOCAL_PORTS: String(site.port),
     CRAWLER_LOCAL_CA: site.ca, // the fixture TLS listener's certificates; read only under NODE_ENV=test
@@ -105,7 +105,7 @@ function startWorker(site: FixtureSite, blobDir: string, memDir: string, onMemor
   return { child, booted: bootedP, exited };
 }
 
-async function waitFor(what: string, ms: number, cond: () => boolean | Promise<boolean>) {
+export async function waitFor(what: string, ms: number, cond: () => boolean | Promise<boolean>) {
   const end = Date.now() + ms;
   while (!(await cond())) {
     if (Date.now() > end) throw new Error(`Timed out after ${ms / 1000} s waiting for ${what}`);
@@ -120,7 +120,7 @@ interface Analysis {
   msPerPage?: number;
   error?: string;
 }
-const crawlRow = async (db: Db, id: string) =>
+export const crawlRow = async (db: Db, id: string) =>
   (await db.$client.query<{ status: string; analysis: Analysis | null }>("select status, analysis from crawls where id = $1", [id])).rows[0];
 
 /** What one crawl must produce, by absolute URL; and which URL prefixes are compared exactly. */
@@ -133,7 +133,7 @@ interface Plan {
   exactPrefixes: string[];
 }
 
-function plans(site: FixtureSite): Plan[] {
+export function plans(site: FixtureSite): Plan[] {
   const o = site.origins;
   const abs = (key: HostKey, p: string) => new URL(p, o[key]).toString();
   const main = new Map<string, string[]>();
@@ -217,7 +217,7 @@ export async function runGate(phase: Phase) {
   PHASE = phase;
   DB_URL = process.env.GATE_DATABASE_URL ?? `postgres://sitesentry:sitesentry@127.0.0.1:5433/sitesentry_gate${phase}`;
   QUEUE = `crawl-gate${phase}-${randomUUID()}`;
-  const db = await setupDb();
+  const db = await setupDb(DB_URL);
   const site = await startFixtureSite();
   process.env.CRAWL_QUEUE_NAME = QUEUE;
   const q = createCrawlQueue();
@@ -238,7 +238,7 @@ export async function runGate(phase: Phase) {
       `/links/ ${DEFECT_COUNTS_2B.links}, /images/ ${DEFECT_COUNTS_2B.images}, /schema/ ${DEFECT_COUNTS_2B.schema}, /intl/ ${DEFECT_COUNTS_2B.intl}, /security/ ${DEFECT_COUNTS_2B.security}, /products/ 300 (one template defect). ` +
       `Gate database ${new URL(DB_URL).pathname.slice(1)}.\n`,
   );
-  const w = startWorker(site, blobDir, memDir, (d) => stopForMemory("the worker", d));
+  const w = startWorker(site, blobDir, memDir, (d) => stopForMemory("the worker", d), DB_URL, QUEUE);
   const mainCrawl = { id: "" };
   const fired = new Set<string>();
   const evaluated = new Map<string, number>();
