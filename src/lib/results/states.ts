@@ -26,7 +26,8 @@ type Exec = Pick<Db, "execute">;
 export const OPEN_STATES: IssueState[] = ["new", "persistent", "regressed", "not_rechecked"];
 const OPEN = sql.raw(OPEN_STATES.map((s) => `'${s}'`).join(", "));
 const ANSWERED_SQL = sql.raw(ANSWERED.map((s) => `'${s}'`).join(", "));
-const NOT_OURS_SQL = sql.raw(NOT_OURS.map((s) => `'${s}'`).join(", "));
+/** States in which a crawl leaves out a URL another crawl answered: its scope rules, subfolder or robots.txt. */
+const NARROWED_SQL = sql.raw([...NOT_OURS, "out_of_scope"].map((s) => `'${s}'`).join(", "));
 
 /** SQL: the project key of crawl row alias `c`. */
 export const projectKey = (alias: string) => sql.raw(`coalesce(${alias}.site_id, ${alias}.site_origin)`);
@@ -61,7 +62,8 @@ export function rechecked(checker: string, complete: boolean, wide: string[], s 
 
 /**
  * The project's earlier audits that crawl `checker` saw at least as much of the site as: the same seeds, and no URL
- * the audit answered is excluded by the checker's scope rules, blocked by robots.txt or CDN-managed in the checker.
+ * the audit answered is excluded by the checker's scope rules, outside its subfolder, blocked by robots.txt or
+ * CDN-managed in the checker.
  * Only these can have their site-rule findings resolved by `checker` (rechecked).
  */
 export async function wideAudits(db: Exec, checker: string): Promise<string[]> {
@@ -69,7 +71,7 @@ export async function wideAudits(db: Exec, checker: string): Promise<string[]> {
     where c.id = ${checker}::uuid and p.kind = 'audit' and (p.created_at, p.id) < (c.created_at, c.id)
       and coalesce(p.config->'seeds', 'null'::jsonb) = coalesce(c.config->'seeds', 'null'::jsonb)
       and not exists (select 1 from crawl_urls pu join crawl_urls cu on cu.crawl_id = c.id and cu.normalised_url = pu.normalised_url
-        where pu.crawl_id = p.id and pu.state in (${ANSWERED_SQL}) and cu.state in (${NOT_OURS_SQL}))`);
+        where pu.crawl_id = p.id and pu.state in (${ANSWERED_SQL}) and cu.state in (${NARROWED_SQL}))`);
   return (r.rows as { id: string }[]).map((x) => x.id);
 }
 

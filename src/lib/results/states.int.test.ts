@@ -160,6 +160,10 @@ describe("issue states across audits", () => {
     expect(await st(a2, fpB)).toMatchObject({ state: "not_rechecked", page_subject: true });
     expect(await st(a2, fpRobots)).toMatchObject({ state: "not_rechecked", page_subject: false });
     expect((await compareCrawls(db, a1, a2)).groups.find((g) => g.ruleId === "META-004")?.counts).toMatchObject({ resolved: 0, not_rechecked: 2 });
+    // A crawl limited to a subfolder (/a…) leaves the rest out_of_scope: just as narrow.
+    const a2b = await run(NAMES_SITEMAP, { scope: { include: [], exclude: [], subfolder: "/a" } });
+    expect((await db.execute(sql`select normalised_url, state from crawl_urls where crawl_id = ${a2b}::uuid order by 1`)).rows).toContainEqual({ normalised_url: `${srv.origin}/`, state: "out_of_scope" });
+    expect(await st(a2b, fpRobots)).toMatchObject({ state: "not_rechecked" });
 
     // Audit 3 crawls the whole site again with /b retitled: every finding is fixed and re-checked.
     srv.routes.set("/b", titled("Other", "/b"));
