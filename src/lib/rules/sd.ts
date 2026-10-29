@@ -20,8 +20,20 @@ function googleType(t: string): { name: string; spec: GoogleType } | null {
   return null;
 }
 
-/** Nested entities the Google table checks (Offer under Product…); top-level types are checked only at the top. */
-const NESTED_CHECKED = new Set(["Offer", "AggregateOffer", "ListItem", "Review", "AggregateRating"]);
+/**
+ * Nested entities the Google table checks, and where Google's lists apply to them: an Offer only as a Product's
+ * `offers` (product snippets; an Offer in a service's OfferCatalog has no price requirement), a ListItem only in a
+ * BreadcrumbList. Reviews and ratings apply wherever they are nested. Top-level types are checked only at the top.
+ */
+const PRODUCT_TYPES = new Set(["Product", "ProductGroup", "IndividualProduct", "ProductModel", "Vehicle", "Car"]);
+const lastKey = (ref: EntityRef) => ref.path.split(".").pop() ?? "";
+const NESTED_CHECKED: Record<string, (ref: EntityRef) => boolean> = {
+  Offer: (ref) => lastKey(ref) === "offers" && ref.parent!.types.some((t) => PRODUCT_TYPES.has(t)),
+  AggregateOffer: (ref) => lastKey(ref) === "offers" && ref.parent!.types.some((t) => PRODUCT_TYPES.has(t)),
+  ListItem: (ref) => lastKey(ref) === "itemListElement" && ref.parent!.types.includes("BreadcrumbList"),
+  Review: () => true,
+  AggregateRating: () => true,
+};
 
 /** Entities to check against Google's lists, with the properties that apply where they sit. */
 function googleChecks(p: PageView): { ref: EntityRef; type: string; spec: GoogleType; drop: Set<string> }[] {
@@ -31,7 +43,7 @@ function googleChecks(p: PageView): { ref: EntityRef; type: string; spec: Google
       const g = googleType(t);
       if (!g) continue;
       const nested = ref.parent !== null;
-      if (nested ? !NESTED_CHECKED.has(g.name) : g.spec.nestedOnly) continue;
+      if (nested ? !NESTED_CHECKED[g.name]?.(ref) : g.spec.nestedOnly) continue;
       // A review or rating nested in the item it reviews needs no itemReviewed.
       out.push({ ref, type: t, spec: g.spec, drop: new Set(nested ? ["itemReviewed"] : []) });
     }
@@ -62,7 +74,7 @@ const SD001 = page({
 
 const SD002 = page({
   id: "SD-002",
-  version: 1,
+  version: 2,
   confidence: "verified",
   impact: 2,
   needs: ["raw"],
@@ -72,8 +84,10 @@ const SD002 = page({
     const props = new Set<string>();
     for (const ref of entities(p.jsonLd)) {
       for (const t of ref.types) if (!SCHEMA_TYPES.has(t)) types.add(t);
-      // Prefixed names (og:x, ex:y) and absolute IRIs belong to other vocabularies.
-      for (const k of Object.keys(ref.entity)) if (!k.startsWith("@") && !k.includes(":") && !SCHEMA_PROPERTIES.has(k)) props.add(k);
+      // Prefixed names (og:x, ex:y) and absolute IRIs belong to other vocabularies. "<property>-input" and
+      // "<property>-output" are schema.org Action annotations (schema.org/docs/actions.html), e.g. SearchAction's
+      // "query-input".
+      for (const k of Object.keys(ref.entity)) if (!k.startsWith("@") && !k.includes(":") && !SCHEMA_PROPERTIES.has(k.replace(/-(input|output)$/, ""))) props.add(k);
     }
     if (!types.size && !props.size) return [];
     return [finding(SD002, p.url, `Unknown schema.org ${[types.size ? `type(s): ${[...types].join(", ")}` : "", props.size ? `propert(ies): ${[...props].join(", ")}` : ""].filter(Boolean).join("; ")}.`, { types: [...types], properties: [...props].slice(0, EVIDENCE_CAP) })];
@@ -88,7 +102,7 @@ const SD002 = page({
 
 const SD003 = page({
   id: "SD-003",
-  version: 1,
+  version: 2,
   confidence: "verified",
   impact: 3,
   needs: ["raw"],
@@ -110,7 +124,7 @@ const SD003 = page({
 
 const SD004 = page({
   id: "SD-004",
-  version: 1,
+  version: 2,
   confidence: "heuristic",
   impact: 1,
   needs: ["raw"],

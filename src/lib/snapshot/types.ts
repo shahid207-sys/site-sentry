@@ -70,6 +70,12 @@ export interface SnapshotImage {
   inMain?: boolean;
   /** The direct child of a <picture> with <source srcset> (responsive by art direction). Absent before Phase 2b. */
   inPicture?: boolean;
+  /**
+   * Inline style positions it absolutely over its whole parent (position absolute/fixed, width and height 100% or
+   * inset 0), as Next.js `<Image fill>` renders: the parent's box sizes it, so it cannot shift layout. Absent before
+   * the 2b validation fix.
+   */
+  fillsParent?: boolean;
 }
 
 export interface JsonLdBlock {

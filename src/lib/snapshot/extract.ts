@@ -267,6 +267,10 @@ export function extractHtml({ $, html, pageUrl, headers, bytes, outlinks }: Extr
   // An image is in the main content when it sits inside the element mainContentText reads and outside boilerplate.
   const source = mainContentSource($);
   const mainRoot = $(source === "main" ? "main, [role=main]" : source).first()[0];
+  const fillsParent = (style: string | undefined) => {
+    const s = (style ?? "").toLowerCase().replace(/\s+/g, "");
+    return /(^|;)position:(absolute|fixed)/.test(s) && (/(^|;)inset:0(px)?(;|$)/.test(s) || (/(^|;)width:100%/.test(s) && /(^|;)height:100%/.test(s)));
+  };
   const images: SnapshotImage[] = [];
   $("img").each((_, el) => {
     if (images.length >= SNAPSHOT_CAPS.images) return false;
@@ -283,6 +287,7 @@ export function extractHtml({ $, html, pageUrl, headers, bytes, outlinks }: Extr
       linked: n.closest("a[href]").length > 0,
       inMain: !!mainRoot && n.parents().toArray().includes(mainRoot) && !n.closest(BOILERPLATE).length,
       inPicture: n.parent().is("picture") && n.parent().children("source[srcset]").length > 0,
+      fillsParent: fillsParent(n.attr("style")),
     });
   });
 

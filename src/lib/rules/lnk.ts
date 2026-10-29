@@ -300,15 +300,16 @@ const LNK013 = page({
 
 const LNK014 = site({
   id: "LNK-014",
-  version: 1,
+  version: 2,
   confidence: "heuristic",
   impact: 3,
   needs: ["graph"],
-  evaluate({ site: s }) {
+  evaluate({ site: s, crawl }) {
     const byPath = new Map<string, { count: number; params: Set<string>; sample: string[] }>();
     for (const u of s.urls) {
       const url = new URL(u.url);
-      if (!url.search) continue;
+      // The site's own URLs only: query strings on another host (wa.me?text=…) are not this site's crawl trap.
+      if (!url.search || !isInternal(u.url, crawl.origin)) continue;
       const base = `${url.origin}${url.pathname}`;
       const g = byPath.get(base) ?? { count: 0, params: new Set<string>(), sample: [] };
       g.count++;

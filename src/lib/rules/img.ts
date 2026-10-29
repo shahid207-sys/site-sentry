@@ -72,7 +72,7 @@ const IMG002 = page({
 
 const IMG003 = page({
   id: "IMG-003",
-  version: 1,
+  version: 2,
   confidence: "heuristic",
   impact: 1,
   needs: ["raw"],
@@ -82,7 +82,9 @@ const IMG003 = page({
       const alt = (i.alt ?? "").trim();
       if (!alt) return [];
       const file = decodeURIComponent(new URL(i.resolved!).pathname.split("/").pop() ?? "").toLowerCase();
-      const isName = alt.toLowerCase() === file || alt.toLowerCase() === file.replace(/\.[a-z0-9]+$/, "") || /\.(jpe?g|png|gif|webp|avif|svg|bmp)$/i.test(alt);
+      // The stem counts only when it looks machine-made (digits, _ or -): alt "MongoDB" on mongodb.svg names the logo.
+      const stem = file.replace(/\.[a-z0-9]+$/, "");
+      const isName = alt.toLowerCase() === file || (alt.toLowerCase() === stem && /[\d_-]/.test(stem)) || /\.(jpe?g|png|gif|webp|avif|svg|bmp)$/i.test(alt);
       if (isName) return [{ src: i.resolved, alt, problem: "file name" }];
       return alt.length > MAX_ALT_CHARS ? [{ src: i.resolved, alt: alt.slice(0, 60) + "…", problem: `${alt.length} characters` }] : [];
     });
@@ -167,13 +169,14 @@ const IMG006 = resource({
 
 const IMG007 = page({
   id: "IMG-007",
-  version: 1,
+  version: 2,
   confidence: "verified",
   impact: 1,
   needs: ["raw"],
   evaluate({ page: p }) {
     if (!isHtml200(p)) return [];
-    const bad = imgs(p).filter((i) => !i.width || !i.height);
+    // An image positioned over its whole parent (Next.js <Image fill>) takes the parent's box: no shift from it.
+    const bad = imgs(p).filter((i) => (!i.width || !i.height) && !i.fillsParent);
     return bad.length ? [finding(IMG007, p.url, `${bad.length} image(s) without both width and height attributes (layout shift risk).`, { count: bad.length, images: bad.slice(0, EVIDENCE_CAP).map((i) => ({ src: i.resolved, width: i.width, height: i.height })) })] : [];
   },
   explain: {

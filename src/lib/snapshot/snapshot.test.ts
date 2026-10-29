@@ -137,7 +137,11 @@ describe("extractHtml", () => {
     const img = (src: string) => y.images.find((i) => i.src === src);
     expect(img("/logo.png")).toMatchObject({ linked: false, inMain: false, inPicture: false });
     expect(img("/thumb.jpg")).toMatchObject({ linked: true, inMain: true, inPicture: false });
-    expect(img("/p.jpg")).toMatchObject({ linked: false, inMain: true, inPicture: true });
+    expect(img("/p.jpg")).toMatchObject({ linked: false, inMain: true, inPicture: true, fillsParent: false });
+    // Next.js <Image fill>: absolutely positioned over its parent.
+    const z = extract(`<html><body><main><div style="position:relative;height:40px"><img src="/fill.png" alt="f" style="position:absolute;height:100%;width:100%;left:0;top:0;right:0;bottom:0;color:transparent"></div>
+      <img src="/inset.png" alt="i" style="position: fixed; inset: 0"><img src="/half.png" alt="h" style="position:absolute;width:100%;height:50%"><img src="/static.png" alt="s" style="width:100%;height:100%"></main></body></html>`);
+    expect(z.images.map((i) => [i.src, i.fillsParent])).toEqual([["/fill.png", true], ["/inset.png", true], ["/half.png", false], ["/static.png", false]]);
     expect(y.facts.videos).toEqual([
       { src: "https://a.test/v.mp4", poster: "https://a.test/v.jpg" },
       { src: "https://a.test/w.webm", poster: null },

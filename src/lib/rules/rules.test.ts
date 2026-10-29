@@ -591,10 +591,30 @@ describe("Phase 2b details", () => {
     expect(run("SD-003", product({ offers: { "@type": "Offer", priceCurrency: "GBP" } }))[0].evidence.gaps).toEqual([expect.objectContaining({ type: "Offer", at: "offers of block 1", missing: ["price or priceSpecification"] })]);
     expect(run("SD-003", product({ review: { "@type": "Review", author: "A", reviewRating: { "@type": "Rating", ratingValue: 5 } } }))).toEqual([]);
     expect(run("SD-003", product({ review: { "@type": "Review", author: "A" } }))[0].evidence.gaps).toEqual([expect.objectContaining({ type: "Review", missing: ["reviewRating"] })]);
+    // Google's Offer and ListItem lists apply only where the feature puts them: a Product's offers, a BreadcrumbList.
+    // An Offer in a service's OfferCatalog and a ListItem of a plain ItemList are not judged (example-client.ae validation).
+    const service = pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "Service", name: "SEO", hasOfferCatalog: { "@type": "OfferCatalog", itemListElement: [{ "@type": "Offer", itemOffered: { "@type": "Service", name: "Audit" } }] } }));
+    expect(run("SD-003", service)).toEqual([]);
+    expect(run("SD-004", service)).toEqual([]);
+    expect(run("SD-003", pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "ItemList", itemListElement: [{ "@type": "ListItem", position: 1, name: "A" }] })))).toEqual([]);
+    expect(run("SD-003", pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "BreadcrumbList", itemListElement: [{ "@type": "ListItem", position: 1, name: "A" }] })))[0].evidence.gaps).toEqual([expect.objectContaining({ type: "ListItem", missing: ["item"] })]);
     // A stand-alone Offer is not a Google feature by itself.
     expect(run("SD-003", pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "Offer" })))).toEqual([]);
     // LocalBusiness subtypes use LocalBusiness's list; @graph entries are top-level entities.
     expect(run("SD-003", pageFrom("/x/", ld({ "@context": "https://schema.org", "@graph": [{ "@type": "Restaurant", name: "Cafe" }] })))[0].evidence.gaps).toEqual([expect.objectContaining({ type: "Restaurant", missing: ["address"] })]);
+  });
+
+  it("IMG-003 takes a plain-word alt matching the file name as a name; IMG-007 skips images that fill their parent", () => {
+    expect(run("IMG-003", pageFrom("/x/", IMGTAG('src="https://cdn.test/show/331488/mongodb.svg" alt="MongoDB" width="10" height="10"')))).toEqual([]);
+    expect(run("IMG-003", pageFrom("/x/", IMGTAG('src="/img/hero-banner_2.png" alt="hero-banner_2" width="10" height="10"')))).toHaveLength(1);
+    const fill = 'src="/a.png" alt="A spade" style="position:absolute;height:100%;width:100%;left:0;top:0"';
+    expect(run("IMG-007", pageFrom("/x/", IMGTAG(fill)))).toEqual([]);
+    expect(run("IMG-007", pageFrom("/x/", IMGTAG('src="/a.png" alt="A spade" style="width:100%"')))).toHaveLength(1);
+  });
+
+  it("LNK-014 counts the site's own query-string URLs only", () => {
+    const ext = Array.from({ length: 150 }, (_, i) => ({ ...other(`/f?c=${i}`, "out_of_scope", 10 + i), url: `https://wa.me/971500000000?text=${i}` }));
+    expect(run("LNK-014", cleanSite(...ext))).toEqual([]);
   });
 
   it("SD rules never claim rich-result eligibility", () => {
@@ -608,6 +628,10 @@ describe("Phase 2b details", () => {
 
   it("SD-002 ignores other vocabularies and prefixed properties", () => {
     expect(run("SD-002", pageFrom("/x/", ld({ "@context": "https://example.org/vocab", "@type": "Widget", colour: "red" })))).toEqual([]);
+    // schema.org Action annotations: "<property>-input" / "-output" of a known property (example-client.ae validation).
+    const search = (k: string) => pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "WebSite", url: U("/"), potentialAction: { "@type": "SearchAction", target: U("/s?q={q}"), [k]: "required name=q" } }));
+    expect(run("SD-002", search("query-input"))).toEqual([]);
+    expect(run("SD-002", search("qurey-input"))[0].evidence.properties).toEqual(["qurey-input"]);
     expect(run("SD-002", pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "Thing", name: "Spade", "og:x": 1 })))).toEqual([]);
   });
 
