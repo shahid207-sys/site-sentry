@@ -173,8 +173,9 @@ export const SCOPE_TOLERANCE = 10;
 
 /**
  * Compares two analysed crawls of one project, older → newer whatever the argument order. Per fingerprint:
- * open in the base audit and observed again as an issue → persistent; observed inconclusive → inconclusive; not
- * observed → resolved when the newer audit re-checked it (`rechecked`), else not_rechecked; an issue observed only in
+ * open in the base audit and observed again as an issue → persistent (regressed when a fix verification between the
+ * two resolved it); observed inconclusive → inconclusive; not observed → resolved when the newer audit re-checked it
+ * (`rechecked`) or a fix verification between the two resolved it, else not_rechecked; an issue observed only in
  * the newer audit → regressed when the project saw it before the base audit (it was resolved by then), else new.
  * A group is persistent when any fingerprint persists; else regressed / new when it has one; else resolved when
  * every base fingerprint resolved; else not_rechecked.
@@ -186,13 +187,22 @@ export async function compareCrawls(db: Exec, a: string, b: string): Promise<Com
   const [base, head] = x.createdAt <= y.createdAt ? [x, y] : [y, x];
   const complete = await crawlComplete(db, head.crawlId, head.status);
   const wide = complete ? await wideAudits(db, head.crawlId) : [];
-  const r = await db.execute(sql`with b as (select fingerprint, rule_id, url, page_subject from issue_states where crawl_id = ${base.crawlId}::uuid and state in ('new', 'persistent', 'regressed', 'not_rechecked')),
+  // A fix verification between the two audits counts (the verification overlay, as in effectiveStates): its latest
+  // result for a fingerprint, when resolved, resolves it here too, and an issue seen again after it is a regression.
+  const r = await db.execute(sql`with k as (select id, created_at, workspace, ${projectKey("c")} as project from crawls c where id in (${base.crawlId}::uuid, ${head.crawlId}::uuid)),
+      b as (select s.fingerprint, s.rule_id, s.url, s.page_subject,
+          coalesce((select vs.state = 'resolved' from issue_states vs join crawls vc on vc.id = vs.crawl_id, k kb, k kh
+            where kb.id = ${base.crawlId}::uuid and kh.id = ${head.crawlId}::uuid and vs.fingerprint = s.fingerprint and vc.kind = 'verify'
+              and vc.workspace = kb.workspace and ${projectKey("vc")} = kb.project
+              and (vc.created_at, vc.id) > (kb.created_at, kb.id) and (vc.created_at, vc.id) < (kh.created_at, kh.id)
+            order by vc.created_at desc, vc.id desc limit 1), false) as verified
+        from issue_states s where s.crawl_id = ${base.crawlId}::uuid and s.state in ('new', 'persistent', 'regressed', 'not_rechecked')),
       h as (select fingerprint, rule_id, outcome, first_seen_at from issue_states where crawl_id = ${head.crawlId}::uuid and outcome is not null),
       f as (select coalesce(b.rule_id, h.rule_id) as rule_id,
         case when h.outcome = 'inconclusive' then 'inconclusive'
-             when b.fingerprint is not null and h.fingerprint is not null then 'persistent'
+             when b.fingerprint is not null and h.fingerprint is not null then case when b.verified then 'regressed' else 'persistent' end
              when b.fingerprint is null then case when h.first_seen_at < ${base.createdAt}::timestamptz then 'regressed' else 'new' end
-             when ${rechecked(head.crawlId, complete, wide, "b")} then 'resolved'
+             when b.verified or ${rechecked(head.crawlId, complete, wide, "b")} then 'resolved'
              else 'not_rechecked' end as change
         from b full join h on h.fingerprint = b.fingerprint)
     select rule_id, change, count(*)::int as n from f group by rule_id, change order by rule_id collate "C"`);

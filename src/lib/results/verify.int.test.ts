@@ -117,17 +117,29 @@ describe("fix verification", () => {
     expect(again.urls.map((u) => new URL(u).pathname)).toEqual(["/b", "/c"]);
     await db.execute(sql`delete from crawls where id = ${again.verifyCrawlId}::uuid`);
 
+    // A narrower audit that leaves /d out (scope rule) cannot re-check it, but the verification resolved it after the
+    // audit: the comparison shows it resolved (the verification overlay); /c, blocked by robots.txt in both the
+    // verification and this audit, stays not_rechecked.
+    const narrow = await analysedCrawl(project, { config: { scope: { include: [], exclude: ["/d$"] } } });
+    expect((await db.execute(sql`select state from crawl_urls where crawl_id = ${narrow}::uuid and normalised_url = ${`${srv.origin}/d`}`)).rows[0]).toEqual({ state: "excluded_by_rule" });
+    const narrowCmp = (await compareCrawls(db, audit, narrow)).groups.find((g) => g.ruleId === "CNT-005");
+    expect(narrowCmp?.counts).toMatchObject({ resolved: 2, persistent: 1, not_rechecked: 1, regressed: 0 }); // /a and /d; /b; /c
+    expect(narrowCmp?.change).toBe("persistent");
+
     // Next full audit: /a thin again (verified fixed → regressed), /b still thin (persistent), /c fixed and fetchable
     // (resolved). The verification is history, not the comparison base.
     serve({ routes: { "/a": html("A", true), "/b": html("B", true), "/c": html("C", false), "/d": send("", "text/html", 301, { location: "/f" }), "/f": html("F", true), "/e": html("E", false, "<title>E again</title>") } });
     const next = await analysedCrawl(project);
-    expect(await previousAudit(db, next)).toBe(audit);
+    expect(await previousAudit(db, next)).toBe(narrow);
     const st = async (crawl: string, path: string) => ((await db.execute(sql`select state from issue_states where crawl_id = ${crawl}::uuid and fingerprint = ${fp(path)}`)).rows[0] as { state: string } | undefined)?.state;
     expect(await st(next, "/a")).toBe("regressed");
     expect(await st(next, "/b")).toBe("persistent");
     expect(await st(next, "/c")).toBe("resolved");
     expect(await st(next, "/d")).toBeUndefined(); // resolved by the verification: not open any more
-    expect((await compareCrawls(db, audit, next)).base.crawlId).toBe(audit);
+    const cmp = await compareCrawls(db, audit, next);
+    expect(cmp.base.crawlId).toBe(audit);
+    // /a was verified fixed and is thin again: regressed, not persistent. /c and /d resolved; /b persistent.
+    expect(cmp.groups.find((g) => g.ruleId === "CNT-005")?.counts).toMatchObject({ regressed: 1, persistent: 1, resolved: 2, not_rechecked: 0 });
     await expect(crawlOverview(db, started.verifyCrawlId)).rejects.toThrow(/verification/);
 
     // Re-analysing the audit recomputes the verification and the next audit to the same rows.
