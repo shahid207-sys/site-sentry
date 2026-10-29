@@ -5,7 +5,7 @@
 // Graph structure (who links to whom) lives in server.ts: every page of an index-linked section links to its previous
 // and next page in a <nav>, so each has two inbound links and LNK-005 stays silent unless a page is meant to fire it.
 import type { Defect, RuleId } from "./defects";
-import { EXT_HOSTS, SECTIONS, sectionPaths } from "./definition";
+import { EXT_HOSTS, manifestPaths, ROBOTS_BLOCKED_PREFIX, SECTIONS, sectionPaths } from "./definition";
 import { links, organization, png, SITE_NAME, type Parts } from "./pages";
 import { paragraph, topic } from "./text";
 
@@ -346,8 +346,11 @@ export function structuralExpectations(): Map<string, RuleId[]> {
   out.set(INTL_MISSING, ["IDX-001"]);
   // The index lists all 299 products, the listing's next-page and colour links, plus the header and nav: over 300.
   out.set("/products/", ["IMG-007", "LNK-008"]);
-  out.set(PLAIN_HTTP_PAGE, ["SEC-001"]);
-  for (const p of EXTRAS_2B) out.set(p, p === SCHEMA_DEEP[0] ? ["SD-008"] : []);
+  // The pages 2b adds outside the sections are indexable and in no sitemap (IDX-032).
+  out.set(PLAIN_HTTP_PAGE, ["SEC-001", "IDX-032"]);
+  for (const p of EXTRAS_2B) out.set(p, p === SCHEMA_DEEP[0] ? ["SD-008", "IDX-032"] : ["IDX-032"]);
+  // /security/admin/ (2a): listed in the sitemap but blocked by robots.txt. /security/ is an exact section from 2b on.
+  for (const p of manifestPaths()) if (p.startsWith(ROBOTS_BLOCKED_PREFIX)) out.set(p, ["IDX-007"]);
   return out;
 }
 

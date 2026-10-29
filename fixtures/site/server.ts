@@ -354,6 +354,8 @@ export function createRouter(port: number, canaryPort: number): Router {
         p.icon = "";
         p.head = ""; // no Organization structured data on the home page (SD-007 positive)
       }
+      // alt3's item pages are noindex, so 1 of its 3 crawled pages is indexable (SITE-003 positive).
+      if (key === "alt3" && path !== "/") p.head += '<meta name="robots" content="noindex">';
       // Page text differs per host, so alt pages never look like copies of fixture.test pages.
       p.title = p.title.replace("</title>", ` on ${HOSTS[key]}</title>`);
       return html(p);

@@ -197,9 +197,13 @@ function plans(site: FixtureSite): Plan[] {
       budget: 3,
       expected: new Map([
         [abs("alt3", "/robots.txt"), ["AIS-001"]],
-        [abs("alt3", "/sitemap.xml.gz"), ["IDX-030"]],
+        [abs("alt3", "/sitemap.xml.gz"), ["IDX-030", "SITE-002"]], // over 50,000 URLs; and it lists the noindex items
         [abs("alt3", "/llms.txt"), ["AIS-003"]],
-        [abs("alt3", "/"), []], // and the two /item-N pages the budget of 3 reaches: silent (any finding on alt3 is compared)
+        // The budget of 3 reaches / and two noindex /item-N pages: 1 of 3 indexable (SITE-003); the items are noindex
+        // but listed in the sitemap (IDX-008, IDX-029, SITE-002). Any finding on alt3 is compared.
+        [abs("alt3", "/"), ["SITE-003"]],
+        [abs("alt3", "/item-1"), ["IDX-008", "IDX-029"]],
+        [abs("alt3", "/item-10"), ["IDX-008", "IDX-029"]],
         [abs("alt3", "/.env"), []], // a soft 200 (HTML), not an exposed file
         [abs("alt3", "/.git/HEAD"), []],
       ]),
