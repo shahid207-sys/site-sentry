@@ -6,6 +6,7 @@ import { sql } from "drizzle-orm";
 import { Redis } from "ioredis";
 import { createDb } from "../lib/db/client";
 import { createPeerCertReader, createSafeFetch } from "../lib/fetch/safe-fetch";
+import { startMemoryLog } from "../lib/memory-log";
 import { workerFetchPolicy } from "../lib/crawl/v2/fetch-policy";
 import { finalizeUrls, sweep } from "../lib/crawl/v2/frontier";
 import { createCrawlQueue, crawlQueueName, enqueueCrawl, redisConnection, type CrawlJob } from "../lib/crawl/v2/queue";
@@ -48,6 +49,20 @@ async function main() {
   for (const row of open.rows as { id: string }[]) await enqueueCrawl(queue, row.id);
   const unanalysed = await unanalysedCrawls(db);
   for (const id of unanalysed) await enqueueAnalysis(analysisQueue, id);
+  // WORKER_MEMORY_LOG: RSS and heap every 10 s to that file; past WORKER_MEMORY_LIMIT_MB a heap snapshot is written
+  // next to it and the worker stops (exit 3), so a leak fails fast with evidence.
+  const memFile = process.env.WORKER_MEMORY_LOG;
+  if (memFile) {
+    startMemoryLog({
+      file: memFile,
+      label: "worker",
+      limitBytes: numEnv("WORKER_MEMORY_LIMIT_MB", 0) * 1048576 || undefined,
+      onLimit: (rss, snapshot) => {
+        log("memory.limit", { rssMb: Math.round(rss / 1048576), snapshot });
+        process.exit(3);
+      },
+    });
+  }
   log("worker.boot", { owner, queue: crawlQueueName(), swept, reenqueued: open.rows.length, analysisEnqueued: unanalysed.length });
 
   const worker = new Worker<CrawlJob>(
@@ -80,10 +95,12 @@ async function main() {
     {
       connection,
       concurrency: numEnv("CRAWL_WORKER_CONCURRENCY", 4),
-      // A job whose worker died is handed to another worker after the lock expires (BullMQ stall check).
+      // A job whose worker died is handed to another worker after the lock expires (BullMQ stall check), so a
+      // takeover takes at most lockDuration + stalledInterval: 25 s + 15 s = 40 s. A live worker renews its lock every
+      // lockDuration / 2 (12.5 s); crawling is I/O-bound, so the event loop is never blocked that long.
       // Redelivery is harmless (Postgres holds the state), so allow it as often as needed.
-      lockDuration: numEnv("CRAWL_JOB_LOCK_MS", 30_000),
-      stalledInterval: numEnv("CRAWL_JOB_LOCK_MS", 30_000),
+      lockDuration: numEnv("CRAWL_JOB_LOCK_MS", 25_000),
+      stalledInterval: numEnv("CRAWL_JOB_STALLED_MS", Math.min(15_000, numEnv("CRAWL_JOB_LOCK_MS", 25_000))),
       maxStalledCount: 100,
     },
   );
