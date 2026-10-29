@@ -11,14 +11,16 @@
 //      score equals its recomputation from rule_runs and issue_groups with the published weights.
 //   5. Every number in the HTML report of audit 3 equals its database query and the API's; the PDF renders (saved to
 //      .data/gate-p3/report.pdf, page count printed).
-//   6. A share link opens with the right password, refuses a wrong one, and stops after expiry.
+//   6. A share link, over HTTP against the production app (`next start` on the gate database): opens with the right
+//      password, refuses a wrong one, stops after expiry; every response noindex and Referrer-Policy no-referrer.
 //   7. The JSON-store migration: dry run and real run of scripts/migrate-json-store.ts on a copy of .data/store.json,
 //      into a database of its own; their row counts match each other and the JSON.
 //
 // Run: npm run gate:p3   (needs `docker compose up -d`; uses its own databases, sitesentry_gate3 and sitesentry_gate3_store)
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { createServer, type AddressInfo } from "node:net";
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -33,7 +35,7 @@ import { startMemoryLog } from "../src/lib/memory-log";
 import { checkAgainstApi, checkReportMetrics } from "../src/lib/report/metrics";
 import { renderReport } from "../src/lib/report/html";
 import { renderPdf } from "../src/lib/report/pdf";
-import { createShare, serveShare, SHARE_COOKIE } from "../src/lib/report/shares";
+import { createShare, SHARE_COOKIE } from "../src/lib/report/shares";
 import { ANSWERED } from "../src/lib/results/coverage";
 import { compareCrawls, crawlOverview, issueGroups } from "../src/lib/results/queries";
 import { reportData } from "../src/lib/results/report";
@@ -44,6 +46,8 @@ const DB_URL = process.env.GATE_DATABASE_URL ?? "postgres://sitesentry:sitesentr
 const STORE_DB_URL = process.env.GATE_STORE_DATABASE_URL ?? "postgres://sitesentry:sitesentry@127.0.0.1:5433/sitesentry_gate3_store";
 const QUEUE = `crawl-gate3-${randomUUID()}`;
 const SITE_ID = "gate-p3-fixture";
+/** An app workspace: the share route looks the audit's branding up in the app store, which has live and sample. */
+const WORKSPACE = "live";
 const OPEN = ["new", "persistent", "regressed", "not_rechecked"];
 
 const results: { name: string; pass: boolean; detail: string }[] = [];
@@ -126,7 +130,7 @@ async function main() {
   const audit = async (label: string, config: CrawlConfig): Promise<string> => {
     const [row] = await db
       .insert(crawls)
-      .values({ workspace: "gate", auditId: randomUUID(), siteId: SITE_ID, siteOrigin: origin, profile: "custom", config, status: "queued", budget: main.budget, maxDepth: null })
+      .values({ workspace: WORKSPACE, auditId: randomUUID(), siteId: SITE_ID, siteOrigin: origin, profile: "custom", config, status: "queued", budget: main.budget, maxDepth: null })
       .returning({ id: crawls.id });
     const t0 = Date.now();
     await enqueueCrawl(q, row.id);
@@ -233,9 +237,12 @@ async function main() {
   }
 
   // The heavy steps after the crawls run one at a time, the worker and the fixture already stopped: the migration's
-  // child processes first, then Chromium for the PDF, closed before anything else starts.
+  // child processes first, then the production app for the share link (stopped after), then Chromium for the PDF.
   // ---------- 7. JSON → Postgres migration ----------
   await migrationCheck();
+
+  // ---------- 6. Share link, over HTTP against the production app ----------
+  if (a3) await shareOverHttp(db, a3);
 
   // ---------- 5. Report ----------
   if (a3) {
@@ -252,22 +259,6 @@ async function main() {
     const pdfPath = path.join(memDir, "report.pdf");
     await writeFile(pdfPath, pdf.pdf);
     check("The PDF renders", pdf.pdf.subarray(0, 5).toString() === "%PDF-" && pdf.pages > 1, `${pdf.pages} pages, ${(pdf.pdf.length / 1024).toFixed(0)} KB in ${((Date.now() - t0) / 1000).toFixed(1)} s: ${pdfPath}`);
-
-    // ---------- 6. Share link ----------
-    console.log("\n== Share link");
-    const branding = async () => ({ agencyName: "Gate Agency" });
-    const share = await createShare(db, { workspace: "gate", auditId: `gate-${randomUUID()}`, crawlId: a3, password: "gate-p3-password", expiresInDays: 7 });
-    const wrong = await serveShare(db, share.token, { method: "POST", want: { report: true }, password: "not-the-password", secure: true }, branding);
-    const noCookie = await serveShare(db, share.token, { method: "GET", want: { report: true }, secure: true }, branding);
-    const right = await serveShare(db, share.token, { method: "POST", want: { report: true }, password: "gate-p3-password", secure: true }, branding);
-    const cookie = (right.headers["set-cookie"] ?? "").split(";")[0].slice(SHARE_COOKIE.length + 1);
-    const opened = await serveShare(db, share.token, { method: "GET", want: { report: true }, cookie, secure: true }, branding);
-    check("Share link: the right password opens the report", right.status === 303 && opened.status === 200 && opened.body.includes("data-metric"), `POST right password → ${right.status}, GET with its cookie → ${opened.status} (${opened.body.length} bytes, noindex ${opened.headers["x-robots-tag"]})`);
-    check("Share link: a wrong password is refused", wrong.status === 401 && !wrong.headers["set-cookie"] && noCookie.status === 401 && !noCookie.body.includes("data-metric"), `POST wrong password → ${wrong.status}, GET without cookie → ${noCookie.status}`);
-    await db.$client.query("update report_shares set expires_at = now() - interval '1 second' where id = $1", [share.id]);
-    const expired = await serveShare(db, share.token, { method: "GET", want: { report: true }, cookie, secure: true }, branding);
-    const expiredPost = await serveShare(db, share.token, { method: "POST", want: { report: true }, password: "gate-p3-password", secure: true }, branding);
-    check("Share link: refused after expiry, even with the right cookie or password", expired.status === 410 && expiredPost.status === 410, `GET with cookie → ${expired.status}, POST right password → ${expiredPost.status}`);
   }
   await db.$client.end();
 
@@ -328,6 +319,96 @@ async function priorityAndHealth(db: Awaited<ReturnType<typeof setupDb>>, crawl:
   const stored = (await db.$client.query<{ health: { score: number; categories: Record<string, { score: number }> } }>("select health from crawls where id = $1", [crawl])).rows[0].health;
   const catDiff = [...catScore].filter(([k, s]) => Math.abs((stored.categories[k]?.score ?? NaN) - s) > 0.05);
   check(`${label}: health score equals its recomputation`, Math.abs(stored.score - total) <= 0.05 && catDiff.length === 0, `recomputed ${total} over ${ran.length} rules in ${catScore.size} categories (${[...catScore].map(([k, s]) => `${k} ${s}`).join(", ")}); stored ${stored.score}${catDiff.length ? `; categories differ: ${catDiff.map(([k, s]) => `${k} ${s} vs ${stored.categories[k]?.score}`).join(", ")}` : ""}`);
+}
+
+/**
+ * 6: a share link of audit 3 through the production app (`next start`, needs `npm run build`) on a free loopback
+ * port, reading the gate database and an empty data directory: status codes, the access cookie, and the headers
+ * as a browser receives them (Next's site-wide headers included).
+ */
+async function shareOverHttp(db: Awaited<ReturnType<typeof setupDb>>, crawl: string) {
+  console.log("\n== Share link over HTTP (next start)");
+  if (!existsSync(path.resolve(".next", "BUILD_ID"))) {
+    check("Share link over HTTP: the production app starts", false, "no production build in .next: run `npm run build` first");
+    return;
+  }
+  const port = await new Promise<number>((resolve) => {
+    const s = createServer().listen(0, "127.0.0.1", () => {
+      const p = (s.address() as AddressInfo).port;
+      s.close(() => resolve(p));
+    });
+  });
+  const dataDir = await mkdtemp(path.join(tmpdir(), "sitesentry-gate3-app-"));
+  const env = {} as NodeJS.ProcessEnv;
+  for (const [k, v] of Object.entries(process.env)) if (!/^(SITE_SENTRY_|CRAWL(ER)?_|ANALYSIS_|DATABASE_URL$)/.test(k)) env[k] = v;
+  Object.assign(env, { NODE_ENV: "production", DATABASE_URL: DB_URL, SITE_SENTRY_STORE: "json", SITE_SENTRY_DATA_DIR: dataDir });
+  const app = spawn(process.execPath, ["node_modules/next/dist/bin/next", "start", "-p", String(port), "-H", "127.0.0.1"], { env, stdio: ["ignore", "pipe", "pipe"] });
+  let log = "";
+  app.stdout!.on("data", (d: Buffer) => (log = (log + d).slice(-4000)));
+  app.stderr!.on("data", (d: Buffer) => (log = (log + d).slice(-4000)));
+  const exited = new Promise<void>((r) => app.on("exit", () => r()));
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    await waitFor("the production app", 90_000, async () => !!(await fetch(`${base}/r/not-a-token`).catch(() => null)));
+    const share = await createShare(db, { workspace: WORKSPACE, auditId: `gate-${randomUUID()}`, crawlId: crawl, password: "gate-p3-password", expiresInDays: 7 });
+    const url = `${base}/r/${share.token}`;
+    const get = (cookie?: string, sub = "") => fetch(`${url}${sub}`, { redirect: "manual", headers: cookie ? { cookie: `${SHARE_COOKIE}=${cookie}` } : {} });
+    const post = (password: string) => fetch(url, { method: "POST", redirect: "manual", body: new URLSearchParams({ password }) });
+    // Every share response, refusals included: exactly these values, as the browser receives them.
+    const headerFaults = (r: Response) => {
+      const h = (k: string) => r.headers.get(k);
+      const out: string[] = [];
+      if (h("referrer-policy") !== "no-referrer") out.push(`referrer-policy "${h("referrer-policy")}"`);
+      if (!/^noindex\b/.test(h("x-robots-tag") ?? "")) out.push(`x-robots-tag "${h("x-robots-tag")}"`);
+      if (h("cache-control") !== "private, no-store") out.push(`cache-control "${h("cache-control")}"`);
+      if (!/default-src 'none'/.test(h("content-security-policy") ?? "")) out.push("content-security-policy missing");
+      return out;
+    };
+    const seen: { what: string; faults: string[] }[] = [];
+    const note = async (what: string, r: Response) => {
+      seen.push({ what, faults: headerFaults(r) });
+      return { status: r.status, cookie: r.headers.get("set-cookie"), location: r.headers.get("location"), type: r.headers.get("content-type") ?? "", body: await r.text() };
+    };
+
+    const form = await note("GET no cookie", await get());
+    const wrong = await note("POST wrong password", await post("not-the-password"));
+    check(
+      "Share link over HTTP: no password or a wrong one is refused",
+      form.status === 401 && form.body.includes('type="password"') && !form.body.includes("data-metric") && wrong.status === 401 && !wrong.cookie && wrong.body.includes("not right"),
+      `GET without cookie → ${form.status} (password form), POST wrong password → ${wrong.status}, set-cookie ${wrong.cookie ?? "none"}`,
+    );
+    const right = await note("POST right password", await post("gate-p3-password"));
+    const cookieOk = new RegExp(`^${SHARE_COOKIE}=[A-Za-z0-9_-]{43}; Path=/r/${share.token}; HttpOnly; SameSite=Strict; Max-Age=\\d+$`).test(right.cookie ?? "");
+    const cookie = (right.cookie ?? "").split(";")[0].slice(SHARE_COOKIE.length + 1);
+    const opened = await note("GET with cookie", await get(cookie));
+    const csv = await note("GET CSV with cookie", await get(cookie, "/csv/META-008"));
+    check(
+      "Share link over HTTP: the right password sets a path-scoped HttpOnly cookie that opens the report and CSV",
+      right.status === 303 && right.location === `/r/${share.token}` && cookieOk && opened.status === 200 && opened.type.startsWith("text/html") && opened.body.includes("data-metric") && csv.status === 200 && csv.type.startsWith("text/csv") && csv.body.startsWith("url,state"),
+      `POST → ${right.status} to ${right.location}, set-cookie "${(right.cookie ?? "").replace(cookie, "<43 chars>")}" (no Secure over http); GET with it → ${opened.status} ${opened.type} (${opened.body.length} bytes); CSV → ${csv.status} ${csv.type}`,
+    );
+    await db.$client.query("update report_shares set expires_at = now() - interval '1 second' where id = $1", [share.id]);
+    const expired = await note("GET after expiry", await get(cookie));
+    const expiredPost = await note("POST after expiry", await post("gate-p3-password"));
+    const unknown = await note("GET unknown token", await fetch(`${base}/r/${"A".repeat(43)}`, { redirect: "manual" }));
+    check(
+      "Share link over HTTP: refused after expiry, even with the right cookie or password",
+      expired.status === 410 && expiredPost.status === 410 && !expired.body.includes("data-metric") && unknown.status === 404,
+      `GET with cookie → ${expired.status}, POST right password → ${expiredPost.status}; unknown token → ${unknown.status}`,
+    );
+    const faulty = seen.filter((x) => x.faults.length);
+    check(
+      "Share link over HTTP: every response has Referrer-Policy no-referrer, X-Robots-Tag noindex, no-store and the report CSP",
+      faulty.length === 0,
+      `${seen.length} responses${faulty.length ? `; wrong: ${faulty.map((x) => `${x.what}: ${x.faults.join(", ")}`).join("; ")}` : ", all exact"}`,
+    );
+  } catch (e) {
+    check("Share link over HTTP: the production app answers", false, `${(e as Error).message}\n${log}`);
+  } finally {
+    app.kill();
+    await exited;
+    await rm(dataDir, { recursive: true, force: true });
+  }
 }
 
 /** 7: scripts/migrate-json-store.ts on a copy of .data/store.json, dry run then real run, into a fresh database. */
