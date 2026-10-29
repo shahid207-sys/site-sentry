@@ -190,6 +190,17 @@ export type CommitOutcome = { ok: true; token: string } | { ok: false; why: "bud
  * Refuses (`stopped`) unless the crawl is `running`, so pause and cancel take effect before the next request.
  */
 export async function commitToSend(db: Db, crawlId: string, urlId: number, owner: string, leaseMs = DEFAULT_LEASE_MS): Promise<CommitOutcome> {
+  // A deadlock rolled the transaction back whole (nothing was charged or sent), so it is run again.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await commitOnce(db, crawlId, urlId, owner, leaseMs);
+    } catch (e) {
+      if (!isDeadlock(e) || attempt >= RECORD_ATTEMPTS) throw e;
+    }
+  }
+}
+
+async function commitOnce(db: Db, crawlId: string, urlId: number, owner: string, leaseMs: number): Promise<CommitOutcome> {
   const token = randomUUID();
   return db.transaction(async (tx) => {
     const mine = await tx.execute(sql`select id from crawl_urls where id = ${urlId} and state = 'queued' and lease_owner = ${owner} for update`);
@@ -306,10 +317,16 @@ export async function releaseReservations(db: Db, owner: string): Promise<number
   return r.rows.length;
 }
 
-/** Keep this worker's reservations and in-flight claims alive. */
+/**
+ * Keep this worker's reservations and in-flight claims alive. SKIP LOCKED: a plain multi-row update locks rows in heap
+ * order and waits on each, so it closed lock cycles with commitToSend and recordResult (which lock in URL order) and
+ * Postgres aborted one of them (40P01). A row skipped here is locked by a transaction that is writing it right now
+ * (and sets or clears its lease itself); the next renewal, a third of a lease later, covers it.
+ */
 export async function renewLeases(db: Db, owner: string, leaseMs = DEFAULT_LEASE_MS): Promise<void> {
-  await db.execute(sql`update crawl_urls set lease_until = now() + ${leaseMs} * interval '1 millisecond'
-    where lease_owner = ${owner} and state in ('queued', 'fetching')`);
+  await db.execute(sql`update crawl_urls u set lease_until = now() + ${leaseMs} * interval '1 millisecond'
+    from (select id from crawl_urls where lease_owner = ${owner} and state in ('queued', 'fetching') for update skip locked) c
+    where u.id = c.id`);
 }
 
 export const INTERRUPTED_REASON = "The worker stopped after this request was committed and before its result was saved; not re-requested (at-most-once).";

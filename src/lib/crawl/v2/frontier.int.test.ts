@@ -9,6 +9,7 @@ import {
   insertEdges,
   recordResult,
   releaseReservations,
+  renewLeases,
   reserve,
   stateCounts,
   sweep,
@@ -328,5 +329,63 @@ describe("recordResult under concurrency", () => {
     }
     expect(await row(c, "/page")).toMatchObject({ state: "fetched", attempts: 1 });
     expect((await row(c, "/late"))?.discovered_via).toEqual(["link", "sitemap"]);
+  });
+
+  it("lease renewal skips a row another transaction holds instead of waiting on it (no lock cycle)", async () => {
+    // Gate 2a died on 40P01: renewal (one update over all of a worker's rows, in heap order) waited on a row a
+    // recordResult had pre-locked, while that write waited on a row the renewal already held.
+    const c = await newCrawl(db);
+    await upsertUrls(db, c, [u("/a", "seed", 0), u("/b", "seed", 0)]);
+    await reserve(db, c, "w", 2, null);
+    await db.execute(sql`update crawl_urls set lease_until = now() - interval '1 minute' where crawl_id = ${c}::uuid`);
+    const x = await db.$client.connect();
+    try {
+      await x.query("begin");
+      await x.query("select id from crawl_urls where crawl_id = $1 and normalised_url = $2 for update", [c, "https://example.test/a"]);
+      const t0 = Date.now();
+      await Promise.race([renewLeases(db, "w", 60_000), new Promise((_, rej) => setTimeout(() => rej(new Error("renewLeases waited on a locked row")), 3000))]);
+      expect(Date.now() - t0).toBeLessThan(3000);
+    } finally {
+      await x.query("rollback"); // never hand a connection with an open transaction back to the pool
+      x.release();
+    }
+    const leases = await db.execute(sql`select normalised_url as url, lease_until > now() as live from crawl_urls where crawl_id = ${c}::uuid order by url`);
+    expect(leases.rows).toEqual([
+      { url: "https://example.test/a", live: false }, // skipped: locked; the next renewal covers it
+      { url: "https://example.test/b", live: true },
+    ]);
+    await renewLeases(db, "w", 60_000);
+    const after = await db.execute(sql`select bool_and(lease_until > now()) as live from crawl_urls where crawl_id = ${c}::uuid`);
+    expect((after.rows[0] as { live: boolean }).live).toBe(true);
+  });
+
+  it("runs commitToSend again when Postgres aborts it to break a deadlock, charging the budget once", async () => {
+    const c = await newCrawl(db);
+    await upsertUrls(db, c, [u("/page", "seed", 0)]);
+    const [r] = await reserve(db, c, "w", 1, null);
+    const before = ((await db.execute(sql`select fetches_committed as n from crawls where id = ${c}::uuid`)).rows[0] as { n: number }).n;
+    const x = await db.$client.connect();
+    let k: Awaited<ReturnType<typeof commitToSend>>;
+    try {
+      // X holds the crawl row; the commit locks its URL row, then waits on X; X then waits on the URL row: a cycle.
+      // X never runs the deadlock check itself, so Postgres aborts the commit, the side under test.
+      await x.query("begin; set local deadlock_timeout = '60s'");
+      await x.query("update crawls set heartbeat_at = now() where id = $1", [c]);
+      const commit = commitToSend(db, c, r.id, "w");
+      for (let i = 0; i < 100; i++) {
+        const w = await db.execute(sql`select count(*)::int as n from pg_locks where locktype = 'transactionid' and not granted`);
+        if ((w.rows[0] as { n: number }).n > 0) break;
+        await new Promise((res) => setTimeout(res, 50));
+      }
+      await x.query("select id from crawl_urls where id = $1 for update", [r.id]);
+      await x.query("commit");
+      k = await commit;
+    } finally {
+      x.release();
+    }
+    expect(k.ok).toBe(true);
+    expect(await row(c, "/page")).toMatchObject({ state: "fetching", attempts: 1 });
+    const n = ((await db.execute(sql`select fetches_committed as n from crawls where id = ${c}::uuid`)).rows[0] as { n: number }).n;
+    expect(n).toBe(before + 1);
   });
 });
