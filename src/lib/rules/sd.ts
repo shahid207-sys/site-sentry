@@ -114,18 +114,29 @@ const SD004 = page({
   confidence: "heuristic",
   impact: 1,
   needs: ["raw"],
+  // Recommended properties come from the template that renders the type: one finding per schema type per template
+  // group, with every page counted in evidence.pages, not one per page.
+  groupByTemplate: true,
   evaluate({ page: p }) {
     if (!isHtml200(p)) return [];
-    const gaps = googleChecks(p)
-      .map((c) => ({ type: c.type, at: where(c.ref), missing: missing(c.ref.entity, c.spec.recommended), source: c.spec.source }))
-      .filter((g) => g.missing.length);
-    if (!gaps.length) return [];
-    return [finding(SD004, p.url, `${gaps.map((g) => `${g.type} (${g.at}) lacks recommended ${g.missing.join(", ")}`).join("; ")}.`, { gaps: gaps.slice(0, EVIDENCE_CAP), note: NO_ELIGIBILITY })];
+    const byType = new Map<string, { at: string[]; missing: Set<string>; source: string }>();
+    for (const c of googleChecks(p)) {
+      const m = missing(c.ref.entity, c.spec.recommended);
+      if (!m.length) continue;
+      const g = byType.get(c.type) ?? { at: [], missing: new Set<string>(), source: c.spec.source };
+      g.at.push(where(c.ref));
+      for (const x of m) g.missing.add(x);
+      byType.set(c.type, g);
+    }
+    return [...byType].map(([type, g]) => {
+      const miss = [...g.missing];
+      return finding(SD004, p.url, `${type} (${g.at.join(", ")}) lacks recommended ${miss.join(", ")}.`, { groupKey: type, type, at: g.at.slice(0, EVIDENCE_CAP), missing: miss, source: g.source, note: NO_ELIGIBILITY });
+    });
   },
   explain: {
     why: "Recommended properties give search engines more to show and understand; they are optional.",
     fix: "Add the recommended properties the page has real values for.",
-    acceptance: "Every Google-documented type on the page has its recommended properties, or the page has no value for them.",
+    acceptance: "Every Google-documented type on the pages of the template has its recommended properties, or the pages have no value for them.",
     docs: "https://developers.google.com/search/docs/appearance/structured-data/search-gallery",
   },
 });

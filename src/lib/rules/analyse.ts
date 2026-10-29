@@ -14,6 +14,7 @@ import type { CanonicalTag } from "../snapshot/types";
 import { NeedsConfig, type CrawlView, type Finding, type Hreflang, type PageRule, type PageView, type ResourceFacts, type ResourceRule, type Rule, type SiteCtx, type SiteRule, type SiteView, type UrlFacts } from "./contract";
 import { bfsDepth, pageRank } from "./graph";
 import type { ProbeRecord } from "./probe-types";
+import { TemplateGroups } from "./group";
 import { RULES } from "./registry";
 
 export const ANALYSIS_BATCH = 500;
@@ -332,6 +333,10 @@ class Stats {
       s.evaluated++;
     }
   }
+  /** Corrects a rule's finding count (grouped rules store one finding per group, not one per page). */
+  adjust(ruleId: string, delta: number): void {
+    this.m.get(ruleId)!.findings += delta;
+  }
   all(): RuleStat[] {
     return [...this.m.values()].map((s) => ({ ...s, totalMs: Math.round(s.totalMs * 1000) / 1000 }));
   }
@@ -385,6 +390,8 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
       const resourceRules = rules.filter((r): r is ResourceRule => r.scope === "resource");
       // Page-rule issues per rule and template, for SITE-001 (one finding for a defect a whole template shares).
       const pageIssues: SiteCtx["pageIssues"] = new Map();
+      // Rules that report per template group: one bounded entry per group, emitted after the last page.
+      const grouped = new TemplateGroups();
       let pages = 0;
       let total = 0;
       for (let after = 0; ; ) {
@@ -395,9 +402,14 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
           const page = pageView(x);
           pages++;
           for (const rule of pageRules) {
-            const before = found.length;
-            stats.run(rule, { page, crawl, site }, found);
-            if (!page.templateFingerprint || !found.slice(before).some((f) => f.outcome === "issue")) continue;
+            const own: Finding[] = [];
+            stats.run(rule, { page, crawl, site }, own);
+            if (rule.groupByTemplate) {
+              const ungrouped = grouped.add(own, page.templateFingerprint);
+              stats.adjust(rule.id, ungrouped.length - own.length); // grouped issues are counted once per group, below
+              found.push(...ungrouped);
+            } else found.push(...own);
+            if (!page.templateFingerprint || !own.some((f) => f.outcome === "issue")) continue;
             if (!pageIssues.has(rule.id)) pageIssues.set(rule.id, new Map());
             const t = pageIssues.get(rule.id)!.get(page.templateFingerprint) ?? { count: 0, sample: [] };
             t.count++;
@@ -410,7 +422,8 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
         if (r.rows.length < batch) break;
         after = Number((r.rows[r.rows.length - 1] as { id: number }).id);
       }
-      const siteFound: Finding[] = [];
+      const siteFound: Finding[] = grouped.findings();
+      for (const f of siteFound) stats.adjust(f.ruleId, 1);
       for (const rule of siteRules) stats.run(rule, { site, crawl, pageIssues }, siteFound);
       for (const rule of resourceRules) {
         for (const resource of (rule.kind === "image" ? crawl.resources.images : crawl.resources.links).values()) stats.run(rule, { resource, crawl }, siteFound);

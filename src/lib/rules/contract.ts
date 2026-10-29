@@ -163,6 +163,11 @@ interface RuleBase<C> {
   confidence: Confidence;
   impact: 1 | 2 | 3 | 4 | 5;
   needs: Need[];
+  /**
+   * Page rules only: report one finding per template group and evidence.groupKey (e.g. a schema type) instead of one
+   * per page, for defects a template repeats on every page it builds (group.ts).
+   */
+  groupByTemplate?: boolean;
   evaluate(ctx: C): Finding[];
   explain: { why: string; fix: string; acceptance: string; docs?: string };
 }

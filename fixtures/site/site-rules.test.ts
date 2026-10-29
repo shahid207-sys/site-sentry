@@ -10,6 +10,7 @@ import { crawlView, effectiveCanonical } from "../../src/lib/rules/analyse";
 import type { CrawlView, Finding, PageView, ResourceFacts, SiteCtx, UrlFacts } from "../../src/lib/rules/contract";
 import { NEAR_DUPLICATE, NEAR_DUPLICATE_MIN_WORDS } from "../../src/lib/rules/cnt";
 import { bfsDepth, pageRank } from "../../src/lib/rules/graph";
+import { TemplateGroups } from "../../src/lib/rules/group";
 import { RULES } from "../../src/lib/rules/registry";
 import { extractHtml } from "../../src/lib/snapshot/extract";
 import { imageSize } from "../../src/lib/snapshot/image-size";
@@ -190,11 +191,13 @@ const add = (f: Finding) => {
   found.get(f.url)!.add(findingKey(f.ruleId, f.outcome));
 };
 const pageIssues: SiteCtx["pageIssues"] = new Map();
+const grouped = new TemplateGroups();
 const t1 = performance.now();
 for (const r of RULES.filter((x) => x.scope === "page")) {
   for (const p of pages.values()) {
-    for (const f of r.evaluate({ page: p, crawl, site })) {
-      add(f);
+    const own = r.evaluate({ page: p, crawl, site });
+    (r.groupByTemplate ? grouped.add(own, p.templateFingerprint) : own).forEach(add);
+    for (const f of own) {
       if (f.outcome !== "issue" || !p.templateFingerprint) continue;
       if (!pageIssues.has(r.id)) pageIssues.set(r.id, new Map());
       const t = pageIssues.get(r.id)!.get(p.templateFingerprint) ?? { count: 0, sample: [] };
@@ -204,6 +207,7 @@ for (const r of RULES.filter((x) => x.scope === "page")) {
     }
   }
 }
+grouped.findings().forEach(add);
 for (const r of RULES) {
   if (r.scope === "site" && SITE_RULES.has(r.id)) r.evaluate({ site, crawl, pageIssues }).forEach(add);
   if (r.scope === "resource") for (const x of (r.kind === "image" ? resources.images : resources.links).values()) r.evaluate({ resource: x, crawl }).forEach(add);
