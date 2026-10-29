@@ -296,9 +296,26 @@ export function redirectExpectations(): Record<string, RuleId[]> {
   return out;
 }
 
+/**
+ * The fix patch (gate:p3): defect pages served fixed, as a site owner would fix them, while FIX_PATCH_ENV is "1".
+ * Read per request, so a running fixture switches between audits. `verify`: the gate re-checks the rule's group with
+ * a verification; the others are only re-checked by later audits. META-008 keeps /meta/p-12 broken: a group fixed in
+ * part. The gate's expected resolutions come from this list, not from rule code.
+ */
+export const FIX_PATCH_ENV = "FIXTURE_FIX_PATCH";
+export const FIX_PATCH: readonly { path: string; ruleId: RuleId; verify: boolean }[] = [
+  { path: "/meta/p-3", ruleId: "META-003", verify: true },
+  { path: "/meta/p-11", ruleId: "META-008", verify: true },
+  { path: "/meta/p-22", ruleId: "META-014", verify: true },
+  { path: "/meta/p-6", ruleId: "META-005", verify: false },
+  { path: "/meta/p-7", ruleId: "META-006", verify: false },
+];
+const PATCHED = new Set(FIX_PATCH.map((f) => f.path));
+export const fixPatchOn = (env: Record<string, string | undefined> = process.env) => env[FIX_PATCH_ENV] === "1";
+
 export function applyDefect(path: string, origin: string, body: string): Parts {
   const p = cleanParts(path, origin, body);
-  DEFECTS[path]?.apply(p, { path, origin });
+  if (!(PATCHED.has(path) && fixPatchOn())) DEFECTS[path]?.apply(p, { path, origin });
   return p;
 }
 
