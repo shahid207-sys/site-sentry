@@ -111,6 +111,20 @@ describe("analyseCrawl", () => {
     expect(at("CNT-005").score).toBeCloseTo(rule.impact * { verified: 1, heuristic: 0.6, advisory: 0.3 }[rule.confidence], 4);
     expect(at("IDX-001")).toMatchObject({ affected_pages: 1, affected_urls: 1 });
     expect(at("IDX-001").reach).toBeCloseTo(0.5, 4);
+
+    // Rule, then template: per-template counts add up to the group's, samples are the first URLs in order.
+    const split = (await db.execute(sql`select * from issue_group_templates where crawl_id = ${c}::uuid order by rule_id, template_id`)).rows as Record<string, unknown>[];
+    const tpl = (await db.execute(sql`select normalised_url as url, template_id from crawl_urls where crawl_id = ${c}::uuid`)).rows as { url: string; template_id: string | null }[];
+    for (const g of groups.filter((x) => (x.affected_urls as number) > 0)) {
+      const mine = split.filter((x) => x.rule_id === g.rule_id);
+      expect(mine.reduce((n, x) => n + (x.affected_urls as number), 0), String(g.rule_id)).toBe(g.affected_urls);
+      expect(g.template_count, String(g.rule_id)).toBe(mine.filter((x) => x.template_id !== "").length);
+      const issues = (await db.execute(sql`select distinct url from findings where crawl_id = ${c}::uuid and rule_id = ${g.rule_id as string} and outcome = 'issue'`)).rows as { url: string }[];
+      const urls = issues.map((x) => x.url).sort();
+      expect(g.sample_urls, String(g.rule_id)).toEqual(urls.slice(0, 5));
+    }
+    const cntTemplates = new Set(tpl.filter((t) => ["/", "/a", "/new"].includes(new URL(t.url).pathname)).map((t) => t.template_id));
+    expect(at("CNT-005").template_count).toBe(cntTemplates.size);
   });
 
   it("is idempotent and gives the same result whatever the batch size", async () => {

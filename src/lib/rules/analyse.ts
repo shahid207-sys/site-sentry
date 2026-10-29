@@ -402,6 +402,7 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
       await tx.execute(sql`delete from rule_runs where crawl_id = ${crawlId}::uuid`);
       await tx.execute(sql`delete from finding_occurrences where crawl_id = ${crawlId}::uuid`);
       await tx.execute(sql`delete from issue_groups where crawl_id = ${crawlId}::uuid`);
+      await tx.execute(sql`delete from issue_group_templates where crawl_id = ${crawlId}::uuid`);
       for (const r of rules) {
         await tx.execute(sql`insert into rules (id, version, category, scope, confidence, impact, updated_at) values (${r.id}, ${r.version}, ${r.category}, ${r.scope}, ${r.confidence}, ${r.impact}, now())
           on conflict (id) do update set version = excluded.version, category = excluded.category, scope = excluded.scope, confidence = excluded.confidence, impact = excluded.impact, updated_at = now()`);

@@ -317,8 +317,27 @@ export const issueGroups = pgTable(
     /** Distinct subject URLs with an issue, and with an inconclusive result. */
     affectedUrls: integer("affected_urls").notNull(),
     inconclusiveUrls: integer("inconclusive_urls").notNull(),
+    /** Distinct templates among the affected pages (subjects that are not crawled pages have none). */
+    templateCount: integer("template_count").notNull().default(0),
+    /** The first affected URLs in sort order (SAMPLE_URLS). */
+    sampleUrls: jsonb("sample_urls").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
   },
   (t) => [primaryKey({ columns: [t.crawlId, t.ruleId] })],
+);
+
+/** An issue group split by template: rule, then template (template_id '' = subjects outside any template). */
+export const issueGroupTemplates = pgTable(
+  "issue_group_templates",
+  {
+    crawlId: uuid("crawl_id")
+      .notNull()
+      .references(() => crawls.id, { onDelete: "cascade" }),
+    ruleId: text("rule_id").notNull(),
+    templateId: text("template_id").notNull(),
+    affectedUrls: integer("affected_urls").notNull(),
+    sampleUrls: jsonb("sample_urls").$type<string[]>().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.crawlId, t.ruleId, t.templateId] })],
 );
 
 /** Per rule, per analysis run: did it run, on how many inputs, how many findings, how long. */
