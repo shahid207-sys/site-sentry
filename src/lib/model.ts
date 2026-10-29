@@ -29,6 +29,17 @@ export interface Site {
   /** Optional sitemap URL; defaults to robots.txt declarations, then /sitemap.xml. */
   sitemapUrl?: string;
   notes?: string;
+  /** White-label for this site's reports. */
+  branding?: Branding;
+}
+
+/** Report white-label: shown on the cover and in the header of every report of the site. */
+export interface Branding {
+  agencyName?: string;
+  /** "#rrggbb" */
+  brandColor?: string;
+  /** data:image/png|jpeg|svg+xml;base64,… (never a remote URL: the PDF renderer would fetch it). */
+  logoDataUrl?: string;
 }
 
 export type PageType = "home" | "service" | "location" | "product" | "category" | "article" | "landing" | "contact" | "other";

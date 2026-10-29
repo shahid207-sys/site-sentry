@@ -8,7 +8,8 @@ type P = { ws: string; id: string };
 
 export const GET = route<P>(async (_req, { ws, id }) => getSiteDetail(ws, id));
 
-const Patch = z.object({ name: z.string().max(200).optional(), sitemapUrl: z.string().max(2000).nullable().optional(), notes: z.string().max(5000).optional() });
+const Branding = z.object({ agencyName: z.string().max(500).nullable().optional(), brandColor: z.string().max(20).nullable().optional(), logoDataUrl: z.string().max(160_000).nullable().optional() });
+const Patch = z.object({ name: z.string().max(200).optional(), sitemapUrl: z.string().max(2000).nullable().optional(), notes: z.string().max(5000).optional(), branding: Branding.optional() });
 
 export const PATCH = route<P>(async (req, { ws, id }) => updateSite(id, await body(req, Patch), await getDeps(ws)));
 

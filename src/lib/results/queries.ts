@@ -4,7 +4,7 @@ import { sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import type { IssueState } from "../db/schema";
 import type { Priority } from "./priority";
-import { crawlComplete, crawlCoverage, type Coverage } from "./coverage";
+import { ANSWERED, crawlComplete, crawlCoverage, type Coverage } from "./coverage";
 import type { Health } from "./health";
 import { OPEN_STATES, projectKey, rechecked, type StateCounts } from "./states";
 
@@ -266,4 +266,108 @@ export async function openFingerprints(db: Exec, auditCrawlId: string, ruleId: s
   const open = sql.raw(OPEN_STATES.map((x) => `'${x}'`).join(", "));
   const r = await db.execute(sql`select fingerprint, url from ${effectiveStates(auditCrawlId)} e where e.rule_id = ${ruleId} and e.state in (${open}) order by url collate "C", fingerprint`);
   return r.rows as { fingerprint: string; url: string }[];
+}
+
+// ---------- report sections (src/lib/results/report.ts): stored rows only ----------
+
+export interface EvidenceSample {
+  url: string;
+  message: string;
+  evidence: Record<string, unknown>;
+  outcome: string;
+}
+
+/** The first `perGroup` findings (by URL) of each rule: the evidence a report shows beside a group. */
+export async function groupEvidence(db: Exec, crawlId: string, ruleIds: string[], perGroup = 3): Promise<Map<string, EvidenceSample[]>> {
+  const out = new Map<string, EvidenceSample[]>();
+  if (!ruleIds.length) return out;
+  const r = await db.execute(sql`select rule_id, url, message, evidence, outcome from (
+      select f.*, row_number() over (partition by rule_id order by url collate "C", id) as n from findings f
+      where crawl_id = ${crawlId}::uuid and rule_id in (${sql.join(ruleIds.map((x) => sql`${x}`), sql`, `)})) x
+    where n <= ${perGroup} order by rule_id collate "C", n`);
+  for (const x of r.rows as unknown as (EvidenceSample & { rule_id: string })[]) {
+    if (!out.has(x.rule_id)) out.set(x.rule_id, []);
+    out.get(x.rule_id)!.push({ url: x.url, message: x.message, evidence: x.evidence, outcome: x.outcome });
+  }
+  return out;
+}
+
+/** Every URL an issue group affects (outcome issue), with its effective state: the count is the group's affectedUrls. */
+export async function affectedUrlList(db: Exec, crawlId: string, ruleId: string, limit?: number): Promise<{ url: string; state: IssueState }[]> {
+  const r = await db.execute(sql`select o.url, min(e.state) as state from finding_occurrences o
+      join ${effectiveStates(crawlId)} e on e.fingerprint = o.fingerprint
+    where o.crawl_id = ${crawlId}::uuid and o.rule_id = ${ruleId} and o.outcome = 'issue' group by o.url order by o.url collate "C" ${limit === undefined ? sql`` : sql`limit ${limit}`}`);
+  return r.rows as { url: string; state: IssueState }[];
+}
+
+export interface RuleRunRow {
+  ruleId: string;
+  version: number;
+  status: string;
+  evaluated: number;
+  findings: number;
+  detail: string | null;
+}
+
+/** What ran in the analysis, and what did not (needs_config, error) with the reason. */
+export async function ruleRunList(db: Exec, crawlId: string): Promise<RuleRunRow[]> {
+  const r = await db.execute(sql`select rule_id, rule_version, status, evaluated, findings, detail from rule_runs where crawl_id = ${crawlId}::uuid order by rule_id collate "C"`);
+  return (r.rows as { rule_id: string; rule_version: number; status: string; evaluated: number; findings: number; detail: string | null }[]).map((x) => ({
+    ruleId: x.rule_id,
+    version: Number(x.rule_version),
+    status: x.status,
+    evaluated: Number(x.evaluated),
+    findings: Number(x.findings),
+    detail: x.detail,
+  }));
+}
+
+/** URLs per link depth from the seeds (null: found only in sitemaps), and how many of them were answered. */
+export async function depthHistogram(db: Exec, crawlId: string): Promise<{ depth: number | null; urls: number; answered: number }[]> {
+  const answered = sql.raw(ANSWERED.map((x) => `'${x}'`).join(", "));
+  const r = await db.execute(sql`select depth, count(*)::int as urls, count(*) filter (where state in (${answered}))::int as answered from crawl_urls
+    where crawl_id = ${crawlId}::uuid group by depth order by depth nulls last`);
+  return (r.rows as { depth: number | null; urls: number; answered: number }[]).map((x) => ({ depth: x.depth === null ? null : Number(x.depth), urls: x.urls, answered: x.answered }));
+}
+
+export interface DuplicateCluster {
+  ruleId: string;
+  /** What the pages share: the title, the description, the content hash, or "near-duplicate". */
+  key: string;
+  urls: string[];
+}
+
+/** Duplicate clusters from the duplicate rules' evidence: exact (CNT-006, META-004, META-009) and near (CNT-007, joined pairs). */
+export async function duplicateClusters(db: Exec, crawlId: string): Promise<DuplicateCluster[]> {
+  const exact = await db.execute(sql`select rule_id, key, array_agg(url order by url collate "C") as urls from (
+      select rule_id, url, coalesce(evidence->>'title', evidence->>'description', evidence->>'textHash') as key from findings
+      where crawl_id = ${crawlId}::uuid and rule_id in ('CNT-006', 'META-004', 'META-009') and outcome = 'issue') f
+    group by rule_id, key order by count(*) desc, rule_id collate "C", key collate "C"`);
+  const out = (exact.rows as { rule_id: string; key: string; urls: string[] }[]).map((x) => ({ ruleId: x.rule_id, key: x.key, urls: x.urls }));
+  // Near duplicates are pairs; a cluster is a connected set of pages.
+  const near = await db.execute(sql`select url, evidence->'matches' as matches from findings where crawl_id = ${crawlId}::uuid and rule_id = 'CNT-007' and outcome = 'issue'`);
+  const parent = new Map<string, string>();
+  const find = (u: string): string => {
+    const p = parent.get(u) ?? u;
+    if (p === u) return u;
+    const root = find(p);
+    parent.set(u, root);
+    return root;
+  };
+  for (const x of near.rows as { url: string; matches: { url: string }[] | null }[]) {
+    parent.set(x.url, parent.get(x.url) ?? x.url);
+    for (const m of x.matches ?? []) {
+      parent.set(m.url, parent.get(m.url) ?? m.url);
+      const [a, b] = [find(x.url), find(m.url)];
+      if (a !== b) parent.set(a < b ? b : a, a < b ? a : b);
+    }
+  }
+  const clusters = new Map<string, string[]>();
+  for (const u of parent.keys()) {
+    const root = find(u);
+    if (!clusters.has(root)) clusters.set(root, []);
+    clusters.get(root)!.push(u);
+  }
+  const nearClusters = [...clusters.values()].map((urls) => urls.sort()).sort((a, b) => b.length - a.length || (a[0] < b[0] ? -1 : 1));
+  return [...out, ...nearClusters.map((urls) => ({ ruleId: "CNT-007", key: "near-duplicate", urls }))];
 }

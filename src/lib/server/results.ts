@@ -8,7 +8,7 @@ import { previousAudit } from "../results/states";
 import { WorkflowError } from "../workflow/deps";
 import { getStore } from "../workspace";
 
-async function crawlOf(ws: Workspace, auditId: string): Promise<{ crawlId: string; siteId: string }> {
+export async function crawlOf(ws: Workspace, auditId: string): Promise<{ crawlId: string; siteId: string }> {
   const a = (await getStore(ws).read()).audits[auditId];
   if (!a) throw new WorkflowError("NOT_FOUND", "Audit not found.");
   if (!a.crawler) throw new WorkflowError("INVALID", "This audit ran on the legacy engine: compare it with /compare.");

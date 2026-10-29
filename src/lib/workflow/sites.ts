@@ -4,6 +4,7 @@ import { ALL_CHECK_CODES } from "../audit/catalog";
 import { isInternal, normalizePageUrl, originOf } from "../crawl/url";
 import { SafeFetchError, validateTargetUrl } from "../fetch/safe-fetch";
 import type { PageIntent, PageType, Site } from "../model";
+import { applyBranding, type BrandingPatch } from "../report/branding";
 import { WorkflowError, type Deps } from "./deps";
 
 export const MAX_SITES = 50;
@@ -52,7 +53,7 @@ function validateSafe(url: string): string {
   }
 }
 
-export async function updateSite(id: string, patch: { name?: string; sitemapUrl?: string | null; notes?: string }, deps: Deps): Promise<Site> {
+export async function updateSite(id: string, patch: { name?: string; sitemapUrl?: string | null; notes?: string; branding?: BrandingPatch }, deps: Deps): Promise<Site> {
   assertWritable(deps);
   const sitemapUrl = patch.sitemapUrl ? normalizePageUrl(validateSafe(patch.sitemapUrl)) : patch.sitemapUrl;
   return deps.store.update((d) => {
@@ -66,6 +67,12 @@ export async function updateSite(id: string, patch: { name?: string; sitemapUrl?
     if (sitemapUrl === null || sitemapUrl === "") delete s.sitemapUrl;
     else if (sitemapUrl) s.sitemapUrl = sitemapUrl;
     if (patch.notes !== undefined) s.notes = patch.notes.slice(0, 5000);
+    if (patch.branding) {
+      const b = applyBranding(s.branding, patch.branding);
+      if ("error" in b) throw new WorkflowError("INVALID", b.error);
+      if (Object.keys(b.branding).length) s.branding = b.branding;
+      else delete s.branding;
+    }
     return s;
   });
 }
