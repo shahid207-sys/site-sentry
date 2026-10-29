@@ -1,7 +1,8 @@
 // Phase 1 gate (docs/SPEC.md "P1 · Crawler + coverage"), run against the fixture site with real worker processes:
 //   1. Standard discovers 100% of the fixture's manifest URLs, including sitemap-only pages, and every URL (trap
 //      URLs included) ends in a terminal state with a reason. This run is also the timing run: 1,000 fetches at
-//      default politeness on localhost in under 6 minutes, /slow/ included.
+//      default politeness on localhost in under 6 minutes, /slow/ included, timed to the end of the URL phase
+//      (urlPhaseFinishedAt). The resource phase after it has its own budget and line: 500 external links in under 3 min.
 //   2. /deep/ is reachable by links to depth 8 (Custom: home + /deep/, unlimited depth).
 //   3. A worker killed mid-crawl is replaced and the crawl completes with no URL requested twice.
 //   4. The SSRF suites pass, and no /ssrf/ redirect reached the canary listener on 127.0.0.1.
@@ -16,11 +17,14 @@ import { createDb, migrateDb, type Db } from "../src/lib/db/client";
 import { crawls } from "../src/lib/db/schema";
 import { PROFILES } from "../src/lib/crawl/profiles";
 import { createCrawlQueue, enqueueCrawl } from "../src/lib/crawl/v2/queue";
+import { MAX_EXTERNAL_LINKS } from "../src/lib/crawl/v2/resources";
 import type { CrawlConfig } from "../src/lib/crawl/v2/runner";
 
 const DB_URL = process.env.GATE_DATABASE_URL ?? "postgres://sitesentry:sitesentry@127.0.0.1:5433/sitesentry_gate";
 const QUEUE = `crawl-gate-${randomUUID()}`;
 const TIME_LIMIT_S = 360;
+/** The external-link checks (MAX_EXTERNAL_LINKS, own per-host politeness) after the URL phase. */
+const EXTERNAL_LIMIT_S = 180;
 const ACTIVE = ["discovered", "queued", "fetching"];
 
 const results: { name: string; pass: boolean; detail: string }[] = [];
@@ -56,7 +60,7 @@ function startWorker(site: FixtureSite, label: string): { child: ChildProcess; b
     CRAWLER_LOCAL_CA: site.ca, // the fixture TLS listener's certificates; read only under NODE_ENV=test
     NODE_ENV: "test", // the loopback mapping above is refused under any other NODE_ENV
   });
-  const child = spawn(process.execPath, ["--import", "tsx", "src/worker/crawl-worker.ts"], { env, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, ["--max-old-space-size=768", "--import", "tsx", "src/worker/crawl-worker.ts"], { env, stdio: ["ignore", "pipe", "pipe"] });
   let out = "";
   let booted!: () => void;
   const bootedP = new Promise<void>((r) => (booted = r));
@@ -148,7 +152,27 @@ async function main() {
     const blocked = [...r.entries()].filter(([u]) => u.startsWith(abs(ROBOTS_BLOCKED_PREFIX)));
     check("robots.txt-blocked section is not fetched", blocked.length === 5 && blocked.every(([, x]) => x.state === "blocked_robots"), `${blocked.length} URLs: ${histogram(blocked.map(([, x]) => x))}`);
     check("Budget is fetches: exactly 1,000 committed", s.fetches_committed === PROFILES.standard.budget, `${s.fetches_committed} fetches committed`);
-    check(`1,000 URLs in under ${TIME_LIMIT_S / 60} minutes at default politeness`, elapsedS < TIME_LIMIT_S, `${elapsedS.toFixed(1)} s from enqueue to completed (${(s.fetches_committed / elapsedS).toFixed(2)} fetches/s; spec target ≥ 3 URLs/s)`);
+    // The URL phase ends at urlPhaseFinishedAt; probes and the resource phase (external links, images) follow it.
+    const res = (await db.$client.query<{ resources: { urlPhaseFinishedAt?: string; finishedAt?: string } | null }>("select resources from crawls where id = $1", [std])).rows[0].resources;
+    const urlPhaseEnd = res?.urlPhaseFinishedAt ? Date.parse(res.urlPhaseFinishedAt) : NaN;
+    const urlS = (urlPhaseEnd - t0) / 1000;
+    check(
+      `1,000 URLs in under ${TIME_LIMIT_S / 60} minutes at default politeness`,
+      urlS < TIME_LIMIT_S,
+      `${urlS.toFixed(1)} s from enqueue to the end of the URL phase (${(s.fetches_committed / urlS).toFixed(2)} fetches/s; spec target ≥ 3 URLs/s); ${elapsedS.toFixed(1)} s to completed, resource phase included`,
+    );
+    const ext = (
+      await db.$client.query<{ n: number; done: number; last: Date | null }>(
+        "select count(*)::int as n, count(*) filter (where state not in ('queued', 'started'))::int as done, max(updated_at) as last from resources where crawl_id = $1 and kind = 'external_link'",
+        [std],
+      )
+    ).rows[0];
+    const extS = ext.last ? (ext.last.getTime() - urlPhaseEnd) / 1000 : NaN;
+    check(
+      `External-link phase: ${MAX_EXTERNAL_LINKS} links in under ${EXTERNAL_LIMIT_S} s`,
+      ext.n === MAX_EXTERNAL_LINKS && ext.done === ext.n && extS < EXTERNAL_LIMIT_S,
+      `${ext.done} / ${ext.n} external links checked, the last ${extS.toFixed(1)} s after the URL phase ended (probes included)`,
+    );
     const repeats = [...hitCounts(site.hits)].filter(([, n]) => n > 1);
     info(`paths requested more than once: ${repeats.length ? repeats.map(([p, n]) => `${p} ×${n}`).join(", ") : "none"} (429 retries under the same claim are expected)`);
     const slow = sectionPaths(SECTIONS.find((x) => x.path === "/slow/")!).map(abs);

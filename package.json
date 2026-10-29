@@ -15,7 +15,7 @@
     "db:migrate": "tsx src/lib/db/migrate-cli.ts",
     "worker": "tsx src/worker/crawl-worker.ts",
     "worker:analysis": "tsx src/worker/analysis-worker.ts",
-    "gate:p1": "tsx scripts/gate-p1.ts",
+    "gate:p1": "node --max-old-space-size=768 --heapsnapshot-near-heap-limit=1 --diagnostic-dir=.data --import tsx scripts/gate-p1.ts",
     "gate:p2a": "node --max-old-space-size=768 --heapsnapshot-near-heap-limit=1 --diagnostic-dir=.data --import tsx scripts/gate-p2a.ts",
     "gate:p2b": "node --max-old-space-size=768 --heapsnapshot-near-heap-limit=1 --diagnostic-dir=.data --import tsx scripts/gate-p2b.ts"
   },
