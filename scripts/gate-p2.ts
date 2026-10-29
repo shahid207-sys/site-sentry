@@ -17,7 +17,8 @@
 // Run: npm run gate:p2a | npm run gate:p2b   (needs `docker compose up -d`; uses its own database)
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -31,6 +32,7 @@ import { crawls } from "../src/lib/db/schema";
 import { createCrawlQueue, enqueueCrawl } from "../src/lib/crawl/v2/queue";
 import type { CrawlConfig } from "../src/lib/crawl/v2/runner";
 import { MAX_EXTERNAL_LINKS, MAX_IMAGE_URLS } from "../src/lib/crawl/v2/resources";
+import { startMemoryLog } from "../src/lib/memory-log";
 import { DEFERRED_RULES, RULES } from "../src/lib/rules/registry";
 
 export type Phase = "2a" | "2b";
@@ -39,6 +41,10 @@ const FAMILIES: Record<Phase, RegExp> = { "2a": /^(IDX|META|CNT|AIS)-/, "2b": /^
 let PHASE: Phase = "2a";
 let DB_URL = "";
 let QUEUE = "";
+/** Memory: every process logs RSS and heap every 10 s; past this RSS it writes a heap snapshot and the gate stops. */
+const MEMORY_LIMIT_MB = 700;
+/** V8 heap cap for the worker (the gate gets the same from its npm script), so a leak fails fast with a clear error. */
+const HEAP_CAP_FLAGS = ["--max-old-space-size=768", "--heapsnapshot-near-heap-limit=1"];
 /** Rules whose positive case cannot be served by the local fixture; covered by their unit test only. */
 const UNIT_ONLY: Record<string, string> = {};
 const TARGET_MS = { perRule: 5, total: 50 };
@@ -64,7 +70,7 @@ async function setupDb(): Promise<Db> {
 }
 
 /** A real worker (crawl + in-process analysis worker). Politeness is raised: this gate measures rules, not crawl speed. */
-function startWorker(site: FixtureSite, blobDir: string): { child: ChildProcess; booted: Promise<void>; exited: Promise<number | null> } {
+function startWorker(site: FixtureSite, blobDir: string, memDir: string, onMemoryLimit: (detail: string) => void): { child: ChildProcess; booted: Promise<void>; exited: Promise<number | null> } {
   const env = {} as NodeJS.ProcessEnv;
   for (const [k, v] of Object.entries(process.env)) if (!/^(CRAWL(ER)?|ANALYSIS)_/.test(k)) env[k] = v;
   Object.assign(env, {
@@ -77,15 +83,20 @@ function startWorker(site: FixtureSite, blobDir: string): { child: ChildProcess;
     CRAWLER_HOST_RATE: "100",
     CRAWLER_HOST_CONCURRENCY: "8",
     BLOB_DIR: blobDir, // a fresh blob store, so the canary search covers exactly this gate's blobs
+    WORKER_MEMORY_LOG: path.join(memDir, "memory.log"),
+    WORKER_MEMORY_LIMIT_MB: String(MEMORY_LIMIT_MB),
     NODE_ENV: "test", // the loopback mapping above is refused under any other NODE_ENV
   });
-  const child = spawn(process.execPath, ["--import", "tsx", "src/worker/crawl-worker.ts"], { env, stdio: ["ignore", "pipe", "pipe"] });
+  // A heap snapshot taken near the cap (--heapsnapshot-near-heap-limit) is written to memDir (--diagnostic-dir).
+  const child = spawn(process.execPath, [...HEAP_CAP_FLAGS, "--diagnostic-dir", memDir, "--import", "tsx", "src/worker/crawl-worker.ts"], { env, stdio: ["ignore", "pipe", "pipe"] });
   let out = "";
   let booted!: () => void;
   const bootedP = new Promise<void>((r) => (booted = r));
   child.stdout!.on("data", (d: Buffer) => {
     out += d;
     if (out.includes('"event":"worker.boot"')) booted();
+    const lim = out.split("\n").find((l) => l.includes('"event":"memory.limit"'));
+    if (lim) onMemoryLimit(lim);
     if (out.length > 1_000_000) out = out.slice(-10_000);
   });
   child.stderr!.on("data", (d: Buffer) => process.stderr.write(`[worker] ${d}`));
@@ -206,12 +217,23 @@ export async function runGate(phase: Phase) {
   process.env.CRAWL_QUEUE_NAME = QUEUE;
   const q = createCrawlQueue();
   const blobDir = await mkdtemp(path.join(tmpdir(), `sitesentry-gate${phase}-blobs-`));
+  // Memory log for the gate and the worker (one JSON line per sample) and any heap snapshot: .data/gate-<phase>/.
+  const memDir = path.resolve(".data", `gate-${phase}`);
+  await rm(memDir, { recursive: true, force: true });
+  await mkdir(memDir, { recursive: true });
+  const memLog = path.join(memDir, "memory.log");
+  const stopForMemory = (who: string, detail: string) => {
+    console.error(`\nGATE STOPPED: ${who} passed ${MEMORY_LIMIT_MB} MB RSS. ${detail}\nMemory log: ${memLog}`);
+    w.child.kill("SIGKILL");
+    process.exit(2);
+  };
+  const gateMem = startMemoryLog({ file: memLog, label: "gate", limitBytes: MEMORY_LIMIT_MB * 1048576, onLimit: (rss, snap) => stopForMemory("the gate process", `RSS ${Math.round(rss / 1048576)} MB; heap snapshot ${snap}`) });
   console.log(
     `Phase ${phase} gate. Fixture ${site.origin} (+ ${Object.keys(HOSTS).length - 1} host variants). Defects: /meta/ ${DEFECT_COUNTS.meta}, /index/ ${DEFECT_COUNTS.index}, /content/ ${DEFECT_COUNTS.content}, ` +
       `/links/ ${DEFECT_COUNTS_2B.links}, /images/ ${DEFECT_COUNTS_2B.images}, /schema/ ${DEFECT_COUNTS_2B.schema}, /intl/ ${DEFECT_COUNTS_2B.intl}, /security/ ${DEFECT_COUNTS_2B.security}, /products/ 300 (one template defect). ` +
       `Gate database ${new URL(DB_URL).pathname.slice(1)}.\n`,
   );
-  const w = startWorker(site, blobDir);
+  const w = startWorker(site, blobDir, memDir, (d) => stopForMemory("the worker", d));
   const mainCrawl = { id: "" };
   const fired = new Set<string>();
   const evaluated = new Map<string, number>();
@@ -323,6 +345,18 @@ export async function runGate(phase: Phase) {
     await db.$client.end();
     await rm(blobDir, { recursive: true, force: true });
   }
+
+  // Peak memory per process, from the shared log (the worker's last samples are in it; it was killed after them).
+  const gatePeak = gateMem.stop();
+  const lines = readFileSync(memLog, "utf8").trim().split("\n").map((l) => JSON.parse(l) as { label: string; pid: number; s: number; rssMb: number; heapUsedMb: number });
+  console.log(`\n== Memory (sampled every 10 s; log ${memLog})`);
+  for (const label of ["gate", "worker"]) {
+    const ls = lines.filter((l) => l.label === label);
+    if (!ls.length) continue;
+    const top = ls.reduce((a, b) => (b.rssMb > a.rssMb ? b : a));
+    info(`${label} (pid ${top.pid}): peak RSS ${top.rssMb} MB at ${top.s} s, peak heap used ${Math.max(...ls.map((l) => l.heapUsedMb))} MB, ${ls.length} samples`);
+  }
+  check(`Every process stayed under ${MEMORY_LIMIT_MB} MB RSS`, lines.every((l) => l.rssMb < MEMORY_LIMIT_MB) && gatePeak.rss < MEMORY_LIMIT_MB * 1048576, `max ${Math.max(...lines.map((l) => l.rssMb))} MB`);
 
   const failed = results.filter((x) => !x.pass);
   console.log(`\n${failed.length ? "GATE FAILED" : "GATE PASSED"}: ${results.length - failed.length} / ${results.length} checks passed.`);
