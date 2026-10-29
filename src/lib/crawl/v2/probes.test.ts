@@ -6,6 +6,7 @@ describe("hostVariants", () => {
     expect(hostVariants("https://example.com")).toEqual({ scheme: "http://example.com/", www: "https://www.example.com/" });
     expect(hostVariants("https://www.example.com")).toEqual({ scheme: "http://www.example.com/", www: "https://example.com/" });
     expect(hostVariants("http://fixture.test:8080")).toEqual({ scheme: "https://fixture.test:8080/", www: "http://www.fixture.test:8080/" });
+    expect(hostVariants("https://fixture.test:8443")).toEqual({ scheme: "http://fixture.test:8443/", www: "https://www.fixture.test:8443/" });
   });
 
   it("has no www variant for IP or single-label hosts", () => {

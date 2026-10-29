@@ -8,6 +8,8 @@ import { DEFAULT_POLICY, systemResolve, type FetchPolicy } from "../../fetch/saf
 /**
  * CRAWLER_LOCAL_HOSTS="site.test=127.0.0.1,other.test=127.0.0.1" and CRAWLER_LOCAL_PORTS="8081,8082".
  * Only the listed names resolve to the listed addresses, and only those addresses are let through the IP guard.
+ * CRAWLER_LOCAL_CA (PEM certificates) is trusted in addition to the system roots, for the fixture's TLS listener; it is
+ * read only here, so it shares the NODE_ENV=test guard.
  */
 export function workerFetchPolicy(env: Record<string, string | undefined> = process.env): FetchPolicy {
   const raw = env.CRAWLER_LOCAL_HOSTS?.trim();
@@ -32,5 +34,9 @@ export function workerFetchPolicy(env: Record<string, string | undefined> = proc
     isBlocked: (ip) => !allowedIps.has(ip) && isBlockedIp(ip),
     allowedPorts: ports,
     allowLocalNames: false,
+    ...(env.CRAWLER_LOCAL_CA?.trim() ? { ca: pemBlocks(env.CRAWLER_LOCAL_CA) } : {}),
   };
 }
+
+/** The certificates of a PEM bundle, one string each. */
+const pemBlocks = (pem: string) => pem.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) ?? [];

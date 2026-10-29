@@ -11,7 +11,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { DEEP_CHAIN_DEPTH, deepChainPath, manifestPaths, ROBOTS_BLOCKED_PREFIX, SECTIONS, sectionPaths } from "../fixtures/site/definition";
-import { LOCAL_HOSTS_ENV, startFixtureSite, type FixtureSite } from "../fixtures/site/server";
+import { hitKey, LOCAL_HOSTS_ENV, startFixtureSite, type FixtureSite, type Hit } from "../fixtures/site/server";
 import { createDb, migrateDb, type Db } from "../src/lib/db/client";
 import { crawls } from "../src/lib/db/schema";
 import { PROFILES } from "../src/lib/crawl/profiles";
@@ -53,6 +53,7 @@ function startWorker(site: FixtureSite, label: string): { child: ChildProcess; b
     ANALYSIS_QUEUE_NAME: `${QUEUE}-analysis`,
     CRAWLER_LOCAL_HOSTS: LOCAL_HOSTS_ENV, // fixture.test and its www / alt hosts (the probes ask www.fixture.test)
     CRAWLER_LOCAL_PORTS: String(site.port),
+    CRAWLER_LOCAL_CA: site.ca, // the fixture TLS listener's certificates; read only under NODE_ENV=test
     NODE_ENV: "test", // the loopback mapping above is refused under any other NODE_ENV
   });
   const child = spawn(process.execPath, ["--import", "tsx", "src/worker/crawl-worker.ts"], { env, stdio: ["ignore", "pipe", "pipe"] });
@@ -100,13 +101,11 @@ const histogram = (xs: Iterable<{ state: string }>) => {
   for (const x of xs) h[x.state] = (h[x.state] ?? 0) + 1;
   return Object.entries(h).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(", ");
 };
-/** Requests per URL. Hits on other fixture hosts (the www probe asks www.fixture.test/) are keyed with their host. */
-function hitCounts(hits: { path: string; host?: string }[]) {
+/** Requests per URL. Hits on other fixture hosts (the www probe asks www.fixture.test/), over plain http, or with
+ * another method are keyed with their host, scheme and method (hitKey), so each is its own request. */
+function hitCounts(hits: Hit[]) {
   const m = new Map<string, number>();
-  for (const h of hits) {
-    const k = h.host ? `${h.host}${h.path}` : h.path;
-    m.set(k, (m.get(k) ?? 0) + 1);
-  }
+  for (const h of hits) m.set(hitKey(h), (m.get(hitKey(h)) ?? 0) + 1);
   return m;
 }
 
@@ -156,7 +155,7 @@ async function main() {
     info(`/slow/: ${slow.map((u) => `${new URL(u).pathname} ${r.get(u)?.state}`).join(", ")}`);
 
     // ---------- 2. /deep/ reachable by links to depth 8 ----------
-    const deep = await newCrawl(db, site, "custom", 1_000, null, { scope: { include: ["^http://fixture\\.test:\\d+/$", "^http://fixture\\.test:\\d+/deep/"], exclude: [] } });
+    const deep = await newCrawl(db, site, "custom", 1_000, null, { scope: { include: ["^https://fixture\\.test:\\d+/$", "^https://fixture\\.test:\\d+/deep/"], exclude: [] } });
     await enqueueCrawl(q, deep);
     await waitFor("the /deep/ crawl to finish", 10 * 60_000, () => finished(db, deep));
     const d = await rows(db, deep);
@@ -183,7 +182,7 @@ async function main() {
     const fromHits = site.hits.length;
     // /slow/p-1..6 are excluded (their 429/503 retries are a separate behaviour); /slow/ and p-7..9 answer after 4 s,
     // which gives the kill a request to land in the middle of.
-    const kc = await newCrawl(db, site, "custom", 400, 10, { scope: { include: [], exclude: [String.raw`^http://fixture\.test:\d+/slow/p-[1-6]$`] } });
+    const kc = await newCrawl(db, site, "custom", 400, 10, { scope: { include: [], exclude: [String.raw`^https://fixture\.test:\d+/slow/p-[1-6]$`] } });
     const w1 = startWorker(site, "worker-1");
     await w1.booted;
     await enqueueCrawl(q, kc);

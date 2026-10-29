@@ -5,14 +5,23 @@
 // The responses come from `createRouter`, a pure function of host, path and query, so the fast fixture test
 // (site-rules.test.ts) renders exactly what the server sends. Only /slow/ timing and throttling live in the server.
 //
+// One port serves https and plain http: the first byte of a connection picks TLS (0x16, a handshake) or HTTP. Plain http
+// answers 301 to https (the IDX-020 negative), except on alt2.test, which serves both schemes. Certificates are made at
+// startup (no key is kept in the repo): fixture.test's expires in TLS_DAYS.main days (SEC-003 positive), the alternate
+// hosts' in a year (negative). FixtureSite.ca lists them, for the crawler to trust (CRAWLER_LOCAL_CA, tests only).
+//
 // Hosts (all on one port, chosen by the Host header; the crawler maps each name to loopback):
 //   fixture.test      the site itself
-//   www.fixture.test  301 to fixture.test (IDX-021 negative)
+//   www.fixture.test  301 to https://fixture.test (IDX-021 negative)
 //   alt.test          robots.txt answers 503 (IDX-025)
-//   alt2.test         robots.txt without a Sitemap line, no sitemap, no favicon, no llms.txt; www.alt2.test serves 200 too
+//   alt2.test         robots.txt without a Sitemap line, no sitemap, no favicon, no llms.txt; www.alt2.test serves 200 too,
+//                     and so does plain http (IDX-020 positive)
 //   alt3.test         a 50,001-URL sitemap (IDX-030) and an llms.txt served as HTML (AIS-003)
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
+import { createServer as createNetServer, type AddressInfo, type Socket } from "node:net";
+import { createSecureContext } from "node:tls";
+import { generate } from "selfsigned";
 import { gzipSync } from "node:zlib";
 import {
   DEEP_CHAIN_DEPTH,
@@ -34,11 +43,22 @@ export interface Hit {
   path: string;
   status: number;
   host?: string;
+  /** Set for plain-http requests (https is the default). */
+  scheme?: "http";
+  /** Set when not GET. */
+  method?: string;
+  /** The Range header, when sent. */
+  range?: string;
 }
 
+/** Hit key for duplicate checks: host (other than fixture.test), scheme and method are part of a request's identity. */
+export const hitKey = (h: Hit) => `${h.method && h.method !== "GET" ? `${h.method} ` : ""}${h.scheme ? "http://" : ""}${h.host ?? ""}${h.path}`;
+
 export interface FixtureSite {
-  /** e.g. http://fixture.test:51234 (the host must be mapped to 127.0.0.1 by the crawler's fetch policy). */
+  /** e.g. https://fixture.test:51234 (the host must be mapped to 127.0.0.1 by the crawler's fetch policy). */
   origin: string;
+  /** PEM certificates of the TLS listener, for the crawler to trust (CRAWLER_LOCAL_CA). */
+  ca: string;
   port: number;
   /** Origin of each alternate host, same port. */
   origins: Record<HostKey, string>;
@@ -65,6 +85,9 @@ export type HostKey = keyof typeof HOSTS;
 export const LOCAL_HOSTS_ENV = Object.values(HOSTS)
   .map((h) => `${h}=127.0.0.1`)
   .join(",");
+
+/** Days until the TLS certificates expire: fixture.test's is inside SEC-003's 21-day window, the others' are not. */
+export const TLS_DAYS = { main: 10, other: 365 } as const;
 
 /** URLs in the alt3.test sitemap: one past the protocol limit. */
 export const ALT3_SITEMAP_URLS = 50_001;
@@ -139,13 +162,13 @@ export function fixtureSitemaps(): Sitemap[] {
 }
 
 export interface Router {
-  (host: string, pathAndQuery: string): Response;
+  (host: string, pathAndQuery: string, scheme?: "http" | "https"): Response;
   origins: Record<HostKey, string>;
 }
 
 /** Every response of the fixture site, by Host header and request target. Deterministic; caches sitemap bodies. */
 export function createRouter(port: number, canaryPort: number): Router {
-  const origins = Object.fromEntries(Object.entries(HOSTS).map(([k, h]) => [k, `http://${h}:${port}`])) as Record<HostKey, string>;
+  const origins = Object.fromEntries(Object.entries(HOSTS).map(([k, h]) => [k, `https://${h}:${port}`])) as Record<HostKey, string>;
   const origin = origins.main;
   const manifest = new Set(manifestPaths());
   const noindex = new Set(noindexPaths());
@@ -262,16 +285,39 @@ export function createRouter(port: number, canaryPort: number): Router {
     return notFound();
   }
 
-  const route = ((hostHeader: string, target: string): Response => {
+  const route = ((hostHeader: string, target: string, scheme: "http" | "https" = "https"): Response => {
     const host = hostHeader.replace(/:\d+$/, "").toLowerCase();
     const url = new URL(target, "http://x");
     const key = (Object.keys(HOSTS) as HostKey[]).find((k) => HOSTS[k] === host) ?? "main";
     if (key === "www") return redirectTo(301, `${origin}${url.pathname}${url.search}`);
+    if (scheme === "http" && key !== "alt2" && key !== "www2") return redirectTo(301, `${origins[key]}${url.pathname}${url.search}`);
     if (key === "main") return mainSite(url.pathname, url.searchParams, url.search);
     return altSite(key, url.pathname);
   }) as Router;
   route.origins = origins;
   return route;
+}
+
+/** Self-signed certificates for the fixture hosts, made per run: fixture.test (and www) and the alternate hosts. */
+async function certificates() {
+  const make = async (names: string[], days: number) => {
+    const pems = await generate([{ name: "commonName", value: names[0] }], {
+      keyType: "ec",
+      algorithm: "sha256",
+      notBeforeDate: new Date(Date.now() - 86_400_000),
+      notAfterDate: new Date(Date.now() + days * 86_400_000),
+      // The library's default extensions, with every host name in the SAN.
+      extensions: [
+        { name: "basicConstraints", cA: false, critical: true },
+        { name: "keyUsage", digitalSignature: true, keyEncipherment: true, critical: true },
+        { name: "extKeyUsage", serverAuth: true, clientAuth: true },
+        { name: "subjectAltName", altNames: names.map((value) => ({ type: 2, value })) },
+      ],
+    });
+    return { names, key: pems.private, cert: pems.cert };
+  };
+  const others = Object.values(HOSTS).filter((h) => h !== HOSTS.main && h !== HOSTS.www);
+  return [await make([HOSTS.main, HOSTS.www], TLS_DAYS.main), await make(others, TLS_DAYS.other)];
 }
 
 export async function startFixtureSite(opts: { port?: number } = {}): Promise<FixtureSite> {
@@ -288,18 +334,26 @@ export async function startFixtureSite(opts: { port?: number } = {}): Promise<Fi
   let router: Router | null = null;
   const throttled = new Set<string>();
 
-  function respond(req: IncomingMessage, res: ServerResponse) {
+  function respond(req: IncomingMessage, res: ServerResponse, scheme: "http" | "https") {
     const host = (req.headers.host ?? HOSTS.main).replace(/:\d+$/, "");
-    // Hits keep the bare path for fixture.test (what the Phase 1 gate compares); other hosts are tagged.
-    const log = (status: number): Hit => ({ t: Date.now(), path: req.url ?? "/", status, ...(host === HOSTS.main ? {} : { host }) });
+    // Hits keep the bare path for GETs to fixture.test over https (what the Phase 1 gate compares); anything else is tagged.
+    const log = (status: number): Hit => ({
+      t: Date.now(),
+      path: req.url ?? "/",
+      status,
+      ...(host === HOSTS.main ? {} : { host }),
+      ...(scheme === "http" ? { scheme } : {}),
+      ...(req.method && req.method !== "GET" ? { method: req.method } : {}),
+      ...(req.headers.range ? { range: req.headers.range } : {}),
+    });
     requests.push(log(0));
     const send = (r: Response) => {
       hits.push(log(r.status));
-      res.writeHead(r.status, { "content-type": r.type, ...r.headers }).end(r.body);
+      res.writeHead(r.status, { "content-type": r.type, ...r.headers }).end(req.method === "HEAD" ? undefined : r.body);
     };
-    const r = router!(host, req.url ?? "/");
+    const r = router!(host, req.url ?? "/", scheme);
     const path = new URL(req.url ?? "/", "http://x").pathname;
-    if (host !== HOSTS.main || !path.startsWith("/slow/") || r.status !== 200) return send(r);
+    if (host !== HOSTS.main || scheme !== "https" || !path.startsWith("/slow/") || r.status !== 200) return send(r);
 
     const i = path === "/slow/" ? 0 : Number(path.slice("/slow/p-".length));
     setTimeout(() => {
@@ -312,20 +366,41 @@ export async function startFixtureSite(opts: { port?: number } = {}): Promise<Fi
     }, SLOW.ttfbMs);
   }
 
-  const server: Server = createServer(respond);
+  const certs = await certificates();
+  const contexts = new Map(certs.flatMap((c) => c.names.map((n) => [n, createSecureContext({ key: c.key, cert: c.cert })] as const)));
+  const http = createServer((req, res) => respond(req, res, "http"));
+  const https = createHttpsServer(
+    { key: certs[0].key, cert: certs[0].cert, SNICallback: (name, cb) => cb(null, contexts.get(name.toLowerCase()) ?? contexts.get(HOSTS.main)!) },
+    (req, res) => respond(req, res, "https"),
+  );
+  // One port for both schemes: a TLS connection opens with a handshake record (0x16); anything else is plain HTTP.
+  const sockets = new Set<Socket>();
+  const server = createNetServer({ pauseOnConnect: true }, (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+    socket.on("error", () => socket.destroy());
+    socket.once("data", (first) => {
+      socket.pause();
+      socket.unshift(first);
+      (first[0] === 0x16 ? https : http).emit("connection", socket);
+      process.nextTick(() => socket.resume());
+    });
+    socket.resume();
+  });
   await new Promise<void>((r) => server.listen(opts.port ?? 0, "127.0.0.1", r));
   const port = (server.address() as AddressInfo).port;
   router = createRouter(port, canaryPort);
 
   return {
     origin: router.origins.main,
+    ca: certs.map((c) => `${c.cert.trim()}\n`).join(""),
     port,
     origins: router.origins,
     hits,
     requests,
     canaryHits,
     close: async () => {
-      server.closeAllConnections();
+      for (const s of sockets) s.destroy();
       canary.closeAllConnections();
       await Promise.all([new Promise((r) => server.close(r)), new Promise((r) => canary.close(r))]);
     },

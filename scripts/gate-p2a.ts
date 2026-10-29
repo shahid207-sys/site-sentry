@@ -23,10 +23,8 @@ import { DEFERRED_RULES, RULES } from "../src/lib/rules/registry";
 
 const DB_URL = process.env.GATE_DATABASE_URL ?? "postgres://sitesentry:sitesentry@127.0.0.1:5433/sitesentry_gate2a";
 const QUEUE = `crawl-gate2a-${randomUUID()}`;
-/** Rules whose positive case cannot be served by a plain-http local fixture; covered by their unit test only. */
-const UNIT_ONLY: Record<string, string> = {
-  "IDX-020": "needs http and https on one host; the local fixture has no TLS listener, so its https probe fails (a negative)",
-};
+/** Rules whose positive case cannot be served by the local fixture; covered by their unit test only. */
+const UNIT_ONLY: Record<string, string> = {};
 const TARGET_MS = { perRule: 5, total: 50 };
 
 const results: { name: string; pass: boolean; detail: string }[] = [];
@@ -59,6 +57,7 @@ function startWorker(site: FixtureSite): { child: ChildProcess; booted: Promise<
     ANALYSIS_QUEUE_NAME: `${QUEUE}-analysis`,
     CRAWLER_LOCAL_HOSTS: LOCAL_HOSTS_ENV,
     CRAWLER_LOCAL_PORTS: String(site.port),
+    CRAWLER_LOCAL_CA: site.ca, // the fixture TLS listener's certificates; read only under NODE_ENV=test
     CRAWLER_HOST_RATE: "100",
     CRAWLER_HOST_CONCURRENCY: "8",
     NODE_ENV: "test", // the loopback mapping above is refused under any other NODE_ENV
@@ -121,7 +120,7 @@ function plans(site: FixtureSite): Plan[] {
       key: "main",
       label: HOSTS.main,
       // Custom, unlimited depth; the products facet trap is excluded (it is a Phase 1 subject and never ends).
-      config: { scope: { include: [], exclude: [String.raw`^http://fixture\.test:\d+/products/\?`] }, aiCrawlers: "allow" },
+      config: { scope: { include: [], exclude: [String.raw`^https://fixture\.test:\d+/products/\?`] }, aiCrawlers: "allow" },
       budget: 5_000,
       expected: main,
       exactPrefixes: [...EXACT_SECTIONS.map((s) => abs("main", s)), abs("main", "/robots.txt"), abs("main", "/sitemaps/"), abs("main", "/sitemap_index.xml"), abs("main", "/llms.txt")],
@@ -141,12 +140,12 @@ function plans(site: FixtureSite): Plan[] {
     },
     {
       key: "alt2",
-      label: `${HOSTS.alt2} (no sitemap, www serves 200, no favicon)`,
+      label: `${HOSTS.alt2} (no sitemap, www and plain http serve 200, no favicon)`,
       config: { aiCrawlers: "block" },
       budget: 10,
       expected: new Map([
         [abs("alt2", "/robots.txt"), ["IDX-027", "AIS-001"]],
-        [abs("alt2", "/"), ["IDX-021", "META-019"]],
+        [abs("alt2", "/"), ["IDX-020", "IDX-021", "META-019"]], // http, https, www and non-www all serve 200
         [abs("alt2", "/llms.txt"), ["AIS-003"]], // missing (404); alt3 covers the malformed case
       ]),
       exactPrefixes: [o.alt2],

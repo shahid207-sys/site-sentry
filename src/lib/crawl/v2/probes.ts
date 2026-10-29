@@ -48,8 +48,7 @@ export function hostVariants(origin: string): { scheme: string; www: string | nu
   const u = new URL("/", origin);
   const scheme = new URL(u);
   scheme.protocol = u.protocol === "https:" ? "http:" : "https:";
-  // Keep an explicit port only for plain-http origins (local fixtures); default ports follow the scheme.
-  if (u.protocol === "https:") scheme.port = "";
+  // An explicit port is kept on both schemes (a local fixture serves both on one port); a default port follows the scheme.
   const isIp = /^\d+\.\d+\.\d+\.\d+$/.test(u.hostname) || u.hostname.includes(":") || u.hostname.startsWith("[");
   let www: string | null = null;
   if (!isIp && u.hostname.includes(".")) {

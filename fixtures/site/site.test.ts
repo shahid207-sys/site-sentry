@@ -1,15 +1,32 @@
+import { connect, type PeerCertificate } from "node:tls";
 import { gunzipSync } from "node:zlib";
+import { Agent, fetch } from "undici";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DEEP_CHAIN_DEPTH, deepChainPath, manifestPaths, noindexPaths, REDIRECTS, SECTION_PAGE_TOTAL, SECTIONS, sectionPaths, SSRF_TARGETS } from "./definition";
-import { startFixtureSite, type FixtureSite } from "./server";
+import { HOSTS, startFixtureSite, TLS_DAYS, type FixtureSite } from "./server";
 
 let site: FixtureSite;
+let agent: Agent;
 beforeAll(async () => {
   site = await startFixtureSite();
+  // Every fixture name connects to loopback, and the fixture's own certificates are trusted.
+  agent = new Agent({ connect: { ca: site.ca, lookup: (_h, o, cb) => (o?.all ? cb(null, [{ address: "127.0.0.1", family: 4 }]) : cb(null, "127.0.0.1", 4)) } });
 });
-afterAll(() => site.close());
+afterAll(async () => {
+  await agent.close();
+  await site.close();
+});
 
-const get = (path: string) => fetch(`http://127.0.0.1:${site.port}${path}`, { redirect: "manual" });
+const get = (path: string, origin = site.origin) => fetch(`${origin}${path}`, { redirect: "manual", dispatcher: agent });
+/** The certificate a host presents on the fixture port. */
+const peerCert = (host: string) =>
+  new Promise<PeerCertificate>((resolve, reject) => {
+    const s = connect({ host: "127.0.0.1", port: site.port, servername: host, ca: site.ca }, () => {
+      resolve(s.getPeerCertificate());
+      s.end();
+    });
+    s.on("error", reject);
+  });
 const locs = (xml: string) => [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]);
 
 describe("fixture definition", () => {
@@ -64,6 +81,25 @@ describe("fixture server", () => {
   it("chains /deep/ one level per page, and the products listing never runs out of new query URLs", async () => {
     for (let d = 1; d < DEEP_CHAIN_DEPTH; d++) expect(await (await get(deepChainPath(d))).text()).toContain(`href="${deepChainPath(d + 1)}"`);
     expect(await (await get("/products/?color=red&page=7")).text()).toContain('href="/products/?color=red&page=8"');
+  });
+
+  it("serves https and plain http on one port: http answers 301 to https, except on alt2.test (both schemes)", async () => {
+    expect(site.origin).toBe(`https://${HOSTS.main}:${site.port}`);
+    const plain = await get("/clean/p-1?x=1", `http://${HOSTS.main}:${site.port}`);
+    expect(plain.status).toBe(301);
+    expect(plain.headers.get("location")).toBe(`${site.origin}/clean/p-1?x=1`);
+    expect((await get("/", `http://${HOSTS.alt2}:${site.port}`)).status).toBe(200);
+    expect((await get("/", site.origins.alt2)).status).toBe(200);
+    expect(site.requests.some((h) => h.scheme === "http" && h.host === HOSTS.alt2)).toBe(true);
+  });
+
+  it("presents a certificate per host: fixture.test's expires within 21 days, the alternate hosts' in a year", async () => {
+    const days = (c: PeerCertificate) => (Date.parse(c.valid_to) - Date.now()) / 86_400_000;
+    const main = await peerCert(HOSTS.main);
+    expect(main.subjectaltname).toContain(`DNS:${HOSTS.www}`);
+    expect(days(main)).toBeGreaterThan(TLS_DAYS.main - 1);
+    expect(days(main)).toBeLessThanOrEqual(TLS_DAYS.main);
+    expect(days(await peerCert(HOSTS.alt3))).toBeGreaterThan(300);
   });
 
   it("hides /js/ links from non-rendering crawlers and redirects /ssrf/ pages to the canary and private ranges", async () => {

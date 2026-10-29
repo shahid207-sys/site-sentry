@@ -16,6 +16,18 @@ describe("workerFetchPolicy", () => {
     expect(() => workerFetchPolicy({ NODE_ENV: nodeEnv, CRAWLER_LOCAL_HOSTS: "site.test=127.0.0.1" })).toThrow(/refused unless NODE_ENV=test/);
   });
 
+  it("trusts CRAWLER_LOCAL_CA only with the test mapping", () => {
+    const one = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    const two = one.replace("MIIB", "MIIC");
+    const pem = `${one}\n${two}\n`;
+    // A bundle is split into its certificates (one concatenated string can leave all but the first untrusted).
+    expect(workerFetchPolicy({ ...TEST, CRAWLER_LOCAL_HOSTS: "site.test=127.0.0.1", CRAWLER_LOCAL_CA: pem }).ca).toEqual([one, two]);
+    expect(workerFetchPolicy({ ...TEST, CRAWLER_LOCAL_HOSTS: "site.test=127.0.0.1" }).ca).toBeUndefined();
+    // Without the mapping the production policy is returned, which trusts the system roots only.
+    expect(workerFetchPolicy({ NODE_ENV: "production", CRAWLER_LOCAL_CA: pem })).toBe(DEFAULT_POLICY);
+    expect(DEFAULT_POLICY.ca).toBeUndefined();
+  });
+
   it("only accepts *.test names", () => {
     expect(() => workerFetchPolicy({ ...TEST, CRAWLER_LOCAL_HOSTS: "example.com=127.0.0.1" })).toThrow(/\.test/);
   });

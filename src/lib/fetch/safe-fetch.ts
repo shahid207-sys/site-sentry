@@ -1,6 +1,8 @@
 import type { LookupAddress, LookupOptions } from "node:dns";
 import { lookup as dnsLookupAsync } from "node:dns/promises";
+import { createHash } from "node:crypto";
 import { isIP } from "node:net";
+import { rootCertificates } from "node:tls";
 import { gunzipSync } from "node:zlib";
 import type { ReadableStream } from "node:stream/web";
 import { Agent, fetch } from "undici";
@@ -58,6 +60,8 @@ export interface FetchPolicy {
   allowedPorts: ReadonlySet<string>;
   /** Allow single-label and .local/.internal/.localhost names (they still have to resolve to allowed addresses). */
   allowLocalNames: boolean;
+  /** Extra trusted CA certificates (PEM), added to the system roots. Test policies only: the local fixture's TLS listener. */
+  ca?: string[];
 }
 
 export const systemResolve: ResolveHost = async (hostname) => (await dnsLookupAsync(hostname, { all: true, verbatim: true })).map((a) => a.address);
@@ -158,9 +162,10 @@ function pinnedLookup(ip: string) {
 const MAX_PINNED_AGENTS = 256;
 const pinnedAgents = new Map<string, Agent>();
 
-/** One keep-alive agent per (host, pinned address), so repeat requests to a host reuse connections. */
-export function pinnedAgent(hostname: string, ip: string): Agent {
-  const key = `${hostname}\u0000${ip}`;
+/** One keep-alive agent per (host, pinned address, extra CAs), so repeat requests to a host reuse connections. */
+export function pinnedAgent(hostname: string, ip: string, ca?: string[]): Agent {
+  const caKey = ca?.length ? createHash("sha256").update(ca.join("\n")).digest("hex").slice(0, 16) : "";
+  const key = `${hostname}\u0000${ip}\u0000${caKey}`;
   let a = pinnedAgents.get(key);
   if (a) {
     pinnedAgents.delete(key); // move to the back: the map doubles as an LRU
@@ -168,7 +173,7 @@ export function pinnedAgent(hostname: string, ip: string): Agent {
     return a;
   }
   a = new Agent({
-    connect: { lookup: pinnedLookup(ip), timeout: CONNECT_TIMEOUT_MS },
+    connect: { lookup: pinnedLookup(ip), timeout: CONNECT_TIMEOUT_MS, ...(ca?.length ? { ca: [...rootCertificates, ...ca] } : {}) },
     headersTimeout: SOCKET_IDLE_BACKSTOP_MS,
     bodyTimeout: SOCKET_IDLE_BACKSTOP_MS,
     connections: 8,
@@ -320,7 +325,7 @@ async function fetchWithPolicy(input: string, opts: FetchOptions, policy: FetchP
           res = await fetch(url, {
             method,
             redirect: "manual",
-            dispatcher: pinnedAgent(url.hostname, ips[i]),
+            dispatcher: pinnedAgent(url.hostname, ips[i], policy.ca),
             signal,
             headers: {
               ...(opts.headers && url.origin === firstOrigin ? opts.headers : {}),
