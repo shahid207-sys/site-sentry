@@ -232,7 +232,12 @@ async function main() {
     await rm(blobDir, { recursive: true, force: true });
   }
 
-  // ---------- 5. Report (the worker is stopped: Chromium does not share the machine with it) ----------
+  // The heavy steps after the crawls run one at a time, the worker and the fixture already stopped: the migration's
+  // child processes first, then Chromium for the PDF, closed before anything else starts.
+  // ---------- 7. JSON → Postgres migration ----------
+  await migrationCheck();
+
+  // ---------- 5. Report ----------
   if (a3) {
     console.log("\n== Report of audit 3");
     const data = await reportData(db, a3, { agencyName: "Gate Agency", brandColor: "#0a7d52" });
@@ -265,9 +270,6 @@ async function main() {
     check("Share link: refused after expiry, even with the right cookie or password", expired.status === 410 && expiredPost.status === 410, `GET with cookie → ${expired.status}, POST right password → ${expiredPost.status}`);
   }
   await db.$client.end();
-
-  // ---------- 7. JSON → Postgres migration ----------
-  await migrationCheck();
 
   const gatePeak = gateMem.stop();
   const lines = readFileSync(memLog, "utf8").trim().split("\n").map((l) => JSON.parse(l) as { label: string; rssMb: number });
