@@ -76,7 +76,8 @@ describe("analyseCrawl", () => {
     expect(runs).toHaveLength(RULES.length);
     for (const r of RULES) {
       const run = runs.find((x) => x.rule_id === r.id)!;
-      expect(run.evaluated, r.id).toBe(r.scope === "page" ? 5 : 1);
+      // Resource rules run once per checked image or external link; this site has neither.
+      expect(run.evaluated, r.id).toBe(r.scope === "page" ? 5 : r.scope === "resource" ? 0 : 1);
     }
     expect(runs.find((x) => x.rule_id === "AIS-002")!.status).toBe("needs_config");
     expect(runs.filter((x) => x.status === "error")).toEqual([]);
