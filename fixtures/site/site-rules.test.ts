@@ -5,6 +5,7 @@
 // probes, sitemaps and the crawler's own states, is scripts/gate-p2a.ts and scripts/gate-p2b.ts.
 import { describe, expect, it } from "vitest";
 import { parseHtml } from "../../src/lib/audit/parse";
+import { cdnManagedReason } from "../../src/lib/crawl/cdn-paths";
 import { extractOutlinks } from "../../src/lib/crawl/v2/discovery";
 import { crawlView, effectiveCanonical } from "../../src/lib/rules/analyse";
 import type { CrawlView, Finding, PageView, ResourceFacts, SiteCtx, UrlFacts } from "../../src/lib/rules/contract";
@@ -113,6 +114,8 @@ function factsOf(url: string): UrlFacts {
   byUrl.set(url, f);
   if (p) return f;
   if (excluded.some((r) => r.test(url))) return Object.assign(f, { state: "excluded_by_rule", statusCode: null });
+  // As the crawler does: a CDN path is recorded, never fetched.
+  if (cdnManagedReason(new URL(url).pathname)) return Object.assign(f, { state: "cdn_managed", statusCode: null });
   const r = routeUrl(url);
   f.statusCode = r.status;
   if (r.status >= 300 && r.status < 400 && r.headers.location) {

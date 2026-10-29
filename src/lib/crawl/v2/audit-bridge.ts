@@ -22,7 +22,7 @@ export function getCrawlQueue(): Queue<CrawlJob> {
   return g.__ssCrawlQueue;
 }
 
-const SKIPPED = ["blocked_robots", "out_of_scope", "excluded_by_rule", "budget_exhausted", "depth_exceeded", "cancelled", "redirected", "non_html"];
+const SKIPPED = ["blocked_robots", "out_of_scope", "excluded_by_rule", "cdn_managed", "budget_exhausted", "depth_exceeded", "cancelled", "redirected", "non_html"];
 const FAILED = ["failed_timeout", "failed_dns", "failed_tls", "failed_network", "interrupted"];
 const INSPECTED = ["fetched", "oversized", "analysed"];
 const ACTIVE = ["discovered", "queued", "fetching"];

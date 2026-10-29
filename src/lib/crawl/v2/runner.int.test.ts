@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { getRawHtml, LocalBlobStore, type BlobStore } from "@/lib/snapshot/blob-store";
 import { gunzipSync } from "node:zlib";
-import { activeCount, stateCounts } from "./frontier";
+import { activeCount, cdnManagedLinks, stateCounts } from "./frontier";
 import { HostThrottle, type ThrottleOptions } from "./politeness";
 import { isTwinOrigin, MAX_THROTTLE_RETRIES, runCrawl, V2_USER_AGENT, type RunnerOptions, type StartRedirect } from "./runner";
 import { workerFetchPolicy } from "./fetch-policy";
@@ -201,6 +201,21 @@ describe("runCrawl", () => {
     expect(counts.budget_exhausted).toBeGreaterThan(0);
     expect(await activeCount(db, c)).toEqual({ discovered: 0, queued: 0, fetching: 0 });
     expectNoDuplicateFetches();
+  });
+
+  it("records CDN-injected paths (/cdn-cgi/…) as cdn_managed without requesting them, and counts the links", async () => {
+    const o = srv.origin;
+    srv.routes.set("/", page([`${o}/cdn-cgi/l/email-protection#6a0b0e07`, `${o}/cdn-cgi/trace`, `${o}/a`]));
+    srv.routes.set("/a", page([`${o}/cdn-cgi/l/email-protection#0e07`, `${o}/cdn-cgi-docs`]));
+    srv.routes.set("/cdn-cgi-docs", page([]));
+    const c = await newCrawl(db, { siteOrigin: o, status: "queued", maxDepth: 10 });
+    expect(await runCrawl(opts(), c)).toBe("completed");
+    const s = await urlStates(c);
+    expect(s["/cdn-cgi/l/email-protection"]).toMatchObject({ state: "cdn_managed", reason: expect.stringMatching(/^Cloudflare-managed path/) });
+    expect(s["/cdn-cgi/trace"].state).toBe("cdn_managed");
+    expect(s["/cdn-cgi-docs"].state).toBe("fetched"); // a prefix of the path segment, not the CDN directory
+    expect([...srv.hits.keys()].filter((p) => p.startsWith("/cdn-cgi/"))).toEqual([]);
+    expect(await cdnManagedLinks(db, c)).toEqual({ urls: 2, links: 3, pages: 2 });
   });
 
   it("treats a 5xx robots.txt as a full disallow (RFC 9309) and fetches no pages", async () => {

@@ -15,6 +15,7 @@ import { SafeFetchError, type FetchOptions, type FetchResult, type Fetcher, type
 import { normaliseUrl } from "../normalise";
 import type { ScopeRules } from "../profiles";
 import { crawlDelayFor, isAllowed, parseRobots, type ParsedRobots } from "../robots";
+import { cdnManagedReason } from "../cdn-paths";
 import { compileRules, ruleVerdict, ScopeRuleError } from "../scope-rules";
 import { discoverSitemaps, extractOutlinks, type SitemapDocRecord } from "./discovery";
 import {
@@ -456,6 +457,8 @@ class Run {
   private gate(url: string): { state: TerminalState; reason: string } | null {
     const u = new URL(url);
     if (u.host !== this.host) return { state: "out_of_scope", reason: `Different host (${u.host}); this crawl covers ${this.host}.` };
+    const cdn = cdnManagedReason(u.pathname);
+    if (cdn) return { state: "cdn_managed", reason: cdn };
     const { subfolder, include, exclude } = this.scope;
     if (subfolder && !u.pathname.startsWith(subfolder)) return { state: "out_of_scope", reason: `Outside ${subfolder}; this crawl covers only that subfolder.` };
     const ruled = ruleVerdict(url, include, exclude);

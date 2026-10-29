@@ -612,6 +612,12 @@ describe("Phase 2b details", () => {
     expect(run("IMG-007", pageFrom("/x/", IMGTAG('src="/a.png" alt="A spade" style="width:100%"')))).toHaveLength(1);
   });
 
+  it("LNK-001 never reports a CDN-managed target (recorded by the crawl, not fetched)", () => {
+    const cdn = { ...other("/cdn-cgi/l/email-protection", "cdn_managed", 90), statusCode: null };
+    expect(run("LNK-001", pageFrom("/x/", withBody('<a href="/cdn-cgi/l/email-protection#6a0b">[email protected]</a>')), crawlOf(), { site: cleanSite(cdn) })).toEqual([]);
+    expect(run("LNK-001", pageFrom("/x/", withBody('<a href="/cdn-cgi/l/email-protection">x</a>')), crawlOf(), { site: cleanSite(bare("/cdn-cgi/l/email-protection", 404)) })).toHaveLength(1); // the rule itself still reports a 404
+  });
+
   it("LNK-014 counts the site's own query-string URLs only", () => {
     const ext = Array.from({ length: 150 }, (_, i) => ({ ...other(`/f?c=${i}`, "out_of_scope", 10 + i), url: `https://wa.me/971500000000?text=${i}` }));
     expect(run("LNK-014", cleanSite(...ext))).toEqual([]);

@@ -14,7 +14,7 @@ import { Redis } from "ioredis";
 import { Client } from "pg";
 import { PROFILES, type ProfileId } from "../src/lib/crawl/profiles";
 import { workerFetchPolicy } from "../src/lib/crawl/v2/fetch-policy";
-import { stateCounts } from "../src/lib/crawl/v2/frontier";
+import { cdnManagedLinks, stateCounts } from "../src/lib/crawl/v2/frontier";
 import { redisConnection } from "../src/lib/crawl/v2/queue";
 import { runCrawl, V2_USER_AGENT } from "../src/lib/crawl/v2/runner";
 import { createDb, migrateDb, type Db } from "../src/lib/db/client";
@@ -35,7 +35,7 @@ const ANSWERED = ["fetched", "analysed", "redirected", "non_html", "oversized"];
  * else found counts, including out_of_scope (reported by reason: another host is usually the site's www/apex twin,
  * which is a coverage miss, not a choice) and budget_exhausted / depth_exceeded (found but not reached).
  */
-const NOT_OURS = ["blocked_robots", "excluded_by_rule"];
+const NOT_OURS = ["blocked_robots", "excluded_by_rule", "cdn_managed"];
 
 function args() {
   const a = process.argv.slice(2);
@@ -159,7 +159,9 @@ async function main() {
   console.log(`\nCrawl ${outcome} in ${(crawlMs / 1000).toFixed(1)} s; analysis ${analysis.outcome} in ${(analysisMs / 1000).toFixed(1)} s (${analysis.pages} pages, ${analysis.findings} findings).`);
   console.log(`Memory: peak RSS ${mb(peak.rss)} at ${peak.at} s, peak V8 heap ${mb(peak.heapUsed)} (limit ${mb(MAX_RSS_BYTES)})${memLog ? `; samples every 10 s in ${memLog}` : ""}`);
   console.log(`URL states (${total} URLs): ${Object.entries(states).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(", ")}`);
-  console.log(`Coverage: ${answered} answered of ${eligible} eligible URLs = ${eligible ? ((100 * answered) / eligible).toFixed(1) : "n/a"}% (eligible = every URL found except blocked_robots and excluded_by_rule)`);
+  console.log(`Coverage: ${answered} answered of ${eligible} eligible URLs = ${eligible ? ((100 * answered) / eligible).toFixed(1) : "n/a"}% (eligible = every URL found except blocked_robots, excluded_by_rule and cdn_managed)`);
+  const cdn = await cdnManagedLinks(db, row.id);
+  console.log(`CDN-managed links: ${cdn.links} (${cdn.urls} URL(s) on ${cdn.pages} page(s); recorded, not fetched, not reported as broken)`);
   const scope = (
     await db.$client.query<{ kind: string; host: string; n: number }>(
       `select case when reason like 'Different host%' then 'other host' else 'outside subfolder' end as kind,

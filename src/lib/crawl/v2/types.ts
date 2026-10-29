@@ -42,6 +42,7 @@ export const TERMINAL_STATES = [
   "non_html",
   "oversized",
   "cancelled",
+  "cdn_managed", // a CDN-injected path on the site's host (/cdn-cgi/…); recorded, never fetched (src/lib/crawl/cdn-paths.ts)
 ] as const;
 
 export type ActiveState = (typeof ACTIVE_STATES)[number];

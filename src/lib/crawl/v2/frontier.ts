@@ -416,6 +416,15 @@ export async function recomputeClickDepths(tx: Exec, crawlId: string, maxDepth: 
   }
 }
 
+/** "CDN-managed links: N": cdn_managed URLs, and the links to them and the pages they sit on (url_edges via link). */
+export async function cdnManagedLinks(db: Exec, crawlId: string): Promise<{ urls: number; links: number; pages: number }> {
+  const r = await db.execute(sql`select (select count(*)::int from crawl_urls where crawl_id = ${crawlId}::uuid and state = 'cdn_managed') as urls,
+      count(e.*)::int as links, count(distinct e.from_url)::int as pages
+    from url_edges e join crawl_urls c on c.crawl_id = e.crawl_id and c.normalised_url = e.to_url
+    where e.crawl_id = ${crawlId}::uuid and e.via = 'link' and c.state = 'cdn_managed'`);
+  return rows<{ urls: number; links: number; pages: number }>(r)[0];
+}
+
 export async function stateCounts(db: Exec, crawlId: string): Promise<Partial<Record<UrlState, number>>> {
   const r = await db.execute(sql`select state, count(*)::int as n from crawl_urls where crawl_id = ${crawlId}::uuid group by state`);
   return Object.fromEntries(rows<{ state: UrlState; n: number }>(r).map((x) => [x.state, x.n]));

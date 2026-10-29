@@ -66,11 +66,21 @@ const LINKS: Defect[] = [
     apply: (p) => void (p.body += `<ul>${range(1, FACET_LINKS).map((n) => `<li><a href="${FACET_PATH}?c=${n}">Filter ${n}</a></li>`).join("")}</ul>`),
   },
   {
+    // The fixture answers 404 on every /cdn-cgi/ path, as Cloudflare does to a crawler: recorded as cdn_managed, never
+    // fetched, so no LNK-001 (example-client.ae validation).
+    name: "Cloudflare email-protection and other /cdn-cgi/ links (negative)",
+    expect: [],
+    apply: (p) => void (p.body += `<p>Write to <a href="${CDN_LINKS[0]}#6a0b0e07">[email&#160;protected]</a> or check <a href="${CDN_LINKS[1]}">the edge trace</a>.</p>`),
+  },
+  {
     name: "descriptive internal and nofollow external links (negative)",
     expect: [],
     apply: (p, c) => void (p.body += `<p><a href="/clean/p-4">Clean page four</a> and <a href="${hostOrigin(c.origin, EXT_HOSTS.ext2)}/ok" rel="nofollow">a partner site</a>.</p>`),
   },
 ];
+
+/** CDN-injected paths linked from one /links/ page (crawl state cdn_managed, never requested). */
+export const CDN_LINKS = ["/cdn-cgi/l/email-protection", "/cdn-cgi/trace"] as const;
 
 /** fixture.test's crawl scope excludes: the /products/ facet trap (a Phase 1 subject that never ends) and the LNK-014
  * filter links, which the crawl records as excluded_by_rule rows without fetching them. */

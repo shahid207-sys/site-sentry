@@ -25,12 +25,13 @@ import { gunzipSync } from "node:zlib";
 import { Client } from "pg";
 import { EXT_HOSTS, SECTIONS } from "../fixtures/site/definition";
 import { DEFECT_COUNTS, EXACT_SECTIONS, expectedFindings, findingKey } from "../fixtures/site/defects";
-import { DEFECT_COUNTS_2B, ENV_CANARY, EXTERNAL_LINK_URLS, FACET_PATH, IMAGE_BUDGET_URLS, KEY_PAGES, MAIN_EXCLUDE, PLAIN_HTTP_PAGE, resourceExpectations, urlOf } from "../fixtures/site/defects-2b";
+import { CDN_LINKS, DEFECT_COUNTS_2B, ENV_CANARY, EXTERNAL_LINK_URLS, FACET_PATH, IMAGE_BUDGET_URLS, KEY_PAGES, MAIN_EXCLUDE, PLAIN_HTTP_PAGE, resourceExpectations, urlOf } from "../fixtures/site/defects-2b";
 import { HOSTS, LOCAL_HOSTS_ENV, startFixtureSite, type FixtureSite, type HostKey } from "../fixtures/site/server";
 import { createDb, migrateDb, type Db } from "../src/lib/db/client";
 import { crawls } from "../src/lib/db/schema";
 import { createCrawlQueue, enqueueCrawl } from "../src/lib/crawl/v2/queue";
 import type { CrawlConfig } from "../src/lib/crawl/v2/runner";
+import { cdnManagedLinks } from "../src/lib/crawl/v2/frontier";
 import { MAX_EXTERNAL_LINKS, MAX_IMAGE_URLS } from "../src/lib/crawl/v2/resources";
 import { startMemoryLog } from "../src/lib/memory-log";
 import { DEFERRED_RULES, RULES } from "../src/lib/rules/registry";
@@ -385,6 +386,13 @@ async function phase2bChecks(db: Db, site: FixtureSite, mainId: string, blobDir:
     `Images: at most ${MAX_IMAGE_URLS} unique URLs requested`,
     imgUrls.size <= MAX_IMAGE_URLS && summary.images.found > MAX_IMAGE_URLS && summary.images.planned === MAX_IMAGE_URLS,
     `${imgUrls.size} unique image URLs requested (${imgRequests.length} requests: ${imgRequests.filter((h) => h.method === "HEAD").length} HEAD, ${imgRequests.filter((h) => !h.method && h.range).length} ranged GET, ${imgRequests.filter((h) => !h.method && !h.range).length} plain GET); crawl summary ${JSON.stringify(summary.images)}; fixture images ${IMAGE_BUDGET_URLS} + defects`,
+  );
+  const cdn = await cdnManagedLinks(db, mainId);
+  const cdnHits = site.requests.filter((h) => !h.host && h.path.startsWith("/cdn-cgi/"));
+  check(
+    "CDN-managed links are recorded, never fetched and never reported broken",
+    cdn.urls === CDN_LINKS.length && cdn.links === CDN_LINKS.length && cdn.pages === 1 && cdnHits.length === 0,
+    `CDN-managed links: ${cdn.links} (${cdn.urls} URL(s) on ${cdn.pages} page(s)); /cdn-cgi/ requests at the server: ${cdnHits.length}; LNK-001 on that page is checked by the manifest`,
   );
   const envHits = site.requests.filter((h) => !h.host && h.path === "/.env");
   info(`/.env requested ${envHits.length} time(s) on fixture.test (the probe)`);

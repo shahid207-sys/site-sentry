@@ -30,6 +30,7 @@ Source of truth: `docs/SPEC.md` → "Crawler engine → URL states". This file r
 | `blocked_robots` | discovery, before fetch | `Disallow: /private/ (User-agent: *)` |
 | `out_of_scope` | discovery (other host, subfolder or Custom include/exclude) | `Different host: cdn.example.com` |
 | `excluded_by_rule` | discovery (normalisation rejected the reference) | `credentials in URL` |
+| `cdn_managed` | discovery: a CDN path on the crawled host (`/cdn-cgi/`, `/_vercel/`, `/akam/`; `src/lib/crawl/cdn-paths.ts`). Never fetched, so link rules never report it; counted as "CDN-managed links" and left out of coverage | `Cloudflare-managed path (/cdn-cgi/…): …` |
 | `budget_exhausted` | `finalizeUrls` at completion | `The crawl's URL budget of 1000 was used up …` |
 | `depth_exceeded` | `finalizeUrls` at completion | `Found only through links 11 clicks from the start URL; …` |
 | `failed_timeout` / `failed_dns` / `failed_tls` | worker | error code and message |

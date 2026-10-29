@@ -98,6 +98,7 @@ const URL_STATE_LABELS: [string, string][] = [
   ["blocked_robots", "Blocked by robots.txt"],
   ["out_of_scope", "Out of scope"],
   ["excluded_by_rule", "Excluded by a rule"],
+  ["cdn_managed", "CDN-managed links"],
   ["depth_exceeded", "Beyond the depth limit"],
   ["budget_exhausted", "Over the page budget"],
   ["failed_timeout", "Timed out"],

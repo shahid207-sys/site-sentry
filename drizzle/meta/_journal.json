@@ -50,6 +50,13 @@
       "when": 1793260715158,
       "tag": "0006_resources_templates_graph",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793292327623,
+      "tag": "0007_cdn_managed_state",
+      "breakpoints": true
     }
   ]
 }
