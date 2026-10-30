@@ -16,11 +16,11 @@ import { getRawHtml, putRenderedHtml, type BlobStore } from "../snapshot/blob-st
 import { extractHtml } from "../snapshot/extract";
 import type { CanonicalTag, HeadingEntry, RobotsSnapshot } from "../snapshot/types";
 import type { RenderGate, RenderPool, RenderResult } from "./pool";
+import { RENDER_MODES, type RenderMode } from "../crawl/profiles";
 
 type Exec = Pick<Db, "execute">;
 
-export const RENDER_MODES = ["off", "sampled", "full"] as const;
-export type RenderMode = (typeof RENDER_MODES)[number];
+export { RENDER_MODES, type RenderMode };
 
 /** Links found only in the rendered DOM, kept as evidence (they are not crawled: see docs/PHASE5.md). */
 export const MAX_RENDERED_LINKS = 50;

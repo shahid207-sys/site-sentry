@@ -10,15 +10,28 @@ describe("crawl profiles", () => {
   });
 
   it("fixes Quick and Standard, lets Full-site set the budget and Custom set both", () => {
-    expect(resolveProfile({ profile: "quick" })).toEqual({ profile: "quick", budget: 25, maxDepth: 3 });
-    expect(resolveProfile({ profile: "standard", budget: 1000 })).toEqual({ profile: "standard", budget: 1000, maxDepth: 10 });
+    expect(resolveProfile({ profile: "quick" })).toEqual({ profile: "quick", budget: 25, maxDepth: 3, render: "off" });
+    expect(resolveProfile({ profile: "standard", budget: 1000 })).toEqual({ profile: "standard", budget: 1000, maxDepth: 10, render: "sampled" });
     expect(() => resolveProfile({ profile: "quick", budget: 500 })).toThrow("fixed budget of 25");
     expect(() => resolveProfile({ profile: "standard", maxDepth: 2 })).toThrow("fixed depth (10)");
-    expect(resolveProfile({ profile: "full" })).toEqual({ profile: "full", budget: 50_000, maxDepth: null });
+    expect(resolveProfile({ profile: "full" })).toEqual({ profile: "full", budget: 50_000, maxDepth: null, render: "sampled" });
     expect(resolveProfile({ profile: "full", budget: 120_000 })).toMatchObject({ budget: 120_000, maxDepth: null });
     expect(() => resolveProfile({ profile: "full", maxDepth: 4 })).toThrow("fixed depth (unlimited)");
-    expect(resolveProfile({ profile: "custom", budget: 40, maxDepth: null })).toEqual({ profile: "custom", budget: 40, maxDepth: null });
+    expect(resolveProfile({ profile: "custom", budget: 40, maxDepth: null })).toEqual({ profile: "custom", budget: 40, maxDepth: null, render: "off" });
     expect(resolveProfile({ profile: "custom", maxDepth: 0 })).toMatchObject({ budget: 1000, maxDepth: 0 });
+  });
+
+  it("renders as the spec table says: Quick off, Standard sampled, Full-site sampled or full, Custom any", () => {
+    expect(PROFILES.quick.render).toEqual(["off"]);
+    expect(PROFILES.standard.render).toEqual(["sampled"]);
+    expect(PROFILES.full.render).toEqual(["sampled", "full"]);
+    expect(PROFILES.custom.render).toEqual(["off", "sampled", "full"]);
+    expect(resolveProfile({ profile: "full", render: "full" }).render).toBe("full");
+    expect(resolveProfile({ profile: "custom", render: "sampled" }).render).toBe("sampled");
+    expect(resolveProfile({ profile: "standard", render: "sampled" }).render).toBe("sampled");
+    expect(() => resolveProfile({ profile: "quick", render: "full" })).toThrow('The Quick profile renders with mode "off" only.');
+    expect(() => resolveProfile({ profile: "standard", render: "off" })).toThrow('with mode "sampled" only');
+    expect(() => resolveProfile({ profile: "full", render: "off" })).toThrow('The Full-site profile renders with "sampled" or "full".');
   });
 
   it("rejects out-of-range user values", () => {

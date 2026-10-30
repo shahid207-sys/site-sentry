@@ -2,7 +2,7 @@ import "server-only";
 import { z } from "zod";
 import { RULE_CATEGORIES, type RuleCategory } from "@/lib/audit/types";
 import { clampToLegacyEngine, createAudit, LIMITS } from "@/lib/crawl/engine";
-import { MAX_SCOPE_RULES, normaliseSubfolder, PROFILE_IDS, resolveProfile, type ScopeRules } from "@/lib/crawl/profiles";
+import { MAX_SCOPE_RULES, normaliseSubfolder, PROFILE_IDS, RENDER_MODES, resolveProfile, type ScopeRules } from "@/lib/crawl/profiles";
 import { regexProblem } from "@/lib/crawl/scope-rules";
 import { crawlerV2Enabled, getCrawlQueue, startCrawl, syncAudit, type CrawlAuthInput } from "@/lib/crawl/v2/audit-bridge";
 import { secretKey } from "@/lib/crawl/v2/secrets";
@@ -35,6 +35,8 @@ export const AuditRequest = z.object({
     .optional(),
   /** Intent for AI crawlers (AIS-002); omitted = not set. */
   aiCrawlers: z.enum(["allow", "block"]).optional(),
+  /** Render mode; omitted = the profile's default. Each profile accepts its own modes (profiles.ts). */
+  render: z.enum(RENDER_MODES).optional(),
   categories: z.array(z.enum(CATEGORY_IDS)).min(1, "Choose at least one check category."),
   checkLinks: z.boolean(),
   includeImportant: z.boolean(),
@@ -63,7 +65,7 @@ export function checkAuditRequest(ws: Workspace, input: AuditRequest) {
   if (input.mode === "list" && input.urls.length === 0) throw new WorkflowError("INVALID", "Enter at least one URL.");
   let limits: ReturnType<typeof resolveProfile>;
   try {
-    limits = resolveProfile({ profile: input.profile, budget: input.budget, maxDepth: input.maxDepth });
+    limits = resolveProfile({ profile: input.profile, budget: input.budget, maxDepth: input.maxDepth, render: input.render });
   } catch (e) {
     throw new WorkflowError("INVALID", (e as Error).message);
   }
@@ -98,6 +100,7 @@ export async function launchAudit(ws: Workspace, input: AuditRequest): Promise<{
     ...(scope ? { scope } : {}),
     ...(input.auth ? { authUser: input.auth.username } : {}),
     ...(v2 && input.aiCrawlers ? { aiCrawlers: input.aiCrawlers } : {}),
+    ...(limits.render !== "off" ? { render: limits.render } : {}),
     categories,
     checkLinks,
     includeImportant,

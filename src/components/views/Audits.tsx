@@ -4,7 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Globe, Play, ScanSearch, Trash2 } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { RULE_CATEGORIES, type RuleCategory } from "@/lib/audit/types";
-import { describeLimits, LEGACY_ENGINE_LIMITS, MAX_BUDGET, MAX_DEPTH, PROFILE_IDS, PROFILES, type ProfileId } from "@/lib/crawl/profiles";
+import { describeLimits, LEGACY_ENGINE_LIMITS, MAX_BUDGET, MAX_DEPTH, PROFILE_IDS, PROFILES, RENDER_MODE_LABELS, type ProfileId, type RenderMode } from "@/lib/crawl/profiles";
 import type { AuditMode } from "@/lib/model";
 import type { AuditSummary, SettingsData } from "@/lib/views";
 import { SeverityCountsInline } from "../domain";
@@ -311,6 +311,7 @@ function NewAuditForm({ requestedSite }: { requestedSite: string }) {
   const [checkLinks, setCheckLinks] = useState(true);
   const [includeImportant, setIncludeImportant] = useState(true);
   const [aiCrawlers, setAiCrawlers] = useState<"" | "allow" | "block">("");
+  const [renderChoice, setRenderChoice] = useState<RenderMode | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -328,6 +329,8 @@ function NewAuditForm({ requestedSite }: { requestedSite: string }) {
 
   const p = PROFILES[profile];
   const askedPages = p.budgetEditable ? budget : p.budget;
+  // A mode the profile does not take (after switching profile) falls back to the profile's default.
+  const render: RenderMode = renderChoice && p.render.includes(renderChoice) ? renderChoice : p.render[0];
   const askedDepth = p.depthEditable ? depth : p.maxDepth;
   // Without crawler v2 the server clamps to the in-request engine's limits and notes it on the audit.
   const maxPages = v2 ? askedPages : Math.min(askedPages, LIMITS.maxPages);
@@ -369,6 +372,7 @@ function NewAuditForm({ requestedSite }: { requestedSite: string }) {
           checkLinks,
           includeImportant,
           ...(v2 && aiCrawlers ? { aiCrawlers } : {}),
+          ...(v2 && p.render.length > 1 ? { render } : {}),
         },
       });
       if (r.reused) toast({ tone: "info", title: "An audit is already running for this site", detail: "Showing its progress instead of starting a second one." });
@@ -489,6 +493,25 @@ function NewAuditForm({ requestedSite }: { requestedSite: string }) {
                 checked={includeImportant}
                 onChange={setIncludeImportant}
               />
+              {v2 ? (
+                <Field
+                  label="Rendering"
+                  htmlFor="na-render"
+                  hint={
+                    p.render.length > 1
+                      ? "Load pages in a headless browser after the crawl, for JavaScript content, lab Core Web Vitals and accessibility checks. Sampled renders one page per template."
+                      : `The ${p.label} profile renders: ${RENDER_MODE_LABELS[p.render[0]].toLowerCase()}.${p.render[0] === "off" ? " Checks that need the rendered page do not run." : ""}`
+                  }
+                >
+                  <Select id="na-render" value={render} disabled={p.render.length < 2} onChange={(e) => setRenderChoice(e.target.value as RenderMode)}>
+                    {p.render.map((m) => (
+                      <option key={m} value={m}>
+                        {RENDER_MODE_LABELS[m]}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              ) : null}
               {v2 ? (
                 <Field label="AI crawlers" htmlFor="na-ai" hint="Should AI search crawlers (GPTBot, ClaudeBot, PerplexityBot…) be able to read this site? Used to judge robots.txt.">
                   <Select id="na-ai" value={aiCrawlers} onChange={(e) => setAiCrawlers(e.target.value as "" | "allow" | "block")}>

@@ -4,6 +4,14 @@
 export const PROFILE_IDS = ["quick", "standard", "full", "custom"] as const;
 export type ProfileId = (typeof PROFILE_IDS)[number];
 
+/**
+ * Headless-browser rendering after the crawl (Phase 5): off; sampled, the shortest URL of each page template plus the
+ * start URL; or full, every HTML page.
+ */
+export const RENDER_MODES = ["off", "sampled", "full"] as const;
+export type RenderMode = (typeof RENDER_MODES)[number];
+export const RENDER_MODE_LABELS: Record<RenderMode, string> = { off: "Off", sampled: "Sampled (1 page per template)", full: "Full (every page)" };
+
 export interface CrawlProfile {
   id: ProfileId;
   label: string;
@@ -15,14 +23,16 @@ export interface CrawlProfile {
   depthEditable: boolean;
   /** Include/exclude regex, subfolder and basic auth. */
   scopeRules: boolean;
+  /** Render modes the profile accepts; the first is its default. */
+  render: readonly RenderMode[];
   use: string;
 }
 
 export const PROFILES: Record<ProfileId, CrawlProfile> = {
-  quick: { id: "quick", label: "Quick", budget: 25, maxDepth: 3, budgetEditable: false, depthEditable: false, scopeRules: false, use: "Pre-sales check, single section, public hero form" },
-  standard: { id: "standard", label: "Standard", budget: 1_000, maxDepth: 10, budgetEditable: false, depthEditable: false, scopeRules: false, use: "Monthly client audit" },
-  full: { id: "full", label: "Full-site", budget: 50_000, maxDepth: null, budgetEditable: true, depthEditable: false, scopeRules: false, use: "Migrations, large e-commerce" },
-  custom: { id: "custom", label: "Custom", budget: 1_000, maxDepth: 10, budgetEditable: true, depthEditable: true, scopeRules: true, use: "Include/exclude regex, subfolder-only, staging with auth" },
+  quick: { id: "quick", label: "Quick", budget: 25, maxDepth: 3, budgetEditable: false, depthEditable: false, scopeRules: false, render: ["off"], use: "Pre-sales check, single section, public hero form" },
+  standard: { id: "standard", label: "Standard", budget: 1_000, maxDepth: 10, budgetEditable: false, depthEditable: false, scopeRules: false, render: ["sampled"], use: "Monthly client audit" },
+  full: { id: "full", label: "Full-site", budget: 50_000, maxDepth: null, budgetEditable: true, depthEditable: false, scopeRules: false, render: ["sampled", "full"], use: "Migrations, large e-commerce" },
+  custom: { id: "custom", label: "Custom", budget: 1_000, maxDepth: 10, budgetEditable: true, depthEditable: true, scopeRules: true, render: ["off", "sampled", "full"], use: "Include/exclude regex, subfolder-only, staging with auth" },
 };
 
 /** Validation bounds for user-set values (not profile caps): keep a typo from queueing a crawl of a billion URLs. */
@@ -55,10 +65,11 @@ export interface ProfileRequest {
   profile: ProfileId;
   budget?: number;
   maxDepth?: number | null;
+  render?: RenderMode;
 }
 
-/** The budget and depth a request asks for under its profile. Throws on values the profile does not accept. */
-export function resolveProfile(req: ProfileRequest): { profile: ProfileId; budget: number; maxDepth: number | null } {
+/** The budget, depth and render mode a request asks for under its profile. Throws on values the profile does not accept. */
+export function resolveProfile(req: ProfileRequest): { profile: ProfileId; budget: number; maxDepth: number | null; render: RenderMode } {
   const p = PROFILES[req.profile];
   if (req.budget !== undefined && !p.budgetEditable && req.budget !== p.budget) {
     throw new Error(`The ${p.label} profile has a fixed budget of ${p.budget} URLs.`);
@@ -66,11 +77,14 @@ export function resolveProfile(req: ProfileRequest): { profile: ProfileId; budge
   if (req.maxDepth !== undefined && !p.depthEditable && req.maxDepth !== p.maxDepth) {
     throw new Error(`The ${p.label} profile has a fixed depth (${p.maxDepth ?? "unlimited"}).`);
   }
+  if (req.render !== undefined && !p.render.includes(req.render)) {
+    throw new Error(`The ${p.label} profile renders ${p.render.length === 1 ? `with mode "${p.render[0]}" only` : `with ${p.render.map((m) => `"${m}"`).join(" or ")}`}.`);
+  }
   const budget = p.budgetEditable ? (req.budget ?? p.budget) : p.budget;
   const maxDepth = p.depthEditable && req.maxDepth !== undefined ? req.maxDepth : p.maxDepth;
   if (!Number.isInteger(budget) || budget < 1 || budget > MAX_BUDGET) throw new Error(`Budget must be 1–${MAX_BUDGET.toLocaleString("en")} URLs.`);
   if (maxDepth !== null && (!Number.isInteger(maxDepth) || maxDepth < 0 || maxDepth > MAX_DEPTH)) throw new Error(`Depth must be 0–${MAX_DEPTH}, or unlimited.`);
-  return { profile: req.profile, budget, maxDepth };
+  return { profile: req.profile, budget, maxDepth, render: req.render ?? p.render[0] };
 }
 
 /** "/blog" → "/blog/". Null when it is not a usable path prefix. */

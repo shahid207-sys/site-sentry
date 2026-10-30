@@ -16,7 +16,7 @@ import type {
   VerificationOutcome,
 } from "./audit/types";
 import type { PageLinks } from "./crawl/extract";
-import type { ProfileId, ScopeRules } from "./crawl/profiles";
+import type { ProfileId, RenderMode, ScopeRules } from "./crawl/profiles";
 
 export type Workspace = AuditSource; // "live" | "sample"
 
@@ -79,6 +79,8 @@ export interface AuditConfig {
   authUser?: string;
   /** Whether AI crawlers should be allowed (AIS-002, crawler v2). Unset: the rule reports that it needs this setting. */
   aiCrawlers?: "allow" | "block";
+  /** Headless-browser rendering after the crawl (crawler v2, Phase 5); absent = off. */
+  render?: RenderMode;
   categories: RuleCategory[];
   /** Check the status of internal link and image targets that were not crawled (bounded). */
   checkLinks: boolean;

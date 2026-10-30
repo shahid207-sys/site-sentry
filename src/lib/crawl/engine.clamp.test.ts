@@ -26,6 +26,17 @@ describe("clampToLegacyEngine", () => {
     ]);
   });
 
+  it("drops rendering, which the in-request engine cannot do, and says so", () => {
+    const { config, coverage } = clampToLegacyEngine(cfg({ profile: "standard", maxPages: 25, maxDepth: 3, render: "sampled" }));
+    expect(config.render).toBeUndefined();
+    expect(coverage).toEqual([
+      {
+        code: "engine_limit",
+        message: "The Standard profile asks for rendering (sampled). The in-request engine running this audit (crawler v2 is off) does not render pages, so checks that need the rendered page do not run.",
+      },
+    ]);
+  });
+
   it("clamps depth alone", () => {
     expect(clampToLegacyEngine(cfg({ maxDepth: 10 })).config.maxDepth).toBe(3);
     expect(clampToLegacyEngine(cfg({ maxDepth: 10 })).coverage[0].message).toMatch(/^This audit asked for 25 URLs · 10 clicks deep\./);

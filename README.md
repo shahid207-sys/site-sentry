@@ -103,7 +103,7 @@ Light interface defined by tokens in `src/app/globals.css`, shared by the public
 
 ## Known limitations
 
-- Raw HTML only, with no JavaScript rendering, so content set client-side is not seen.
+- JavaScript rendering (crawler v2 only; Standard renders one page per template, Full-site sampled or every page, Quick none) runs after the crawl. Its LCP/CLS are unthrottled lab numbers from one load, not field data; links that appear only after JavaScript are reported, not crawled. The in-request engine does not render.
 - Charset comes from the `Content-Type` header only (no `<meta charset>` sniffing).
 - JSON-file store: fine for one server process. On serverless hosts data in `/tmp` is ephemeral (Settings says so); use a persistent volume or a database adapter behind the `Store` interface.
 - The rate limiter is in-memory and per process.

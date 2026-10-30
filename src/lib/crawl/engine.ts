@@ -84,12 +84,21 @@ export interface CreateAuditInput {
 export function clampToLegacyEngine(config: AuditConfig): { config: AuditConfig; coverage: CoverageNote[] } {
   const maxPages = Math.min(config.maxPages, LEGACY_ENGINE_LIMITS.maxPages);
   const maxDepth = config.maxDepth === null ? LEGACY_ENGINE_LIMITS.maxDepth : Math.min(config.maxDepth, LEGACY_ENGINE_LIMITS.maxDepth);
-  if (maxPages === config.maxPages && maxDepth === config.maxDepth) return { config, coverage: [] };
   const label = config.profile ? `The ${PROFILES[config.profile].label} profile asks for` : "This audit asked for";
-  const message =
-    `${label} ${describeLimits(config.maxPages, config.maxDepth)}. The in-request engine running this audit ` +
-    `(crawler v2 is off) stops at ${describeLimits(maxPages, maxDepth)}, so this audit covers at most that.`;
-  return { config: { ...config, maxPages, maxDepth }, coverage: [{ code: "engine_limit", message }] };
+  const coverage: CoverageNote[] = [];
+  if (maxPages !== config.maxPages || maxDepth !== config.maxDepth) {
+    const message =
+      `${label} ${describeLimits(config.maxPages, config.maxDepth)}. The in-request engine running this audit ` +
+      `(crawler v2 is off) stops at ${describeLimits(maxPages, maxDepth)}, so this audit covers at most that.`;
+    coverage.push({ code: "engine_limit", message });
+  }
+  // Rendering is a crawler v2 phase: the in-request engine never starts a browser.
+  if (config.render && config.render !== "off") {
+    coverage.push({ code: "engine_limit", message: `${label} rendering (${config.render}). The in-request engine running this audit (crawler v2 is off) does not render pages, so checks that need the rendered page do not run.` });
+  }
+  if (!coverage.length) return { config, coverage };
+  const { render: _render, ...rest } = config; // eslint-disable-line @typescript-eslint/no-unused-vars
+  return { config: { ...rest, maxPages, maxDepth }, coverage };
 }
 
 /** Create an audit run. Idempotent: if the site already has a live (non-stale) running audit, that run is returned. */

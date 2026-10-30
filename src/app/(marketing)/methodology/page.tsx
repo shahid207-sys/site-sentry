@@ -4,7 +4,7 @@ import { CHECKS } from "@/lib/audit/catalog";
 import { HEALTH_NOTE, HEALTH_WEIGHTS } from "@/lib/audit/health";
 import { RULE_CATEGORIES } from "@/lib/audit/types";
 import { LIMITS } from "@/lib/crawl/engine";
-import { describeLimits, HERO_RATE_LIMIT, LEGACY_ENGINE_LIMITS, PROFILE_IDS, PROFILES } from "@/lib/crawl/profiles";
+import { describeLimits, HERO_RATE_LIMIT, LEGACY_ENGINE_LIMITS, PROFILE_IDS, PROFILES, RENDER_MODE_LABELS } from "@/lib/crawl/profiles";
 import { MAX_BYTES, MAX_REDIRECTS, TIMEOUT_MS } from "@/lib/fetch/safe-fetch";
 
 export const metadata: Metadata = {
@@ -145,6 +145,7 @@ export default function MethodologyPage() {
                 <tr>
                   <th scope="col" className="px-4 py-2.5 font-medium">Profile</th>
                   <th scope="col" className="px-4 py-2.5 font-medium">Limits</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">Rendering</th>
                   <th scope="col" className="px-4 py-2.5 font-medium">Use</th>
                 </tr>
               </thead>
@@ -158,6 +159,7 @@ export default function MethodologyPage() {
                         {describeLimits(p.budget, p.maxDepth)}
                         {p.budgetEditable || p.depthEditable ? ` by default; ${[p.budgetEditable && "budget", p.depthEditable && "depth"].filter(Boolean).join(" and ")} set per audit` : ""}
                       </td>
+                      <td className="px-4 py-2.5">{p.render.map((m) => RENDER_MODE_LABELS[m]).join(" or ")}</td>
                       <td className="px-4 py-2.5">{p.use}</td>
                     </tr>
                   );
@@ -171,7 +173,10 @@ export default function MethodologyPage() {
             <li>{TIMEOUT_MS / 1000}s timeout per request, {MAX_BYTES / 1024 / 1024} MB of HTML per page, at most {MAX_REDIRECTS} redirects, each one re-validated.</li>
             <li>Only public http/https addresses. Private, loopback, link-local and cloud-metadata IPs are refused, including at connect time.</li>
             <li>robots.txt is respected. Character encoding comes from the Content-Type header only.</li>
-            <li>No JavaScript rendering: content inserted client-side isn&apos;t seen.</li>
+            <li>
+              Rendering loads pages in headless Chromium after the crawl (412 px wide, no CPU or network throttling, ads and analytics blocked, 20 s per page). Its LCP and CLS are lab numbers from one load, never field data. Links that only
+              appear after JavaScript are reported, not crawled.
+            </li>
             <li>No search-performance data yet. Page HTML alone can&apos;t show that a change moved rankings; that would need Search Console data.</li>
           </ul>
         </Container>

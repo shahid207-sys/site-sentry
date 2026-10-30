@@ -61,7 +61,7 @@ beforeAll(async () => {
   const { getStore } = await import("@/lib/workspace");
   await getStore("live").update((d) => {
     // One site per test below: a site with a running audit gets that audit back instead of a new one.
-    for (const id of ["s1", "s2", "s3", "s4", "s5", "s6", "s7"]) d.sites[id] = { id, name: `Local ${id}`, origin, createdAt: new Date().toISOString() };
+    for (const id of ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11"]) d.sites[id] = { id, name: `Local ${id}`, origin, createdAt: new Date().toISOString() };
   });
 });
 afterAll(async () => {
@@ -163,6 +163,20 @@ describe("audit API crawl profiles", () => {
     expect(await crawlRow(audit.crawler!.crawlId)).toMatchObject({ profile: "full", budget: 120_000, max_depth: null });
   });
 
+  it("puts the profile's render mode on the audit and the crawl config, and rejects a mode the profile does not take", async () => {
+    const standard = await call<{ audit: AuditSummary }>(create({ siteId: "s8", profile: "standard" }));
+    expect(standard.audit.config).toMatchObject({ render: "sampled" });
+    expect((await crawlRow(standard.audit.crawler!.crawlId)).config).toMatchObject({ render: "sampled" });
+    const full = await call<{ audit: AuditSummary }>(create({ siteId: "s9", profile: "full", render: "full" }));
+    expect((await crawlRow(full.audit.crawler!.crawlId)).config).toMatchObject({ render: "full" });
+    // Quick and Custom's default do not render: no render key, so the crawl's render phase is off.
+    const quick = await call<{ audit: AuditSummary }>(create({ siteId: "s10", profile: "quick" }));
+    expect(quick.audit.config.render).toBeUndefined();
+    expect((await crawlRow(quick.audit.crawler!.crawlId)).config.render).toBeUndefined();
+    await expect(call(create({ siteId: "s11", profile: "quick", render: "full" }))).rejects.toThrow("The Quick profile renders with mode");
+    await expect(call(create({ siteId: "s11", profile: "custom", render: "always" }))).rejects.toThrow();
+  });
+
   it("stores the AI crawler intent on the audit and the crawl config, and rejects other values", async () => {
     const { audit } = await call<{ audit: AuditSummary }>(create({ siteId: "s7", profile: "quick", aiCrawlers: "allow" }));
     expect(audit.config).toMatchObject({ aiCrawlers: "allow" });
@@ -225,7 +239,13 @@ describe("audit API crawl profiles", () => {
           message:
             "The Standard profile asks for 1,000 URLs · 10 clicks deep. The in-request engine running this audit (crawler v2 is off) stops at 100 URLs · 3 clicks deep, so this audit covers at most that.",
         },
+        {
+          code: "engine_limit",
+          message:
+            "The Standard profile asks for rendering (sampled). The in-request engine running this audit (crawler v2 is off) does not render pages, so checks that need the rendered page do not run.",
+        },
       ]);
+      expect(audit.config.render).toBeUndefined();
     } finally {
       process.env.CRAWLER_V2 = "true";
     }

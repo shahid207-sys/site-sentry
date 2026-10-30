@@ -59,6 +59,7 @@ export async function startCrawl(
     scope: audit.config.scope,
     auth,
     aiCrawlers: audit.config.aiCrawlers,
+    render: audit.config.render,
   };
   const [row] = await db
     .insert(crawls)
