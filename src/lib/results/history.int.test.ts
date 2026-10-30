@@ -1,6 +1,7 @@
 // History rules end to end (SITE-004 regressions, SITE-005 new URLs with critical issues): real crawls of a local
 // site that changes between four audits of one project.
 import { randomUUID } from "node:crypto";
+import { gzipSync } from "node:zlib";
 import { sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { newCrawl, testDb } from "@/test/db";
@@ -31,8 +32,10 @@ afterEach(async () => {
 const opts = (): RunnerOptions => ({ db, redis, politeness: { keyPrefix: `test:history:${randomUUID()}:` }, fetch: srv.fetch, owner: "test", leaseMs: 30_000 });
 // Each page its own vocabulary, so long pages are not near-duplicates of each other (CNT-007).
 const words = (n: number, seed: string) => Array.from({ length: n }, (_, i) => `${seed}${i % 97}`).join(" ");
+// Gzipped, as a well-configured server sends HTML: otherwise PERF-008 would come and go with /a's length.
+const gz = (html: string) => send(gzipSync(html), "text/html; charset=utf-8", 200, { "content-encoding": "gzip" });
 const page = (title: string, thin = false) =>
-  send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title></head><body><main><h1>${title}</h1><p>${words(thin ? 20 : THIN_WORDS + 50, title.replace(/\W/g, ""))}</p></main></body></html>`, "text/html; charset=utf-8");
+  gz(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title></head><body><main><h1>${title}</h1><p>${words(thin ? 20 : THIN_WORDS + 50, title.replace(/\W/g, ""))}</p></main></body></html>`);
 
 /** One audit of project `project`: /a (thin or not), /b, and the extra linked paths; `gone` paths answer 404. */
 async function audit(project: string, s: { thinA: boolean; extra?: string[]; gone?: string[]; robots?: string }): Promise<string> {

@@ -136,6 +136,7 @@ describe("analyseCrawl", () => {
     const ran = (await db.execute(sql`select rule_id from rule_runs where crawl_id = ${c}::uuid and status = 'ran'`)).rows.map((x) => RULES.find((r) => r.id === (x as { rule_id: string }).rule_id)!);
     const cats = new Map<string, { d: number; m: number }>();
     for (const r of ran) {
+      if (!(r.category in CATEGORY_WEIGHTS)) continue; // performance, accessibility: no published weight, not scored
       const e = cats.get(r.category) ?? { d: 0, m: 0 };
       e.d += Number(groups.find((g) => g.rule_id === r.id)?.score ?? 0);
       e.m += r.impact * CONFIDENCE_WEIGHT[r.confidence];

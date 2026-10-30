@@ -22,7 +22,7 @@ import { manifestPaths, ROBOTS_BLOCKED_PREFIX } from "./definition";
 import { DEFECTS, EXACT_SECTIONS, expectedFindings, findingKey, INDEX_EXTRAS } from "./defects";
 import { EXTRAS_2B, KEY_PAGES, MAIN_EXCLUDE, PLAIN_HTTP_PAGE, resourceExpectations, urlOf } from "./defects-2b";
 import { gunzipSync } from "node:zlib";
-import { ALT3_SITEMAP_URLS, createRouter, fixtureSitemaps, LASTMOD, LLMS_TXT } from "./server";
+import { ALT3_SITEMAP_URLS, createRouter, encodeForWire, fixtureSitemaps, LASTMOD, LLMS_TXT } from "./server";
 
 const router = createRouter(8080, 8081);
 const ORIGIN = router.origins.main;
@@ -42,7 +42,8 @@ function render(url: string): PageView | null {
   if (r.status !== 200 || !r.type.startsWith("text/html")) return null;
   const src = String(r.body);
   const $ = parseHtml(src);
-  const headers = { "content-type": r.type, ...r.headers };
+  // The crawler's request accepts gzip, deflate (undici); the server compresses accordingly.
+  const headers = { "content-type": r.type, ...encodeForWire(r, "gzip, deflate").headers };
   const x = extractHtml({ $, html: src, pageUrl: url, headers, bytes: Buffer.byteLength(src), outlinks: extractOutlinks($, url).links });
   const path = new URL(url).pathname + new URL(url).search;
   return {

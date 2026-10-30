@@ -117,6 +117,8 @@ export interface PageFacts {
   mainTextChars: number;
   /** Bytes of HTML read. */
   htmlBytes: number;
+  /** Elements in the HTML as served (PERF-010). Absent on snapshots from before Phase 5. */
+  domNodes?: number;
 }
 
 export interface PageSnapshot {

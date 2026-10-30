@@ -117,6 +117,8 @@ const CATEGORY: Record<string, string> = {
   structured_data: "Structured data",
   security: "Security",
   site: "Site-wide",
+  performance: "Performance",
+  accessibility: "Accessibility",
 };
 
 export const categoryLabel = (c: string) => CATEGORY[c] ?? c;

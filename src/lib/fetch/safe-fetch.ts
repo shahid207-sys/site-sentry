@@ -456,6 +456,8 @@ const RULE_HEADERS = [
   // Image and resource sizes (IMG-005, IMG-006): Content-Range carries the total on a ranged GET.
   "content-length",
   "content-range",
+  // Text compression (PERF-008).
+  "content-encoding",
 ];
 
 function pickHeaders(h: { get(name: string): string | null }): Record<string, string> {

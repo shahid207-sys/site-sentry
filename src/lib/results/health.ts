@@ -7,8 +7,12 @@ import { CONFIDENCE_WEIGHT } from "./priority";
 
 type Exec = Pick<Db, "execute">;
 
+/** Categories docs/SPEC.md publishes no health weight for (Phase 5): their issues are reported, not scored. */
+export const UNWEIGHTED_CATEGORIES = ["performance", "accessibility"] as const;
+export type WeightedCategory = Exclude<Category, (typeof UNWEIGHTED_CATEGORIES)[number]>;
+
 /** Published category weights (sum 100). */
-export const CATEGORY_WEIGHTS: Record<Category, number> = {
+export const CATEGORY_WEIGHTS: Record<WeightedCategory, number> = {
   indexability: 25,
   content: 15,
   metadata: 12,
@@ -57,7 +61,9 @@ const round1 = (n: number) => Math.round(n * 10) / 10;
 export function healthScore(ran: RuleResult[], coveragePercent: number | null): Health {
   const categories: Health["categories"] = {};
   for (const r of ran) {
-    const c = (categories[r.category] ??= { weight: CATEGORY_WEIGHTS[r.category], rulesRan: 0, deduction: 0, maximum: 0, score: 0 });
+    const weight = (CATEGORY_WEIGHTS as Partial<Record<Category, number>>)[r.category];
+    if (weight === undefined) continue; // an unweighted category is not in the score
+    const c = (categories[r.category] ??= { weight, rulesRan: 0, deduction: 0, maximum: 0, score: 0 });
     c.rulesRan++;
     c.deduction += r.score;
     c.maximum += r.impact * CONFIDENCE_WEIGHT[r.confidence];

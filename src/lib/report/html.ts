@@ -7,7 +7,7 @@
 import type { Branding } from "../model";
 import type { ReportData, ReportGroup } from "../results/report";
 import { INLINE_URLS, PRIORITY_PAGES } from "../results/report";
-import { CATEGORY_WEIGHTS, PARTIAL_COVERAGE_BELOW } from "../results/health";
+import { CATEGORY_WEIGHTS, PARTIAL_COVERAGE_BELOW, UNWEIGHTED_CATEGORIES } from "../results/health";
 import { NOT_OURS, UNFETCHED } from "../results/coverage";
 import { BRAND_COLOR, LOGO_DATA_URL } from "./branding";
 
@@ -184,7 +184,7 @@ function groupPage(g: ReportGroup) {
 
 function categories(d: ReportData) {
   const h = d.overview.health;
-  const cats = Object.keys(CATEGORY_WEIGHTS).filter((c) => h?.categories[c as keyof typeof CATEGORY_WEIGHTS] || d.groups.some((g) => g.category === c));
+  const cats = [...Object.keys(CATEGORY_WEIGHTS), ...UNWEIGHTED_CATEGORIES].filter((c) => h?.categories[c as keyof typeof CATEGORY_WEIGHTS] || d.groups.some((g) => g.category === c));
   const maxDepthUrls = Math.max(1, ...d.depth.map((x) => x.urls));
   const clusters = d.duplicates.slice(0, 20);
   return `<section class="page">
@@ -194,7 +194,7 @@ function categories(d: ReportData) {
       const ch = h?.categories[c as keyof typeof CATEGORY_WEIGHTS];
       const gs = d.groups.filter((g) => g.category === c);
       return `<h3>${esc(c.replace("_", " "))}</h3>
-      <p>${ch ? `Score ${m(`health.category.${c}`, ch.score)} (weight ${esc(ch.weight)}, ${esc(ch.rulesRan)} checks ran).` : "No check of this category ran."}</p>
+      <p>${ch ? `Score ${m(`health.category.${c}`, ch.score)} (weight ${esc(ch.weight)}, ${esc(ch.rulesRan)} checks ran).` : (UNWEIGHTED_CATEGORIES as readonly string[]).includes(c) ? "Not part of the health score: no weight is published for this category." : "No check of this category ran."}</p>
       ${gs.length ? `<table><thead><tr><th>Issue</th><th>Priority</th><th class="n">URLs</th></tr></thead><tbody>${gs.map((g) => `<tr><td>${esc(g.title)}</td><td>${esc(g.priority)}</td><td class="n">${m(`group.${g.ruleId}.affected`, g.affectedUrls)}</td></tr>`).join("")}</tbody></table>` : "<p>No issue found.</p>"}`;
     })
     .join("")}

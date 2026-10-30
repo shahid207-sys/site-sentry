@@ -196,7 +196,9 @@ const INDEX: Defect[] = [
     expect: ["IDX-019", "CNT-011"],
     apply: (p, c) => ((p.title = `<title>Page not found | ${c.path}</title>`), (p.h1 = "<h1>Page not found</h1>")),
   },
-  { name: "stylesheet blocked by robots.txt", expect: ["IDX-026"], apply: (p) => void (p.head += '<link rel="stylesheet" href="/assets/private/site.css">') },
+  // PERF-005: a head stylesheet also blocks rendering.
+  { name: "stylesheet blocked by robots.txt", expect: ["IDX-026", "PERF-005"],
+    apply: (p) => void (p.head += '<link rel="stylesheet" href="/assets/private/site.css">') },
 ];
 
 const nextIndexPage = (path: string) => `/index/p-${Number(path.slice("/index/p-".length)) + 1}`;
@@ -247,6 +249,11 @@ const CONTENT: Defect[] = [
   { name: "lorem ipsum", expect: ["CNT-010"], apply: (p, c) => void (p.text = `<p>Lorem ipsum dolor sit amet. ${paragraph(c.path)}</p>`) },
   { name: "not-found text on a 200 page", expect: ["CNT-011"], apply: (p, c) => void (p.text = `<p>Error 404: this item is gone. ${paragraph(c.path)}</p>`) },
   { name: "low text-to-HTML ratio", expect: ["CNT-012"], apply: (p) => void (p.head += `<script>${"var fixtureFiller = 0;\n".repeat(1600)}</script>`) },
+  // Phase 5 performance defects of the HTML as served (PERF-005 is on /index/ and /security/, PERF-004 on /slow/).
+  { name: "HTML sent uncompressed", expect: ["PERF-008"], apply: (p) => void (p.headers["content-encoding"] = "identity") },
+  // A 520 KB inline state blob, as frameworks embed: over 500 KB, and mostly not text.
+  { name: "HTML over 500 KB", expect: ["PERF-006", "CNT-012"], apply: (p) => void (p.body += `<script type="application/json" id="state">${JSON.stringify({ items: "x".repeat(520 * 1024) })}</script>`) },
+  { name: "over 1,500 elements", expect: ["PERF-010"], apply: (p) => void (p.body += `<ul>${Array.from({ length: 1600 }, (_, i) => `<li>Item ${i + 1}</li>`).join("")}</ul>`) },
 ];
 
 /** Page path → defect. Defects take the first pages of their section (p-1, p-2…); the rest stay clean. */

@@ -306,7 +306,9 @@ export const GIT_HEAD_BODY = "ref: refs/heads/main\n";
 
 const httpLink = (p: Parts, c: { origin: string }) => void (p.body += `<p><a href="${c.origin.replace("https:", "http:")}${PLAIN_HTTP_PAGE}">The plain http page</a></p>`);
 const SECURITY: Defect[] = [
-  { name: "mixed content script", expect: ["SEC-002"], apply: (p, c) => void (p.head += `<script src="${c.origin.replace("https:", "http:")}/assets/app.js"></script>`) },
+  // PERF-005: a classic head script also blocks rendering.
+  { name: "mixed content script", expect: ["SEC-002", "PERF-005"],
+    apply: (p, c) => void (p.head += `<script src="${c.origin.replace("https:", "http:")}/assets/app.js"></script>`) },
   { name: "http link to the plain page (1/2)", expect: ["LNK-011"], apply: httpLink },
   { name: "http link to the plain page (2/2)", expect: ["LNK-011"], apply: httpLink },
 ];

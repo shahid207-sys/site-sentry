@@ -73,7 +73,8 @@ function pageFrom(path: string, over: Partial<Parts> | string = {}, o: PageOpts 
   const url = U(path);
   const src = typeof over === "string" ? over : html({ ...clean(path), ...over });
   const $ = parseHtml(src);
-  const headers = { "content-type": "text/html; charset=utf-8", ...o.headers };
+  // A clean server compresses HTML (PERF-008).
+  const headers = { "content-type": "text/html; charset=utf-8", "content-encoding": "gzip", ...o.headers };
   const x = extractHtml({ $, html: src, pageUrl: url, headers, bytes: Buffer.byteLength(src), outlinks: extractOutlinks($, url).links });
   return {
     ...x,
@@ -492,6 +493,13 @@ const CASES: Record<string, Case> = {
   "SEC-005": PAGE("SEC-005", () => pageFrom("/", {}, { headers: { "x-content-type-options": "nosniff", "x-frame-options": "DENY" } }), () => pageFrom("/", {}, { headers: { "x-content-type-options": "nosniff", "content-security-policy": "default-src 'self'; frame-ancestors 'none'" } })),
   "SEC-006": SITE("SEC-006", () => [cleanSite(), crawlOf({ probes: [...GOOD_PROBES, exposed("env_file", { pattern: "env_key_value", lines: 3 })] })], () => [cleanSite(), crawlOf({ probes: [...GOOD_PROBES, exposed("env_file", null), exposed("git_head", null)] })]),
 
+  // ---------- PERF ----------
+  "PERF-004": PAGE("PERF-004", () => ({ ...pageFrom("/x/"), timings: { fetchMs: 950, extractMs: 1 } }), () => ({ ...pageFrom("/x/"), timings: { fetchMs: 800, extractMs: 1 } })),
+  "PERF-005": PAGE("PERF-005", () => pageFrom("/x/", { head: '<script src="/a.js"></script><link rel="stylesheet" href="/s.css">' }), () => pageFrom("/x/", { head: '<script src="/a.js" defer></script><script type="module" src="/m.js"></script><link rel="stylesheet" href="/p.css" media="print">' })),
+  "PERF-006": PAGE("PERF-006", () => pageFrom("/x/", withBody(`<main><p>${"x".repeat(520 * 1024)}</p></main>`)), () => pageFrom("/x/")),
+  "PERF-008": PAGE("PERF-008", () => pageFrom("/x/", {}, { headers: { "content-encoding": "identity" } }), () => pageFrom("/x/")),
+  "PERF-010": PAGE("PERF-010", () => pageFrom("/x/", withBody(`<main>${"<span>x</span>".repeat(1600)}</main>`)), () => pageFrom("/x/", withBody(`<main>${"<span>x</span>".repeat(1400)}</main>`))),
+
   // ---------- SITE ----------
   "SITE-001": SITE_ISSUES("SITE-001", () => [cleanSite(...templated(10, "T1")), issues("IMG-007", "T1", 9)], () => [cleanSite(...templated(10, "T1")), issues("IMG-007", "T1", 8)]),
   "SITE-002": SITE("SITE-002", () => [cleanSite(facts(pageFrom("/unlisted/"), 10))], () => [cleanSite(facts(pageFrom("/listed/", {}, { via: ["sitemap", "link"] }), 10))]),
@@ -505,8 +513,8 @@ const CASES: Record<string, Case> = {
 describe("rule catalog", () => {
   it("every registered rule has a test case, and every case names a registered rule", () => {
     expect(Object.keys(CASES).sort()).toEqual(RULES.map((r) => r.id).sort());
-    expect(RULES.length).toBe(31 + 19 + 12 + 3 + 13 + 6 + 10 + 10 + 6 + 5);
-    expect(Object.keys(DEFERRED_RULES)).toEqual(["IDX-018", "CNT-013", "CNT-014", "AIS-004", "LNK-009", "IMG-009", "PERF-*", "A11Y-*"]);
+    expect(RULES.length).toBe(31 + 19 + 12 + 3 + 13 + 6 + 10 + 10 + 6 + 5 + 5);
+    expect(Object.keys(DEFERRED_RULES)).toEqual(["IDX-018", "CNT-013", "CNT-014", "AIS-004", "LNK-009", "IMG-009", "PERF-001", "PERF-002", "PERF-003", "PERF-007", "PERF-009", "PERF-011", "A11Y-*"]);
     // A deferred rule is never also registered.
     for (const id of Object.keys(DEFERRED_RULES)) expect(RULES_BY_ID.has(id), id).toBe(false);
   });
@@ -699,6 +707,20 @@ describe("Phase 2b details", () => {
     expect(found).toHaveLength(1);
     expect(found[0].url).toBe(U("/"));
     expect(found[0].evidence).toEqual({ newUrls: 4, pages: 2, byRule: { "IDX-001": 2, "IDX-004": 1 }, previousAuditId: "prev-audit", sample: [U("/n1/"), U("/n2/")] });
+  });
+
+  it("PERF rules: small HTML is not judged for compression, absent headers count as uncompressed, every timing is lab", () => {
+    const small = pageFrom("/x/", "<!doctype html><html><head><title>t</title></head><body><p>short</p></body></html>", { headers: { "content-encoding": "" } });
+    expect(run("PERF-008", small)).toEqual([]);
+    const plain = pageFrom("/x/", {}, { headers: { "content-encoding": "" } });
+    expect(run("PERF-008", plain)[0].evidence).toMatchObject({ contentEncoding: null, acceptEncoding: "gzip, deflate" });
+    expect(run("PERF-004", { ...pageFrom("/x/"), timings: { fetchMs: 1200.4, extractMs: 1 } })[0].evidence).toEqual({ ttfbMs: 1200, threshold: 800, source: "lab", measuredBy: "crawler" });
+    // Async scripts, non-JS script types and disabled stylesheets do not block rendering either.
+    expect(run("PERF-005", pageFrom("/x/", { head: '<script async src="/a.js"></script><script type="application/ld+json" src="/d.json"></script><link rel="stylesheet" href="/s.css" disabled>' }))).toEqual([]);
+    const blocked = run("PERF-005", pageFrom("/x/", { head: '<script src="/a.js"></script><script type="text/javascript" src="/b.js"></script>' }))[0];
+    expect(blocked.evidence).toMatchObject({ count: 2, scripts: 2, stylesheets: 0 });
+    // Error pages are not judged.
+    expect(run("PERF-004", { ...pageFrom("/x/", {}, { status: 404 }), timings: { fetchMs: 5000, extractMs: 1 } })).toEqual([]);
   });
 
   it("SITE-001 needs at least 5 pages in the template group", () => {

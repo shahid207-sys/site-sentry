@@ -102,6 +102,19 @@ export const ALT3_SITEMAP_URLS = 50_001;
 export const LASTMOD = { identical: "2026-03-01", future: "2099-01-01" } as const;
 export const LLMS_TXT = `# ${SITE_NAME}\n\n> A test site for SiteSentry, with one section per defect family.\n\n- [Clean pages](/clean/): pages with no defects\n`;
 
+/** HTML at least this long is gzipped (rules/perf.ts COMPRESS_MIN_BYTES: below it, compressing gains nothing). */
+const GZIP_MIN_BYTES = 1400;
+
+/**
+ * The response as sent: HTML is gzipped when the client accepts it, as a well-configured server does (PERF-008). A
+ * response that sets content-encoding itself (identity: the PERF-008 defect) is sent as it is. The no-crawl
+ * simulation (site-rules.test.ts) reads its headers from here too.
+ */
+export function encodeForWire(r: Response, acceptEncoding: string): Response {
+  if (!(/^text\/html/i.test(r.type) && !("content-encoding" in r.headers) && Buffer.byteLength(r.body) >= GZIP_MIN_BYTES && /\bgzip\b/i.test(acceptEncoding))) return r;
+  return { ...r, headers: { ...r.headers, "content-encoding": "gzip", vary: "Accept-Encoding" }, body: gzipSync(r.body) };
+}
+
 export interface Response {
   status: number;
   type: string;
@@ -431,6 +444,7 @@ export async function startFixtureSite(opts: { port?: number } = {}): Promise<Fi
     requests.push(log(0));
     const send = (r: Response) => {
       hits.push(log(r.status));
+      r = encodeForWire(r, String(req.headers["accept-encoding"] ?? ""));
       // Content-Length on HEAD too, as real servers send it: the resource phase reads image sizes from HEAD.
       res.writeHead(r.status, { "content-type": r.type, "content-length": String(Buffer.byteLength(r.body)), ...r.headers }).end(req.method === "HEAD" ? undefined : r.body);
     };

@@ -6,7 +6,7 @@ import type { DiscoverySource, UrlState } from "../crawl/v2/types";
 import type { LanguageSnapshot, PageFacts, PageSnapshot, RobotsSnapshot } from "../snapshot/types";
 import type { ProbeRecord } from "./probe-types";
 
-export type Category = "indexability" | "metadata" | "content" | "ai_search" | "links" | "international" | "images" | "structured_data" | "security" | "site";
+export type Category = "indexability" | "metadata" | "content" | "ai_search" | "links" | "international" | "images" | "structured_data" | "security" | "site" | "performance" | "accessibility";
 export type Confidence = "verified" | "heuristic" | "advisory";
 export type Need = "raw" | "rendered" | "headers" | "graph" | "lighthouse";
 

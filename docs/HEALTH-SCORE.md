@@ -93,6 +93,8 @@ health         = Σ (weight × category score) / Σ weight                      
 - **History rules** (SITE-004 regressions, SITE-005 new URLs with a Critical issue) are left out. Their findings
   summarise other rules' results, which already deduct. They still get issue groups with a priority score, and they
   run only when the project has an earlier analysed audit.
+- **Performance and accessibility** (Phase 5) have no published weight: docs/SPEC.md gives none. Their issues are
+  reported and prioritised like any other, but they are not in the health score until weights are agreed.
 
 | Category | Weight |
 | --- | --- |

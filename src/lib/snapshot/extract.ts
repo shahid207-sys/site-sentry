@@ -167,6 +167,7 @@ function factsOf($: Doc, html: string, base: string, headers: Record<string, str
     bodyTextChars: blockText(body).length,
     mainTextChars,
     htmlBytes,
+    domNodes: $("*").length,
   };
 }
 

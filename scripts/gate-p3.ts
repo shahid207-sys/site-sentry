@@ -311,6 +311,7 @@ async function priorityAndHealth(db: Awaited<ReturnType<typeof setupDb>>, crawl:
      left join issue_groups g on g.crawl_id = rr.crawl_id and g.rule_id = rr.rule_id where rr.crawl_id = $1 and rr.status = 'ran' and r.scope <> 'history'`, [crawl])).rows;
   const cats = new Map<string, { d: number; m: number }>();
   for (const r of ran) {
+    if (!(r.category in CATEGORY_W)) continue; // performance and accessibility have no published weight
     const c = cats.get(r.category) ?? { d: 0, m: 0 };
     c.d += r.score ?? 0;
     c.m += r.impact * CONF_W[r.confidence];
