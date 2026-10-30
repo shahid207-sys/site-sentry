@@ -172,7 +172,12 @@ export async function reserve(db: Db, crawlId: string, owner: string, limit: num
           where a.crawl_id = ${crawlId}::uuid and a.state = 'discovered' and a.depth is not null
             and (${maxDepth}::int is null or a.depth <= ${maxDepth}::int or a.discovered_via && array['seed','sitemap']::text[])))
       order by depth nulls last, id
-      limit ${limit}
+      -- Never more than the budget left after the URLs already reserved: the budget is charged at commit, and
+      -- concurrent commits would otherwise decide which reserved URLs get the last slots (not breadth-first order).
+      limit (select case when k.budget is null then ${limit}::int
+          else greatest(0, least(${limit}::int, k.budget - k.fetches_committed
+            - (select count(*)::int from crawl_urls q where q.crawl_id = k.id and q.state = 'queued'))) end
+        from crawls k where k.id = ${crawlId}::uuid)
       for update skip locked
     )
     update crawl_urls u set state = 'queued', lease_owner = ${owner}, lease_until = now() + ${leaseMs} * interval '1 millisecond', updated_at = now()

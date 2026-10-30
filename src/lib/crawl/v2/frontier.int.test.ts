@@ -144,11 +144,33 @@ describe("at-most-once fetch accounting", () => {
     const c = await newCrawl(db, { budget: 5 });
     await upsertUrls(db, c, Array.from({ length: 12 }, (_, i) => u(`/b${i}`, "link", 1)));
     const batch = await reserve(db, c, "w", 12, null);
+    expect(batch).toHaveLength(5);
+    // The budget shrinks after the reservation (another path spent it): commit is the check that holds.
+    await db.execute(sql`update crawls set budget = 3 where id = ${c}::uuid`);
     const outcomes = [];
     for (const r of batch) outcomes.push(await commitToSend(db, c, r.id, "w"));
-    expect(outcomes.filter((o) => o.ok)).toHaveLength(5);
-    expect(outcomes.filter((o) => !o.ok && o.why === "budget")).toHaveLength(7);
-    expect(await activeCount(db, c)).toEqual({ discovered: 7, queued: 0, fetching: 5 });
+    expect(outcomes.filter((o) => o.ok)).toHaveLength(3);
+    expect(outcomes.filter((o) => !o.ok && o.why === "budget")).toHaveLength(2);
+    expect(await activeCount(db, c)).toEqual({ discovered: 9, queued: 0, fetching: 3 });
+  });
+
+  it("reserves no more than the budget left, breadth-first, so commit order cannot change which URLs are fetched", async () => {
+    // Own lease owners: other tests release every reservation of "w".
+    const c = await newCrawl(db, { budget: 3 });
+    await upsertUrls(db, c, Array.from({ length: 10 }, (_, i) => u(`/s${i}`, "link", 1)));
+    const first = await reserve(db, c, "cap", 8, null);
+    expect(first.map((r) => r.url)).toEqual(["https://example.test/s0", "https://example.test/s1", "https://example.test/s2"]);
+    // Committed in reverse: still exactly the reserved three.
+    for (const r of [...first].reverse()) expect((await commitToSend(db, c, r.id, "cap")).ok).toBe(true);
+    expect(await reserve(db, c, "cap", 8, null)).toEqual([]);
+
+    // URLs reserved but not yet committed count against what is left.
+    const d = await newCrawl(db, { budget: 3 });
+    await upsertUrls(db, d, Array.from({ length: 6 }, (_, i) => u(`/q${i}`, "link", 1)));
+    expect(await reserve(db, d, "cap", 2, null)).toHaveLength(2);
+    expect((await reserve(db, d, "cap2", 8, null)).map((r) => r.url)).toEqual(["https://example.test/q2"]);
+    await releaseReservations(db, "cap");
+    await releaseReservations(db, "cap2");
   });
 
   it("stops handing out URLs once the budget is spent, so a reserve/commit loop terminates", async () => {
