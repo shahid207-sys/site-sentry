@@ -143,7 +143,7 @@ async function main() {
         cadence: "weekly",
         hourUtc: 3,
         weekday: 0,
-        request: { mode: "sitemap", urls: [], profile: "custom", budget: 120, maxDepth: 3, scope: { include: [], exclude: [], subfolder: "/meta/" }, categories: ["meta"], checkLinks: false, includeImportant: false },
+        request: { mode: "sitemap", urls: [], profile: "custom", budget: 120, maxDepth: 3, scope: { include: [], exclude: [], subfolder: "/meta/" }, categories: ["metadata"], checkLinks: false, includeImportant: false },
         webhookUrl: `http://${HOOK_HOST}:${HOOK_PORT}/hook`,
       },
     });
