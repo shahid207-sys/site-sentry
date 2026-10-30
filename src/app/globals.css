@@ -2,9 +2,9 @@
 
 /*
  * SiteSentry design tokens. Light-first: neutral #F7F8FA canvas, white surfaces, deep-slate text and a
- * restrained coral accent. Contrast on white: fg 15.9:1, fg-2 7.6:1, fg-3 5.6:1, accent-ink 5.0:1, every
- * status colour >= 5:1, and text on accent fills 6.4:1, so all text tokens pass WCAG AA on surface,
- * elevated and bg. Coral itself (#F15F46) is only used as a fill or decoration, never as small text.
+ * restrained coral accent. Every text token passes WCAG AA (4.5:1) on bg, surface and elevated, every status
+ * colour on its soft fill, and white on the accent fill (4.8:1) and its hover: src/app/tokens.test.ts checks
+ * both themes. The brighter brand coral (#F15F46, 3.2:1 with white) is only decoration, never behind text.
  */
 :root {
   color-scheme: light;
@@ -19,8 +19,8 @@
   --fg: #172033;
   --fg-2: #5d6b82;
   --fg-3: #5f6b7d;
-  --accent: #f15f46;
-  --accent-hover: #e04a31;
+  --accent: #cf3f27;
+  --accent-hover: #b8361f;
   --accent-fg: #ffffff;
   --accent-ink: #c2412b;
   --accent-soft: #fff1ed;
@@ -46,6 +46,133 @@
   --shadow-raised: 0 2px 4px rgb(16 24 40 / 0.04), 0 12px 32px -12px rgb(16 24 40 / 0.14);
   --shadow-pop: 0 24px 56px -16px rgb(16 24 40 / 0.22), 0 0 0 1px var(--line);
   --scrim: rgb(15 23 42 / 0.45);
+  /* Issue priority (Phase 3 groups), used only for priority: an icon and a label always accompany the colour. */
+  --p-critical: #b42318;
+  --p-critical-soft: #fef0ef;
+  --p-high: #c4320a;
+  --p-high-soft: #fff3ec;
+  --p-medium: #a15c07;
+  --p-medium-soft: #fef7e6;
+  --p-low: #1e5bc6;
+  --p-low-soft: #eef4ff;
+  --p-info: #5d6b82;
+  --p-info-soft: #f1f3f6;
+  --code-bg: #111827;
+  --code-fg: #e5e7eb;
+}
+
+/*
+ * Dark theme: the same token names over a zinc base. It follows the OS unless the user picked a theme
+ * (html[data-theme], set before first paint by the script in src/app/layout.tsx). Text tokens pass WCAG AA on
+ * bg, surface and elevated (scripts/contrast.mts).
+ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0e0f12;
+    --surface: #16181c;
+    --surface-secondary: #1a1c21;
+    --elevated: #202329;
+    --hover: #24272e;
+    --line: #2c3038;
+    --line-subtle: #23262c;
+    --line-strong: #3d424c;
+    --fg: #eceef2;
+    --fg-2: #b3b9c4;
+    --fg-3: #a0a7b3;
+    --accent: #cf3f27;
+    --accent-hover: #b8361f;
+    --accent-fg: #ffffff;
+    --accent-ink: #ff8f7a;
+    --accent-soft: #3a1d17;
+    --accent-softer: #24171a;
+    --sidebar-active: #33201b;
+    --sev-high: #ff8a80;
+    --sev-high-soft: #3b1715;
+    --sev-medium: #f5b955;
+    --sev-medium-soft: #36270f;
+    --sev-low: #8ab4ff;
+    --sev-low-soft: #172540;
+    --ok: #5fd39a;
+    --ok-soft: #12301f;
+    --info: #8ab4ff;
+    --info-soft: #172540;
+    --sample: #b7a3ff;
+    --sample-soft: #251d40;
+    --chart-high: #f87171;
+    --chart-medium: #fbbf24;
+    --chart-low: #60a5fa;
+    --chart-ok: #4ade80;
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow-raised: 0 2px 4px rgb(0 0 0 / 0.4), 0 12px 32px -12px rgb(0 0 0 / 0.6);
+    --shadow-pop: 0 24px 56px -16px rgb(0 0 0 / 0.7), 0 0 0 1px var(--line);
+    --scrim: rgb(0 0 0 / 0.6);
+    --p-critical: #ff8a80;
+    --p-critical-soft: #3b1715;
+    --p-high: #ffa36b;
+    --p-high-soft: #3a2012;
+    --p-medium: #f5c35a;
+    --p-medium-soft: #36290f;
+    --p-low: #8ab4ff;
+    --p-low-soft: #172540;
+    --p-info: #b3b9c4;
+    --p-info-soft: #23262c;
+    --code-bg: #0b0c0f;
+    --code-fg: #e5e7eb;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0e0f12;
+  --surface: #16181c;
+  --surface-secondary: #1a1c21;
+  --elevated: #202329;
+  --hover: #24272e;
+  --line: #2c3038;
+  --line-subtle: #23262c;
+  --line-strong: #3d424c;
+  --fg: #eceef2;
+  --fg-2: #b3b9c4;
+  --fg-3: #a0a7b3;
+  --accent: #cf3f27;
+  --accent-hover: #b8361f;
+  --accent-fg: #ffffff;
+  --accent-ink: #ff8f7a;
+  --accent-soft: #3a1d17;
+  --accent-softer: #24171a;
+  --sidebar-active: #33201b;
+  --sev-high: #ff8a80;
+  --sev-high-soft: #3b1715;
+  --sev-medium: #f5b955;
+  --sev-medium-soft: #36270f;
+  --sev-low: #8ab4ff;
+  --sev-low-soft: #172540;
+  --ok: #5fd39a;
+  --ok-soft: #12301f;
+  --info: #8ab4ff;
+  --info-soft: #172540;
+  --sample: #b7a3ff;
+  --sample-soft: #251d40;
+  --chart-high: #f87171;
+  --chart-medium: #fbbf24;
+  --chart-low: #60a5fa;
+  --chart-ok: #4ade80;
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-raised: 0 2px 4px rgb(0 0 0 / 0.4), 0 12px 32px -12px rgb(0 0 0 / 0.6);
+  --shadow-pop: 0 24px 56px -16px rgb(0 0 0 / 0.7), 0 0 0 1px var(--line);
+  --scrim: rgb(0 0 0 / 0.6);
+  --p-critical: #ff8a80;
+  --p-critical-soft: #3b1715;
+  --p-high: #ffa36b;
+  --p-high-soft: #3a2012;
+  --p-medium: #f5c35a;
+  --p-medium-soft: #36290f;
+  --p-low: #8ab4ff;
+  --p-low-soft: #172540;
+  --p-info: #b3b9c4;
+  --p-info-soft: #23262c;
+  --code-bg: #0b0c0f;
+  --code-fg: #e5e7eb;
 }
 
 @theme inline {
@@ -83,12 +210,24 @@
   --color-info-soft: var(--info-soft);
   --color-sample: var(--sample);
   --color-sample-soft: var(--sample-soft);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jetbrains-mono);
   --shadow-pop: var(--shadow-pop);
   --shadow-card: var(--shadow-card);
   --shadow-raised: var(--shadow-raised);
   --color-scrim: var(--scrim);
+  --color-p-critical: var(--p-critical);
+  --color-p-critical-soft: var(--p-critical-soft);
+  --color-p-high: var(--p-high);
+  --color-p-high-soft: var(--p-high-soft);
+  --color-p-medium: var(--p-medium);
+  --color-p-medium-soft: var(--p-medium-soft);
+  --color-p-low: var(--p-low);
+  --color-p-low-soft: var(--p-low-soft);
+  --color-p-info: var(--p-info);
+  --color-p-info-soft: var(--p-info-soft);
+  --color-code-bg: var(--code-bg);
+  --color-code-fg: var(--code-fg);
 }
 
 html {
@@ -98,7 +237,7 @@ html {
 body {
   background: var(--bg);
   color: var(--fg);
-  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  font-family: var(--font-inter), system-ui, sans-serif;
   font-feature-settings: "cv11", "ss01";
 }
 
@@ -123,7 +262,7 @@ body {
   background:
     radial-gradient(60% 55% at 85% 20%, rgb(241 95 70 / 0.13), transparent 70%),
     radial-gradient(45% 40% at 0% 0%, rgb(241 95 70 / 0.07), transparent 70%),
-    linear-gradient(180deg, #fffaf8 0%, var(--surface) 100%);
+    linear-gradient(180deg, var(--accent-softer) 0%, var(--surface) 100%);
 }
 
 /* Faint dotted grid used behind product mockups. */
