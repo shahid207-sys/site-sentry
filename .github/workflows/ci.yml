@@ -1,4 +1,4 @@
-# Phase 1–3 gates on every pull request (SPEC "Definition of done for v1"), plus lint, types, unit and integration
+# Phase 1–4 and 6 (local part) gates on every pull request (SPEC "Definition of done for v1"), plus lint, types, unit and integration
 # tests. The gates crawl the local fixture site and need Postgres and Redis, provided here as services on the same
 # loopback ports as docker-compose.yml.
 name: ci
@@ -53,3 +53,9 @@ jobs:
       - run: npm run gate:p2a
       - run: npm run gate:p2b
       - run: npm run gate:p3
+      # gate:p4 runs Lighthouse (desktop preset) with the runner's Chrome; its performance target sits close to the
+      # scores measured locally (90), so a slow runner can fail it: the log names the metric.
+      - run: npm run gate:p4
+      # gate:p6 covers scheduled audits and the signed webhook alert only; the integrations that need real accounts
+      # are listed as not built.
+      - run: npm run gate:p6
