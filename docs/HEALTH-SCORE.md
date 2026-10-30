@@ -90,6 +90,9 @@ health         = Σ (weight × category score) / Σ weight                      
 - **Rounding:** category and overall scores are rounded to one decimal.
 - **Excluded categories:** a category with no rule that ran is left out of the score and out of the weights.
 - **Inconclusive results:** they deduct nothing.
+- **History rules** (SITE-004 regressions, SITE-005 new URLs with a Critical issue) are left out. Their findings
+  summarise other rules' results, which already deduct. They still get issue groups with a priority score, and they
+  run only when the project has an earlier analysed audit.
 
 | Category | Weight |
 | --- | --- |

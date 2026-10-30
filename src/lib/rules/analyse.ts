@@ -11,13 +11,14 @@ import type { SitemapDocRecord } from "../crawl/v2/discovery";
 import type { RobotsRecord, VerifyConfig } from "../crawl/v2/runner";
 import type { DiscoverySource, UrlState } from "../crawl/v2/types";
 import type { CanonicalTag } from "../snapshot/types";
-import { NeedsConfig, type CrawlView, type Finding, type Hreflang, type PageRule, type PageView, type ResourceFacts, type ResourceRule, type Rule, type SiteCtx, type SiteRule, type SiteView, type UrlFacts } from "./contract";
+import { NeedsConfig, type CrawlView, type Finding, type HistoryRule, type Hreflang, type PageRule, type PageView, type ResourceFacts, type ResourceRule, type Rule, type SiteCtx, type SiteRule, type SiteView, type UrlFacts } from "./contract";
 import { bfsDepth, pageRank } from "./graph";
 import type { ProbeRecord } from "./probe-types";
 import { clusterTemplates, type ShapedPage } from "../snapshot/template";
 import { crawlComplete } from "../results/coverage";
 import { writeHealth } from "../results/health";
-import { laterAudits, writeIssueStates, writeVerifyStates } from "../results/states";
+import { writeHistoryFindings } from "../results/history";
+import { laterAudits, stateCounts, writeIssueStates, writeVerifyStates } from "../results/states";
 import { insertOccurrences, occurrenceOf, reachBasis, writeIssueGroups, type Occurrence } from "../results/occurrences";
 import { fingerprintOf } from "./fingerprint";
 import { TemplateGroups } from "./group";
@@ -418,7 +419,9 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
           from jsonb_to_recordset(${JSON.stringify(chains.slice(i, i + batch))}::jsonb) as v(url_id bigint, chain jsonb) where s.url_id = v.url_id`);
       }
 
-      const stats = new Stats(rules);
+      // History rules run after this audit's states are written (results/history.ts), not in this pass.
+      const historyRules = rules.filter((r): r is HistoryRule => r.scope === "history");
+      const stats = new Stats(rules.filter((r) => r.scope !== "history"));
       const pageRules = rules.filter((r): r is PageRule => r.scope === "page");
       const siteRules = rules.filter((r): r is SiteRule => r.scope === "site");
       const resourceRules = rules.filter((r): r is ResourceRule => r.scope === "resource");
@@ -476,7 +479,7 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
       );
       total += siteFound.length;
       if (duplicates) log("analysis.duplicate_fingerprints", { crawlId, duplicates });
-      const issueGroups = verify ? 0 : await writeIssueGroups(tx, crawlId, rules, basis.indexable);
+      let issueGroups = verify ? 0 : await writeIssueGroups(tx, crawlId, rules, basis.indexable);
 
       const list = stats.all();
       for (const s of list) {
@@ -484,16 +487,31 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
           values (${crawlId}::uuid, ${s.ruleId}, ${s.version}, ${s.status}, ${s.evaluated}, ${s.findings}, ${s.totalMs}, ${s.detail ?? null})`);
       }
       // After rule_runs: a fingerprint counts as re-checked only when its rule ran in this crawl.
-      const states = verify ? await writeVerifyStates(tx, crawlId, verify) : await writeIssueStates(tx, crawlId, crawl.complete);
+      let states = verify ? await writeVerifyStates(tx, crawlId, verify) : await writeIssueStates(tx, crawlId, crawl.complete);
+      if (!verify && historyRules.length) {
+        const h = await writeHistoryFindings(tx, crawlId, row.site_origin, basis.indexable, historyRules);
+        total += h.findings;
+        issueGroups += h.groups;
+        states = await stateCounts(tx, crawlId);
+      }
       const health = verify ? null : await writeHealth(tx, crawlId, rules);
       // fetched → analysed: every snapshot was read by the page rules above.
       await tx.execute(sql`update crawl_urls set state = 'analysed', updated_at = now() where crawl_id = ${crawlId}::uuid and state = 'fetched'`);
       const msPerPage = pages ? Math.round((list.reduce((n, s) => n + s.totalMs, 0) / pages) * 1000) / 1000 : 0;
-      await tx.execute(sql`update crawls set analysis = ${JSON.stringify({ status: "completed", startedAt, finishedAt: new Date().toISOString(), pages, findings: total, msPerPage, issueGroups, duplicateFingerprints: duplicates, states, health: health?.score ?? null, partialCoverage: health?.partialCoverage ?? null })}::jsonb where id = ${crawlId}::uuid`);
+      await tx.execute(sql`update crawls set analysis = ${JSON.stringify({ status: "completed", startedAt, finishedAt: new Date().toISOString(), pages, findings: total, msPerPage, issueGroups, indexablePages: basis.indexable, duplicateFingerprints: duplicates, states, health: health?.score ?? null, partialCoverage: health?.partialCoverage ?? null })}::jsonb where id = ${crawlId}::uuid`);
       // Later audits of the project read this one's states: recompute them, oldest first.
       for (const later of await laterAudits(tx, crawlId)) {
         if (later.kind === "verify" && later.config.verify) await writeVerifyStates(tx, later.id, later.config.verify);
-        else await writeIssueStates(tx, later.id, await crawlComplete(tx, later.id, later.status));
+        else {
+          await writeIssueStates(tx, later.id, await crawlComplete(tx, later.id, later.status));
+          // Its regressions may have changed: rewrite its history results, then the counts its analysis reports.
+          if (historyRules.length) await writeHistoryFindings(tx, later.id, later.site_origin, later.indexable, historyRules);
+          await tx.execute(sql`update crawls set analysis = analysis || jsonb_build_object(
+              'findings', (select count(*)::int from findings where crawl_id = ${later.id}::uuid),
+              'issueGroups', (select count(*)::int from issue_groups where crawl_id = ${later.id}::uuid),
+              'states', ${JSON.stringify(await stateCounts(tx, later.id))}::jsonb)
+            where id = ${later.id}::uuid`);
+        }
       }
       return { outcome: "analysed" as const, pages, findings: total, stats: list, msPerPage };
     });

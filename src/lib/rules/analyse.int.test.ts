@@ -76,8 +76,9 @@ describe("analyseCrawl", () => {
     expect(res.findings).toBe(f.length);
 
     const runs = (await db.execute(sql`select rule_id, status, evaluated, findings from rule_runs where crawl_id = ${c}::uuid`)).rows as { rule_id: string; status: string; evaluated: number; findings: number }[];
-    expect(runs).toHaveLength(RULES.length);
-    for (const r of RULES) {
+    // A first audit: the history rules (SITE-004, SITE-005) have nothing to compare with and do not run.
+    expect(runs).toHaveLength(RULES.filter((r) => r.scope !== "history").length);
+    for (const r of RULES.filter((x) => x.scope !== "history")) {
       const run = runs.find((x) => x.rule_id === r.id)!;
       // Resource rules run once per checked image or external link; this site has neither.
       expect(run.evaluated, r.id).toBe(r.scope === "page" ? 5 : r.scope === "resource" ? 0 : 1);
@@ -164,7 +165,7 @@ describe("analyseCrawl", () => {
     const second = await findingRows(c);
     expect(second).toEqual(first);
     const runs = (await db.execute(sql`select count(*)::int as n from rule_runs where crawl_id = ${c}::uuid`)).rows[0] as { n: number };
-    expect(runs.n).toBe(RULES.length);
+    expect(runs.n).toBe(RULES.filter((r) => r.scope !== "history").length);
   });
 
   it("site pass: inbound links, click depth, PageRank and templates, streamed in small batches", async () => {

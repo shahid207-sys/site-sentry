@@ -5,6 +5,7 @@ import type { Db } from "../db/client";
 import { isIndexable, type Finding, type Rule, type SiteView } from "../rules/contract";
 import { fingerprintOf } from "../rules/fingerprint";
 import { CONFIDENCE_WEIGHT, priorityOf, priorityScore, reach } from "./priority";
+import { onlyRules } from "./states";
 
 type Exec = Pick<Db, "execute">;
 
@@ -108,15 +109,16 @@ export function groupPriority(rule: Pick<Rule, "impact" | "confidence" | "catego
   };
 }
 
-/** One issue group per rule with an occurrence in the crawl, from finding_occurrences. */
-export async function writeIssueGroups(db: Exec, crawlId: string, rules: Rule[], indexable: number): Promise<number> {
+/** One issue group per rule with an occurrence in the crawl, from finding_occurrences. `ruleIds`: only those rules'. */
+export async function writeIssueGroups(db: Exec, crawlId: string, rules: Rule[], indexable: number, ruleIds?: string[]): Promise<number> {
+  const only = onlyRules("rule_id", ruleIds);
   const byId = new Map(rules.map((r) => [r.id, r]));
   const r = await db.execute(sql`select rule_id,
       count(distinct url) filter (where outcome = 'issue')::int as affected_urls,
       count(distinct url) filter (where outcome = 'inconclusive')::int as inconclusive_urls,
       coalesce(bool_or(reach_pages is null) filter (where outcome = 'issue'), false) as site_wide,
       (count(distinct url) filter (where outcome = 'issue' and reach_pages = 1) + coalesce(sum(reach_pages) filter (where outcome = 'issue' and reach_pages > 1), 0))::int as pages
-    from finding_occurrences where crawl_id = ${crawlId}::uuid group by rule_id order by rule_id`);
+    from finding_occurrences where crawl_id = ${crawlId}::uuid ${only} group by rule_id order by rule_id`);
   const rows = (r.rows as { rule_id: string; affected_urls: number; inconclusive_urls: number; site_wide: boolean; pages: number }[]).flatMap((x) => {
     const rule = byId.get(x.rule_id);
     if (!rule) return [];
@@ -140,14 +142,14 @@ export async function writeIssueGroups(db: Exec, crawlId: string, rules: Rule[],
   });
   if (!rows.length) return 0;
   // Rule, then template: the affected URLs per template, and the first few of each.
-  await db.execute(sql`with o as (select distinct rule_id, coalesce(template_id, '') as t, url from finding_occurrences where crawl_id = ${crawlId}::uuid and outcome = 'issue'),
+  await db.execute(sql`with o as (select distinct rule_id, coalesce(template_id, '') as t, url from finding_occurrences where crawl_id = ${crawlId}::uuid and outcome = 'issue' ${only}),
       r as (select *, row_number() over (partition by rule_id, t order by url collate "C") as rn from o)
     insert into issue_group_templates (crawl_id, rule_id, template_id, affected_urls, sample_urls)
     select ${crawlId}::uuid, rule_id, t, count(*)::int, jsonb_agg(url order by url collate "C") filter (where rn <= ${SAMPLE_URLS}) from r group by rule_id, t`);
   await db.execute(sql`insert into issue_groups (crawl_id, rule_id, category, impact, confidence, confidence_weight, affected_pages, indexable_pages, reach, score, priority, affected_urls, inconclusive_urls)
     select ${crawlId}::uuid, v.rule_id, v.category, v.impact, v.confidence, v.confidence_weight, v.affected_pages, v.indexable_pages, v.reach, v.score, v.priority, v.affected_urls, v.inconclusive_urls
     from jsonb_to_recordset(${JSON.stringify(rows)}::jsonb) as v(rule_id text, category text, impact smallint, confidence text, confidence_weight real, affected_pages int, indexable_pages int, reach real, score real, priority text, affected_urls int, inconclusive_urls int)`);
-  await db.execute(sql`with o as (select distinct rule_id, url, template_id from finding_occurrences where crawl_id = ${crawlId}::uuid and outcome = 'issue'),
+  await db.execute(sql`with o as (select distinct rule_id, url, template_id from finding_occurrences where crawl_id = ${crawlId}::uuid and outcome = 'issue' ${only}),
       r as (select *, row_number() over (partition by rule_id order by url collate "C") as rn from o)
     update issue_groups g set template_count = x.n, sample_urls = x.sample
     from (select rule_id, count(distinct template_id)::int as n, jsonb_agg(url order by url collate "C") filter (where rn <= ${SAMPLE_URLS}) as sample from r group by rule_id) x

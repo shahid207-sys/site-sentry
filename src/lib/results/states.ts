@@ -50,6 +50,8 @@ export function rechecked(checker: string, complete: boolean, wide: string[], s 
     and case (select scope from rules where id = ${row}.rule_id)
       when 'page' then exists (select 1 from crawl_urls u where u.crawl_id = ${c} and u.normalised_url = ${row}.url and u.state in (${ANSWERED_SQL}))
       when 'resource' then exists (select 1 from resources r where r.crawl_id = ${c} and r.url = ${row}.url and r.state = 'done')
+      -- A history rule judges the audit as a whole (SITE-004, SITE-005): running is re-checking.
+      when 'history' then true
       else ${complete}
         and (select o.crawl_id from issue_states o join crawls p on p.id = o.crawl_id join crawls k on k.id = ${c}
              where o.fingerprint = ${row}.fingerprint and o.outcome = 'issue' and p.kind = 'audit' and p.workspace = k.workspace
@@ -93,10 +95,18 @@ export async function stateCounts(db: Exec, crawlId: string): Promise<StateCount
   return out;
 }
 
-/** (Re)computes crawl `crawlId`'s states from its occurrences and the project's history. `complete`: see rechecked. */
-export async function writeIssueStates(db: Exec, crawlId: string, complete: boolean): Promise<StateCounts> {
+/** SQL: `and <col> is one of ruleIds`, or nothing when ruleIds is undefined. */
+export function onlyRules(col: string, ruleIds?: string[]) {
+  return ruleIds ? sql`and ${sql.raw(col)} in (select jsonb_array_elements_text(${JSON.stringify(ruleIds)}::jsonb))` : sql``;
+}
+
+/**
+ * (Re)computes crawl `crawlId`'s states from its occurrences and the project's history. `complete`: see rechecked.
+ * `ruleIds`: rewrite only those rules' states (the history pass, after the rest are written).
+ */
+export async function writeIssueStates(db: Exec, crawlId: string, complete: boolean, ruleIds?: string[]): Promise<StateCounts> {
   const wide = complete ? await wideAudits(db, crawlId) : [];
-  await db.execute(sql`delete from issue_states where crawl_id = ${crawlId}::uuid`);
+  await db.execute(sql`delete from issue_states where crawl_id = ${crawlId}::uuid ${onlyRules("rule_id", ruleIds)}`);
   await db.execute(sql`insert into issue_states (crawl_id, fingerprint, rule_id, url, evidence_key, template_id, outcome, state, first_seen_at, page_subject)
     select o.crawl_id, o.fingerprint, o.rule_id, o.url, o.evidence_key, o.template_id, o.outcome,
       case when o.outcome = 'inconclusive' then 'inconclusive'
@@ -110,25 +120,37 @@ export async function writeIssueStates(db: Exec, crawlId: string, complete: bool
       where s.fingerprint = o.fingerprint and s.state <> 'inconclusive' and p.workspace = c.workspace and ${projectKey("p")} = ${projectKey("c")}
         and (p.created_at, p.id) < (c.created_at, c.id)
       order by p.created_at desc, p.id desc limit 1) last on true
-    where o.crawl_id = ${crawlId}::uuid`);
+    where o.crawl_id = ${crawlId}::uuid ${onlyRules("o.rule_id", ruleIds)}`);
   await db.execute(sql`insert into issue_states (crawl_id, fingerprint, rule_id, url, evidence_key, template_id, outcome, state, first_seen_at, page_subject)
     select ${crawlId}::uuid, s.fingerprint, s.rule_id, s.url, s.evidence_key, s.template_id, null,
       case when ${rechecked(crawlId, complete, wide)} then 'resolved' else 'not_rechecked' end, s.first_seen_at, s.page_subject
     from (select distinct on (s.fingerprint) s.* from issue_states s join crawls p on p.id = s.crawl_id join crawls c on c.id = ${crawlId}::uuid
           where s.state <> 'inconclusive' and p.workspace = c.workspace and ${projectKey("p")} = ${projectKey("c")} and (p.created_at, p.id) < (c.created_at, c.id)
           order by s.fingerprint, p.created_at desc, p.id desc) s
-    where s.state in (${OPEN})
+    where s.state in (${OPEN}) ${onlyRules("s.rule_id", ruleIds)}
       and not exists (select 1 from finding_occurrences o where o.crawl_id = ${crawlId}::uuid and o.fingerprint = s.fingerprint)`);
   return stateCounts(db, crawlId);
 }
 
 /** Later analysed crawls (audits and verifications) of the project, oldest first: re-analysing a crawl recomputes their states too. */
-export async function laterAudits(db: Exec, crawlId: string): Promise<{ id: string; status: string; kind: CrawlKind; config: { verify?: VerifyConfig } }[]> {
-  const r = await db.execute(sql`select p.id, p.status, p.kind, p.config from crawls c join crawls p on p.workspace = c.workspace and ${projectKey("p")} = ${projectKey("c")}
+export type LaterAudit = {
+  id: string;
+  status: string;
+  kind: CrawlKind;
+  config: { verify?: VerifyConfig };
+  site_origin: string;
+  /** Its indexable pages (the reach denominator), as its analysis stored them. */
+  indexable: number;
+};
+
+export async function laterAudits(db: Exec, crawlId: string): Promise<LaterAudit[]> {
+  const r = await db.execute(sql`select p.id, p.status, p.kind, p.config, p.site_origin,
+      coalesce((p.analysis->>'indexablePages')::int, (select max(g.indexable_pages) from issue_groups g where g.crawl_id = p.id), 0)::int as indexable
+    from crawls c join crawls p on p.workspace = c.workspace and ${projectKey("p")} = ${projectKey("c")}
     where c.id = ${crawlId}::uuid and p.id <> c.id and (p.created_at, p.id) > (c.created_at, c.id)
       and p.analysis->>'status' = 'completed'
     order by p.created_at, p.id`);
-  return r.rows as { id: string; status: string; kind: CrawlKind; config: { verify?: VerifyConfig } }[];
+  return r.rows as LaterAudit[];
 }
 
 /**

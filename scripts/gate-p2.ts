@@ -333,7 +333,8 @@ export async function runGate(phase: Phase) {
     if (PHASE === "2b") await phase2bChecks(db, site, mainCrawl.id, blobDir);
 
     console.log(`\n== Rules (phase ${PHASE}: ${FAMILIES[PHASE].source})`);
-    const phaseRules = RULES.filter((r) => FAMILIES[PHASE].test(r.id));
+    // History rules (SITE-004, SITE-005) judge an audit against earlier ones: src/lib/results/history.int.test.ts.
+    const phaseRules = RULES.filter((r) => FAMILIES[PHASE].test(r.id) && r.scope !== "history");
     const notEvaluated = phaseRules.filter((r) => !evaluated.get(r.id));
     check(`Every phase ${PHASE} rule was evaluated`, notEvaluated.length === 0, `${phaseRules.length} rules${notEvaluated.length ? `; never evaluated: ${notEvaluated.map((r) => r.id).join(", ")}` : ""}`);
     const silent = phaseRules.filter((r) => !fired.has(r.id) && !UNIT_ONLY[r.id]);

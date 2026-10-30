@@ -150,6 +150,17 @@ export interface SiteCtx {
   pageIssues: Map<string, Map<string, { count: number; sample: string[] }>>;
 }
 
+/** What a history rule knows: this audit's results against the project's earlier audits (SITE-004, SITE-005). */
+export interface HistoryCtx {
+  crawl: Pick<CrawlView, "id" | "origin">;
+  /** The project's latest earlier analysed audit. History rules run only when there is one. */
+  previousAuditId: string;
+  /** Occurrences of this audit whose state is regressed: resolved in an earlier audit, observed again here. */
+  regressed: { ruleId: string; url: string; fingerprint: string }[];
+  /** URLs this audit answered that no earlier audit's inventory had, with the rules of their Critical issue groups. */
+  newUrls: { url: string; criticalRules: string[] }[];
+}
+
 export interface ResourceCtx {
   resource: ResourceFacts;
   crawl: CrawlView;
@@ -179,9 +190,14 @@ interface RuleBase<C> {
 
 export type PageRule = RuleBase<PageCtx> & { scope: "page" };
 export type SiteRule = RuleBase<SiteCtx> & { scope: "site" };
+/**
+ * Judges the audit against the project's history, after its issue states are written. Its findings are a summary of
+ * other rules' results, so it is left out of the health score (those rules already count).
+ */
+export type HistoryRule = RuleBase<HistoryCtx> & { scope: "history" };
 /** Judges one checked external link or image (resource phase); the finding's subject is the resource URL. */
 export type ResourceRule = RuleBase<ResourceCtx> & { scope: "resource"; kind: ResourceFacts["kind"] };
-export type Rule = PageRule | SiteRule | ResourceRule;
+export type Rule = PageRule | SiteRule | ResourceRule | HistoryRule;
 
 /** Thrown by evaluate() when the rule cannot judge without a setting the user has not made. */
 export class NeedsConfig extends Error {

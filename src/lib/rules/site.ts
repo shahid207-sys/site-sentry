@@ -1,6 +1,6 @@
-// Site-level rules (docs/SPEC.md catalog, SITE) over the whole crawl. SITE-004 and SITE-005 compare against an
-// earlier audit (Phase 3 history) and are not implemented.
-import { finding, inSitemap, isIndexable, type Finding, type SiteRule, type UrlFacts } from "./contract";
+// Site-level rules (docs/SPEC.md catalog, SITE) over the whole crawl. SITE-004 and SITE-005 are history rules: they
+// judge the audit against the project's earlier audits, after its issue states are written (results/history.ts).
+import { finding, inSitemap, isIndexable, type Finding, type HistoryRule, type SiteRule, type UrlFacts } from "./contract";
 import { homeUrl } from "./util";
 
 const site = (r: Omit<SiteRule, "scope" | "category">): SiteRule => ({ scope: "site", category: "site", ...r });
@@ -132,4 +132,78 @@ const SITE003 = site({
   },
 });
 
+const history = (r: Omit<HistoryRule, "scope" | "category">): HistoryRule => ({ scope: "history", category: "site", ...r });
+
+/** Count per rule id, keys sorted, for evidence. */
+function countByRule(ruleIds: string[]): Record<string, number> {
+  const m = new Map<string, number>();
+  for (const id of ruleIds) m.set(id, (m.get(id) ?? 0) + 1);
+  return Object.fromEntries([...m].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+}
+
+/** The history rules' own ids: their findings are never the input of another history rule. */
+const isHistoryRule = (ruleId: string) => ruleId === "SITE-004" || ruleId === "SITE-005";
+
+const SITE004 = history({
+  id: "SITE-004",
+  version: 1,
+  confidence: "verified",
+  // The spec has SITE rules inherit the underlying rule's impact; one finding sums many rules, so it takes a fixed
+  // middle impact, and stays out of the health score (the regressed rules already count there).
+  impact: 3,
+  needs: ["graph"],
+  evaluate({ crawl, previousAuditId, regressed }) {
+    const own = regressed.filter((r) => !isHistoryRule(r.ruleId));
+    if (!own.length) return [];
+    const urls = new Set(own.map((r) => r.url));
+    const sample: string[] = [];
+    for (const u of urls) keepSmallest(sample, u, SAMPLE);
+    return [
+      finding(SITE004, homeUrl(crawl.origin), `${own.length} issue(s) on ${urls.size} URL(s) came back after an earlier audit had resolved them.`, {
+        regressed: own.length,
+        pages: urls.size,
+        byRule: countByRule(own.map((r) => r.ruleId)),
+        previousAuditId,
+        sample,
+      }),
+    ];
+  },
+  explain: {
+    why: "An issue that was fixed and came back points to a process gap: a deploy, template or CMS change undid the fix.",
+    fix: "Find the change that reintroduced each issue, fix it again, and add a check (test, review step or scheduled audit) that catches it next time.",
+    acceptance: "No issue group is in the regressed state.",
+  },
+});
+
+const SITE005 = history({
+  id: "SITE-005",
+  version: 1,
+  confidence: "verified",
+  // See SITE-004: a fixed impact, out of the health score.
+  impact: 4,
+  needs: ["graph"],
+  evaluate({ crawl, previousAuditId, newUrls }) {
+    const hit = newUrls.map((u) => ({ url: u.url, rules: u.criticalRules.filter((id) => !isHistoryRule(id)) })).filter((u) => u.rules.length);
+    if (!hit.length) return [];
+    const sample: string[] = [];
+    for (const u of hit) keepSmallest(sample, u.url, SAMPLE);
+    return [
+      finding(SITE005, homeUrl(crawl.origin), `${hit.length} of ${newUrls.length} URL(s) no earlier audit had seen have a critical issue.`, {
+        newUrls: newUrls.length,
+        pages: hit.length,
+        byRule: countByRule(hit.flatMap((u) => u.rules)),
+        previousAuditId,
+        sample,
+      }),
+    ];
+  },
+  explain: {
+    why: "New pages are where new defects ship; a critical issue on a page added since the last audit is a release that skipped SEO checks.",
+    fix: "Fix the critical issues on the new pages, then check new templates and sections before they go live.",
+    acceptance: "No URL first seen in this audit has an issue of Critical priority.",
+  },
+});
+
 export const SITE_RULES = [SITE001, SITE002, SITE003];
+/** Rules that run after issue states are written, against the project's earlier audits. */
+export const HISTORY_RULES = [SITE004, SITE005];

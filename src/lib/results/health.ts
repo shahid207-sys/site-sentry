@@ -79,7 +79,7 @@ export function healthScore(ran: RuleResult[], coveragePercent: number | null): 
   };
 }
 
-/** Computes and stores crawls.health from rule_runs (status 'ran') and the crawl's issue groups. */
+/** Computes and stores crawls.health from rule_runs (status 'ran', history rules excluded) and the crawl's issue groups. */
 export async function writeHealth(db: Exec, crawlId: string, rules: Rule[]): Promise<Health> {
   const byId = new Map(rules.map((r) => [r.id, r]));
   const r = await db.execute(sql`select rr.rule_id, coalesce(g.score, 0)::float8 as score from rule_runs rr
@@ -87,7 +87,8 @@ export async function writeHealth(db: Exec, crawlId: string, rules: Rule[]): Pro
     where rr.crawl_id = ${crawlId}::uuid and rr.status = 'ran'`);
   const ran = (r.rows as { rule_id: string; score: number }[]).flatMap((x) => {
     const rule = byId.get(x.rule_id);
-    return rule ? [{ ruleId: rule.id, category: rule.category, impact: rule.impact, confidence: rule.confidence, score: Number(x.score) }] : [];
+    // History rules (SITE-004, SITE-005) summarise other rules' results, which already count.
+    return rule && rule.scope !== "history" ? [{ ruleId: rule.id, category: rule.category, impact: rule.impact, confidence: rule.confidence, score: Number(x.score) }] : [];
   });
   const health = healthScore(ran, (await crawlCoverage(db, crawlId)).percent);
   await db.execute(sql`update crawls set health = ${JSON.stringify(health)}::jsonb where id = ${crawlId}::uuid`);

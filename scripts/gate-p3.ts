@@ -305,10 +305,10 @@ async function priorityAndHealth(db: Awaited<ReturnType<typeof setupDb>>, crawl:
       `hand: impact ${h.impact} × reach ln(1+${affected})/ln(1+${indexable}) = ${reach.toFixed(4)} × ${h.confidence} ${w} = ${score} → ${band} (${h.why}); stored: ${g ? `impact ${g.impact}, ${g.confidence} ${g.confidence_weight}, affected ${g.affected_pages}/${g.indexable_pages}, reach ${g.reach}, score ${g.score} → ${g.priority}` : "no group"}`,
     );
   }
-  // Health: every rule that ran, its group's score as the deduction (0 without a group), impact × weight as the maximum.
+  // Health: every rule that ran (history rules summarise others and are left out), its group's score as the deduction (0 without a group), impact × weight as the maximum.
   const ran = (await db.$client.query<{ category: string; impact: number; confidence: string; score: number | null }>(
     `select r.category, r.impact, r.confidence, g.score from rule_runs rr join rules r on r.id = rr.rule_id
-     left join issue_groups g on g.crawl_id = rr.crawl_id and g.rule_id = rr.rule_id where rr.crawl_id = $1 and rr.status = 'ran'`, [crawl])).rows;
+     left join issue_groups g on g.crawl_id = rr.crawl_id and g.rule_id = rr.rule_id where rr.crawl_id = $1 and rr.status = 'ran' and r.scope <> 'history'`, [crawl])).rows;
   const cats = new Map<string, { d: number; m: number }>();
   for (const r of ran) {
     const c = cats.get(r.category) ?? { d: 0, m: 0 };

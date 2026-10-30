@@ -7,7 +7,7 @@ import type { RobotsRecord } from "../crawl/v2/runner";
 import type { DiscoverySource, UrlState } from "../crawl/v2/types";
 import { extractHtml } from "../snapshot/extract";
 import { crawlView, effectiveCanonical } from "./analyse";
-import { NeedsConfig, type CrawlView, type Finding, type PageView, type ResourceFacts, type Rule, type SiteCtx, type SiteView, type UrlFacts } from "./contract";
+import { NeedsConfig, type CrawlView, type Finding, type HistoryCtx, type PageView, type ResourceFacts, type Rule, type SiteCtx, type SiteView, type UrlFacts } from "./contract";
 import { LEGACY_TO_CATALOG } from "./legacy-map";
 import type { ProbeRecord } from "./probe-types";
 import { DEFERRED_RULES, RULES, RULES_BY_ID } from "./registry";
@@ -218,8 +218,17 @@ function run(id: string, x: PageView | SiteView | ResourceFacts, crawl: CrawlVie
     if (!("kind" in x)) throw new Error(`${id} is a resource rule`);
     return r.evaluate({ resource: x, crawl });
   }
+  if (r.scope === "history") throw new Error(`${id} is a history rule: use runHistory`);
   if (!("urls" in x)) throw new Error(`${id} is a site rule`);
   return r.evaluate({ site: x, crawl, pageIssues: o.pageIssues ?? new Map() });
+}
+
+/** A history rule against an audit with an earlier one: no regressions and no new URL unless given. */
+function runHistory(id: string, ctx: Partial<HistoryCtx> = {}): Finding[] {
+  const r = rule(id);
+  if (r.scope !== "history") throw new Error(`${id} is not a history rule`);
+  const c = crawlOf();
+  return r.evaluate({ crawl: { id: c.id, origin: c.origin }, previousAuditId: "prev-audit", regressed: [], newUrls: [], ...ctx });
 }
 
 // The clean home and two clean content pages: distinct titles, descriptions and text.
@@ -303,6 +312,11 @@ const exposed = (kind: "env_file" | "git_head", secret: ProbeRecord["secret"]) =
 /** pageIssues as analyse.ts tallies them: rule → template → pages. */
 const issues = (ruleId: string, template: string, count: number) => new Map([[ruleId, new Map([[template, { count, sample: [U("/p/1/")] }]])]]);
 const templated = (n: number, template: string) => Array.from({ length: n }, (_, i) => ({ ...facts(pageFrom(`/p/${i}/`), 100 + i), page: { ...facts(pageFrom(`/p/${i}/`), 100 + i).page!, template } }));
+const HISTORY = (id: string, pos: () => Partial<HistoryCtx>, neg: () => Partial<HistoryCtx>): Case => ({
+  pos: () => runHistory(id, pos()),
+  neg: () => runHistory(id, neg()),
+});
+
 const SITE_ISSUES = (id: string, pos: () => [SiteView, SiteCtx["pageIssues"]], neg: () => [SiteView, SiteCtx["pageIssues"]]): Case => ({
   pos: () => {
     const [site, pageIssues] = pos();
@@ -482,13 +496,17 @@ const CASES: Record<string, Case> = {
   "SITE-001": SITE_ISSUES("SITE-001", () => [cleanSite(...templated(10, "T1")), issues("IMG-007", "T1", 9)], () => [cleanSite(...templated(10, "T1")), issues("IMG-007", "T1", 8)]),
   "SITE-002": SITE("SITE-002", () => [cleanSite(facts(pageFrom("/unlisted/"), 10))], () => [cleanSite(facts(pageFrom("/listed/", {}, { via: ["sitemap", "link"] }), 10))]),
   "SITE-003": SITE("SITE-003", () => [cleanSite(bare("/e1", 404), bare("/e2", 404), bare("/e3", 404))], () => [cleanSite(bare("/e1", 404))]),
+  // Negative: only a regression of SITE-004's own finding, which is never its input.
+  "SITE-004": HISTORY("SITE-004", () => ({ regressed: [{ ruleId: "META-003", url: U("/a/"), fingerprint: "fp-a" }] }), () => ({ regressed: [{ ruleId: "SITE-004", url: U("/"), fingerprint: "fp-own" }] })),
+  // Negative: a new URL whose issues are none of them Critical.
+  "SITE-005": HISTORY("SITE-005", () => ({ newUrls: [{ url: U("/new/"), criticalRules: ["IDX-001"] }] }), () => ({ newUrls: [{ url: U("/new/"), criticalRules: [] }] })),
 };
 
 describe("rule catalog", () => {
   it("every registered rule has a test case, and every case names a registered rule", () => {
     expect(Object.keys(CASES).sort()).toEqual(RULES.map((r) => r.id).sort());
-    expect(RULES.length).toBe(31 + 19 + 12 + 3 + 13 + 6 + 10 + 10 + 6 + 3);
-    expect(Object.keys(DEFERRED_RULES)).toEqual(["IDX-018", "CNT-013", "CNT-014", "AIS-004", "LNK-009", "IMG-009", "SITE-004", "SITE-005", "PERF-*", "A11Y-*"]);
+    expect(RULES.length).toBe(31 + 19 + 12 + 3 + 13 + 6 + 10 + 10 + 6 + 5);
+    expect(Object.keys(DEFERRED_RULES)).toEqual(["IDX-018", "CNT-013", "CNT-014", "AIS-004", "LNK-009", "IMG-009", "PERF-*", "A11Y-*"]);
     // A deferred rule is never also registered.
     for (const id of Object.keys(DEFERRED_RULES)) expect(RULES_BY_ID.has(id), id).toBe(false);
   });
@@ -658,6 +676,29 @@ describe("Phase 2b details", () => {
   it("SEC-004 and SEC-005 judge the start page only", () => {
     expect(run("SEC-004", pageFrom("/x/"))).toEqual([]);
     expect(run("SEC-005", pageFrom("/x/"))).toEqual([]);
+  });
+
+  it("SITE-004 reports one finding at the home page, counted by rule and URL, its own regressions left out", () => {
+    const r = (ruleId: string, path: string) => ({ ruleId, url: U(path), fingerprint: `${ruleId}${path}` });
+    const found = runHistory("SITE-004", { regressed: [r("META-003", "/b/"), r("META-003", "/a/"), r("IDX-001", "/a/"), r("SITE-005", "/")] });
+    expect(found).toHaveLength(1);
+    expect(found[0].url).toBe(U("/"));
+    expect(found[0].evidence).toEqual({ regressed: 3, pages: 2, byRule: { "IDX-001": 1, "META-003": 2 }, previousAuditId: "prev-audit", sample: [U("/a/"), U("/b/")] });
+    expect(runHistory("SITE-004")).toEqual([]);
+  });
+
+  it("SITE-005 counts the new URLs with a critical issue against all new URLs", () => {
+    const found = runHistory("SITE-005", {
+      newUrls: [
+        { url: U("/n2/"), criticalRules: ["IDX-001", "IDX-004"] },
+        { url: U("/n1/"), criticalRules: ["IDX-001"] },
+        { url: U("/n3/"), criticalRules: [] },
+        { url: U("/n4/"), criticalRules: ["SITE-004"] },
+      ],
+    });
+    expect(found).toHaveLength(1);
+    expect(found[0].url).toBe(U("/"));
+    expect(found[0].evidence).toEqual({ newUrls: 4, pages: 2, byRule: { "IDX-001": 2, "IDX-004": 1 }, previousAuditId: "prev-audit", sample: [U("/n1/"), U("/n2/")] });
   });
 
   it("SITE-001 needs at least 5 pages in the template group", () => {
