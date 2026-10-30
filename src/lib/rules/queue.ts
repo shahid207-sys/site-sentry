@@ -29,11 +29,21 @@ export async function unanalysedCrawls(db: Db): Promise<string[]> {
   return (r.rows as { id: string }[]).map((x) => x.id);
 }
 
-export function startAnalysisWorker(opts: { db: Db; connection?: ConnectionOptions; concurrency?: number; log: (event: string, data?: Record<string, unknown>) => void }): Worker<AnalysisJob> {
+export function startAnalysisWorker(opts: {
+  db: Db;
+  connection?: ConnectionOptions;
+  concurrency?: number;
+  log: (event: string, data?: Record<string, unknown>) => void;
+  /** Runs after a crawl is analysed (the scheduled-audit regression alert). Its failure is logged, never the job's. */
+  afterAnalysed?: (crawlId: string) => Promise<unknown>;
+}): Worker<AnalysisJob> {
   const worker = new Worker<AnalysisJob>(
     analysisQueueName(),
     async (job) => {
       const res = await analyseCrawl(opts.db, job.data.crawlId, { log: opts.log });
+      if (res.outcome === "analysed" && opts.afterAnalysed) {
+        await opts.afterAnalysed(job.data.crawlId).catch((e: Error) => opts.log("analysis.after_failed", { crawlId: job.data.crawlId, message: e.message }));
+      }
       return { outcome: res.outcome, pages: res.pages, findings: res.findings, msPerPage: res.msPerPage };
     },
     { connection: opts.connection ?? redisConnection(), concurrency: opts.concurrency ?? 1, lockDuration: 120_000 },

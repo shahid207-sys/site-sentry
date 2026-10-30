@@ -532,3 +532,80 @@ export const triageEvents = pgTable(
   },
   (t) => [index("triage_events_subject_idx").on(t.workspace, t.project, t.subject, t.id)],
 );
+
+/**
+ * A scheduled audit of one site (docs/SPEC.md "Scheduled audits (daily, weekly, monthly) with regression diffing and
+ * alerts"). `request` is the audit request the wizard would send (AuditRequest); the scheduler launches it when
+ * `next_run_at` passes. The webhook secret signs alert bodies (HMAC-SHA256) and is stored encrypted with
+ * CRAWLER_SECRET_KEY, scoped to the schedule.
+ */
+export const SCHEDULE_CADENCES = ["daily", "weekly", "monthly"] as const;
+export const auditSchedules = pgTable(
+  "audit_schedules",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace: text("workspace").notNull(),
+    siteId: text("site_id").notNull(),
+    request: jsonb("request").notNull(),
+    cadence: text("cadence").$type<(typeof SCHEDULE_CADENCES)[number]>().notNull(),
+    hourUtc: smallint("hour_utc").notNull(),
+    weekday: smallint("weekday"),
+    monthday: smallint("monthday"),
+    webhookUrl: text("webhook_url"),
+    webhookSecret: text("webhook_secret"),
+    enabled: boolean("enabled").notNull().default(true),
+    nextRunAt: timestamp("next_run_at", { withTimezone: true }).notNull(),
+    lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("audit_schedules_due_idx").on(t.enabled, t.nextRunAt),
+    index("audit_schedules_site_idx").on(t.workspace, t.siteId),
+    check("audit_schedules_cadence_ck", sql`${t.cadence} in (${list(SCHEDULE_CADENCES)})`),
+    check("audit_schedules_hour_ck", sql`${t.hourUtc} between 0 and 23`),
+    check("audit_schedules_weekday_ck", sql`(${t.cadence} <> 'weekly') or (${t.weekday} between 0 and 6)`),
+    check("audit_schedules_monthday_ck", sql`(${t.cadence} <> 'monthly') or (${t.monthday} between 1 and 28)`),
+    check("audit_schedules_webhook_ck", sql`(${t.webhookUrl} is null) = (${t.webhookSecret} is null)`),
+  ],
+);
+
+/** One launch of a schedule: the audit it started, or why it could not start. */
+export const scheduleRuns = pgTable(
+  "schedule_runs",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    scheduleId: uuid("schedule_id")
+      .notNull()
+      .references(() => auditSchedules.id, { onDelete: "cascade" }),
+    workspace: text("workspace").notNull(),
+    auditId: text("audit_id"),
+    error: text("error"),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("schedule_runs_schedule_idx").on(t.scheduleId, t.id), index("schedule_runs_audit_idx").on(t.workspace, t.auditId), check("schedule_runs_outcome_ck", sql`(${t.auditId} is null) <> (${t.error} is null)`)],
+);
+
+/**
+ * The regression check of one scheduled audit after its analysis: sent (the receiver answered 2xx), failed (after the
+ * retries), or skipped (nothing got worse, no earlier audit, or no webhook). One row per schedule and crawl, so a
+ * redelivered analysis job never alerts twice.
+ */
+export const ALERT_STATUSES = ["sent", "failed", "skipped"] as const;
+export const alertDeliveries = pgTable(
+  "alert_deliveries",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    scheduleId: uuid("schedule_id")
+      .notNull()
+      .references(() => auditSchedules.id, { onDelete: "cascade" }),
+    crawlId: uuid("crawl_id").notNull(),
+    baseCrawlId: uuid("base_crawl_id"),
+    status: text("status").$type<(typeof ALERT_STATUSES)[number]>().notNull(),
+    httpStatus: integer("http_status"),
+    attempts: integer("attempts").notNull().default(0),
+    detail: text("detail").notNull(),
+    payload: jsonb("payload"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("alert_deliveries_schedule_crawl_uq").on(t.scheduleId, t.crawlId), check("alert_deliveries_status_ck", sql`${t.status} in (${list(ALERT_STATUSES)})`)],
+);

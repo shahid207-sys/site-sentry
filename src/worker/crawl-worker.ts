@@ -12,6 +12,7 @@ import { finalizeUrls, sweep } from "../lib/crawl/v2/frontier";
 import { createCrawlQueue, crawlQueueName, enqueueCrawl, redisConnection, type CrawlJob } from "../lib/crawl/v2/queue";
 import { runCrawl } from "../lib/crawl/v2/runner";
 import { createAnalysisQueue, enqueueAnalysis, startAnalysisWorker, unanalysedCrawls } from "../lib/rules/queue";
+import { afterAnalysed } from "../lib/schedule/deliver";
 
 const numEnv = (name: string, fallback: number) => {
   const v = Number(process.env[name]);
@@ -40,7 +41,13 @@ async function main() {
   const shutdown = new AbortController();
   const analysisQueue = createAnalysisQueue(connection);
   // Analysis runs in this process by default; ANALYSIS_WORKER=off leaves it to `npm run worker:analysis`.
-  const analysisWorker = process.env.ANALYSIS_WORKER === "off" ? null : startAnalysisWorker({ db, connection, concurrency: numEnv("ANALYSIS_CONCURRENCY", 1), log });
+  const analysisWorker = process.env.ANALYSIS_WORKER === "off" ? null : startAnalysisWorker({
+          db,
+          connection,
+          concurrency: numEnv("ANALYSIS_CONCURRENCY", 1),
+          log,
+          afterAnalysed: (crawlId) => afterAnalysed(db, crawlId, { policy: workerFetchPolicy(), log, appUrl: process.env.APP_URL }),
+        });
 
   // Boot reconcile: recover expired claims everywhere, then make sure every unfinished crawl has a job.
   // Runners force-sweep their own crawl once they hold its lock, so a crash is recovered as soon as it is re-run.

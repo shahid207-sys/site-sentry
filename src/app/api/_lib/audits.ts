@@ -57,11 +57,8 @@ function scopeFrom(input: NonNullable<AuditRequest["scope"]>): ScopeRules | unde
   return { include: input.include, exclude: input.exclude, ...(subfolder ? { subfolder } : {}) };
 }
 
-/**
- * Validate a request against its crawl profile and start the audit: on crawler v2 when it is on, else on the
- * in-request engine with the profile clamped to what that engine can run (and an engine_limit note saying so).
- */
-export async function launchAudit(ws: Workspace, input: AuditRequest): Promise<{ audit: AuditRun; reused: boolean }> {
+/** The request's problems that do not depend on the store (profile, scope rules, crawler v2 needs); throws INVALID. */
+export function checkAuditRequest(ws: Workspace, input: AuditRequest) {
   if (input.mode === "single" && input.urls.length !== 1) throw new WorkflowError("INVALID", "Enter exactly one URL.");
   if (input.mode === "list" && input.urls.length === 0) throw new WorkflowError("INVALID", "Enter at least one URL.");
   let limits: ReturnType<typeof resolveProfile>;
@@ -81,7 +78,15 @@ export async function launchAudit(ws: Workspace, input: AuditRequest): Promise<{
   if (v2 && input.auth && !secretKey()) {
     throw new WorkflowError("INVALID", "Basic auth needs CRAWLER_SECRET_KEY set on the server, so the password can be stored encrypted.");
   }
+  return { limits, scope, v2 };
+}
 
+/**
+ * Validate a request against its crawl profile and start the audit: on crawler v2 when it is on, else on the
+ * in-request engine with the profile clamped to what that engine can run (and an engine_limit note saying so).
+ */
+export async function launchAudit(ws: Workspace, input: AuditRequest): Promise<{ audit: AuditRun; reused: boolean }> {
+  const { limits, scope, v2 } = checkAuditRequest(ws, input);
   const { siteId, mode, urls, sitemapUrl, categories, checkLinks, includeImportant } = input;
   let config: AuditConfig = {
     mode,
