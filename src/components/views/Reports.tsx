@@ -9,6 +9,7 @@ import { SeverityCountsInline } from "../domain";
 import { useApi } from "../lib/api";
 import { fmtDate, fmtDateTime, plural, shortUrl } from "../lib/format";
 import { useWs } from "../shell/context";
+import { ReportScreen } from "../v2/screens/ReportScreen";
 import { AuditStatusBadge, Breadcrumbs, Button, type Crumb, EmptyState, ErrorState, LinkButton, Mono, Notice, PageHeader, PageSkeleton, Panel, SampleTag, Select, SeverityBadge, btn } from "../ui";
 
 // ---------- index ----------
@@ -35,7 +36,15 @@ export function ReportsView() {
   if ((sites.loading && !sites.data) || (audits.loading && !audits.data)) return <PageSkeleton rows={3} />;
   if (!sites.data?.length) return (<>{header}<Panel><EmptyState icon={FileText} title="Nothing to report yet">Add a site and run an audit first.</EmptyState></Panel></>);
 
-  const items = audit
+  // A crawler v2 audit: its findings are issue groups in Postgres, so the legacy findings exports would be empty.
+  const items = audit?.crawler
+    ? [
+        { icon: FileText, title: "Audit report", body: "Client report with scope, coverage, health score, issues by priority with evidence and fixes. Open it as HTML, download the PDF, or share a read-only link.", action: <LinkButton href={`${base}/reports/${audit.id}`} icon={Printer}>Open report</LinkButton> },
+        { icon: ListChecks, title: "Fix board", body: "Every issue group by fix status, from To do to Verified. Verified is earned only by a fix verification re-crawl.", action: <LinkButton href={`${base}/audits/${audit.id}/board`} icon={ListChecks}>Open fix board</LinkButton> },
+        { icon: GitCompareArrows, title: "Comparison", body: hasPrevious ? "What changed since the previous audit of this site: new, resolved, regressed and not re-checked issues." : "Needs a previous finished audit of this site.", action: hasPrevious ? <LinkButton href={`${base}/audits/${audit.id}/compare`} icon={GitCompareArrows}>Open comparison</LinkButton> : <Button disabled icon={GitCompareArrows}>Open comparison</Button> },
+        { icon: Download, title: "Data exports", body: "Each issue group exports as CSV from the Issues screen: every affected URL with its state and evidence. CSV cells are protected against spreadsheet formula injection.", action: <LinkButton href={`${base}/audits/${audit.id}/issues`} icon={Download}>Open issues</LinkButton> },
+      ]
+    : audit
     ? [
         { icon: FileText, title: "Audit report", body: "Print-ready summary for a client or stakeholder: scope, coverage, findings by priority with evidence and recommendations. Save as PDF from the print dialog.", action: <LinkButton href={`${base}/reports/${audit.id}`} icon={Printer}>Open report</LinkButton> },
         { icon: ListChecks, title: "Developer handoff", body: "The site's active fix tasks, each with observed evidence, expected behaviour, remediation and acceptance criteria to check off.", action: <LinkButton href={`${base}/reports/handoff?site=${site}`} icon={Printer}>Open handoff</LinkButton> },
@@ -137,6 +146,7 @@ export function AuditReportView() {
   if (error) return (<><PageHeader title="Audit report" crumbs={crumbs} /><ErrorState error={error} onRetry={reload} /></>);
   if (loading && !data) return <PageSkeleton rows={6} />;
   if (!data) return null;
+  if (data.audit.crawler) return <ReportScreen auditId={auditId} />;
   const a = data.audit;
   if (a.status === "running") return (<><PageHeader title="Audit report" crumbs={crumbs} /><Notice tone="info" title="This audit is still running">Open the report when it has finished.</Notice></>);
   const notInspected = data.pages.filter((p) => p.outcome !== "inspected");
@@ -156,15 +166,6 @@ export function AuditReportView() {
         {ws === "sample" ? <p className="mt-3 text-[13px] text-sample">Sample data: a fictional website. These results are illustrative and do not describe a real site.</p> : null}
       </header>
 
-      {a.crawler ? (
-        <div className="pt-6">
-          <Notice tone="warn" title="Crawl only: no checks were run">
-            This audit ran on crawler v2, which records which URLs were found and fetched. SEO checks are not run on it yet, so it has no findings. That does not mean the site has no issues.
-          </Notice>
-          {a.crawler.startRedirect ? <p className="mt-3 text-[13px] text-fg-2">Started at {a.crawler.startRedirect.from}, redirected to {a.crawler.startRedirect.to}: the crawl covers {new URL(a.crawler.startRedirect.to).host}.</p> : null}
-          {a.status === "completed_empty" ? <p className="mt-3 text-[13px] text-fg-2">Nothing was analysed: {a.emptyReason ?? "no HTML page was fetched."}</p> : null}
-        </div>
-      ) : null}
       <section className="print-break border-b border-line py-6">
         <h2 className="text-sm font-semibold text-fg">Summary</h2>
         <div className="mt-3 grid gap-4 text-sm sm:grid-cols-3">
