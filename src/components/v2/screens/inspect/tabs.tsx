@@ -10,13 +10,14 @@ import { fmtDateTime, plural } from "../../../lib/format";
 import { DefList, EmptyState, ExternalUrl, Mono, Notice, Panel, Tag, cx } from "../../../ui";
 import { IssueStateBadge, urlStateLabel } from "../../badges";
 import { ruleTitle } from "../../hooks";
+import { inspectHref } from "../../links";
 import { SNAPSHOT_CAPS, altText, fmtBytes, headTagText, stateWords, type SnapshotView } from "./snapshot";
 
 /** Copied from src/lib/results/explore.ts (a server module): edge lists stop at this many rows; totals say how many exist. */
 export const EDGE_LIMIT = 500;
 
 /** The inspector of one URL of the audit, optionally on a given tab. */
-export const inspectHref = (auditBase: string, url: string, tab?: string) => `${auditBase}/inspect?url=${encodeURIComponent(url)}${tab && tab !== "overview" ? `&tab=${tab}` : ""}`;
+export { inspectHref };
 
 export function CopyButton({ text, label, what }: { text: string; label: string; what?: string }) {
   const copy = useCopy();

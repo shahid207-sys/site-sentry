@@ -1,8 +1,14 @@
 "use client";
-import { useRouter } from "next/navigation";
-import { CornerDownLeft, Globe, Plus, Search } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { CornerDownLeft, FileSearch, FileText, Globe, LayoutList, ListChecks, Plus, RefreshCw, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { UrlRow } from "@/lib/results/explore";
+import type { CrawlOverview } from "@/lib/results/queries";
+import { RULE_TITLES } from "@/lib/rules/titles";
+import { useApi } from "../lib/api";
 import { cx } from "../ui";
+import { AUDIT_SECTIONS } from "../v2/AuditFrame";
+import { inspectHref } from "../v2/links";
 import { NAV } from "./nav";
 import { useWs } from "./context";
 
@@ -14,10 +20,23 @@ interface Item {
   icon: typeof Globe;
 }
 
-/** Jump to any section, site or the audit setup. Keyboard: ↑ ↓ Enter, Esc to close. */
+/** URL matches listed at most, so a 14k-URL audit stays a short list. */
+const MAX_URLS = 25;
+
+/**
+ * Jump to any section, site or the audit setup. Inside a crawler v2 audit it also finds the audit's sections, every
+ * rule (opens Issues filtered by it), the audit's URLs (opens the inspector) and its actions. Keyboard: ↑ ↓ Enter, Esc.
+ */
 export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { base, sites, ws } = useWs();
+  const { base, apiBase, sites, ws } = useWs();
   const router = useRouter();
+  const pathname = usePathname();
+  const auditId = pathname.startsWith(`${base}/audits/`) ? pathname.slice(`${base}/audits/`.length).split("/")[0] : "";
+  const inAudit = open && auditId !== "" && auditId !== "new";
+  // Only a v2 audit has an overview; the URL list is read once the palette is open there.
+  const overview = useApi<CrawlOverview>(inAudit ? `${apiBase}/audits/${auditId}/overview` : null);
+  const v2 = inAudit && !!overview.data;
+  const urls = useApi<UrlRow[]>(v2 ? `${apiBase}/audits/${auditId}/urls` : null);
   const ref = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const [q, setQ] = useState("");
@@ -46,8 +65,28 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       ]),
     ];
     const t = q.trim().toLowerCase();
-    return t ? all.filter((i) => `${i.label} ${i.hint}`.toLowerCase().includes(t)) : all.slice(0, 12);
-  }, [base, sites.data, q, ws]);
+    const audit: Item[] = [];
+    if (v2) {
+      const ab = `${base}/audits/${auditId}`;
+      audit.push(
+        ...AUDIT_SECTIONS.map((s) => ({ id: `sec-${s.id}`, label: s.label, hint: "This audit", href: `${ab}${s.path}`, icon: LayoutList })),
+        { id: "act-report", label: "Open the report", hint: "Action", href: `${base}/reports/${auditId}`, icon: FileText },
+        { id: "act-rerun", label: "Re-run this audit", hint: "Action", href: `${base}/audits/new?site=${encodeURIComponent(overview.data!.project)}`, icon: RefreshCw },
+        ...Object.entries(RULE_TITLES).map(([id, title]) => ({ id: `rule-${id}`, label: `${id} ${title}`, hint: "Issues", href: `${ab}/issues?rule=${encodeURIComponent(id)}`, icon: ListChecks })),
+      );
+      let found = 0;
+      if (t.length >= 2)
+        for (const u of urls.data ?? []) {
+          if (found >= MAX_URLS) break;
+          if (!u.url.toLowerCase().includes(t) && !u.title?.toLowerCase().includes(t)) continue;
+          found++;
+          audit.push({ id: `url-${u.url}`, label: u.url.replace(/^https?:\/\/[^/]+/, "") || "/", hint: u.title ?? "Inspect", href: inspectHref(ab, u.url), icon: FileSearch });
+        }
+    }
+    if (!t) return [...audit.filter((i) => !i.id.startsWith("rule-")), ...all].slice(0, v2 ? 14 : 12);
+    const match = (i: Item) => i.id.startsWith("url-") || `${i.label} ${i.hint}`.toLowerCase().includes(t);
+    return [...audit.filter(match), ...all.filter(match)];
+  }, [base, sites.data, q, ws, v2, auditId, overview.data, urls.data]);
 
   const go = (i: Item | undefined) => {
     if (!i) return;
@@ -89,7 +128,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
                   go(items[sel]);
                 }
               }}
-              placeholder="Jump to a section or site…"
+              placeholder={v2 ? "Jump to a section, rule, URL or site…" : "Jump to a section or site…"}
               aria-label="Search"
               aria-controls="palette-list"
               aria-activedescendant={items[sel] ? `pal-${items[sel].id}` : undefined}
