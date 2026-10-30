@@ -52,24 +52,32 @@ export interface Resource<T> {
 }
 
 // Requests started ahead of the component that reads them (a view that knows which request its child screen makes
-// next). The first useApi load of the same URL within PREFETCH_TTL_MS takes the promise instead of fetching again.
-// Short, so a screen that mounts later (an audit that finishes while its page is open) fetches fresh data.
+// next). The first useApi load of the same URL takes the promise instead of fetching again while it is pending or
+// settled within PREFETCH_TTL_MS. Short, so a screen that mounts later (an audit that finishes while its page is open)
+// fetches fresh data; counted from settling, so a slow response is still used.
 const PREFETCH_TTL_MS = 5_000;
-const prefetched = new Map<string, { at: number; promise: Promise<unknown> }>();
+const prefetched = new Map<string, { settledAt: number | null; promise: Promise<unknown> }>();
+
+const fresh = (p: { settledAt: number | null }) => p.settledAt === null || Date.now() - p.settledAt <= PREFETCH_TTL_MS;
 
 /** Starts a GET now so a screen mounted later does not wait on a request chain. Failures surface to that screen. */
 export function prefetchApi(url: string): void {
-  if (prefetched.has(url)) return;
-  const promise = api(url);
-  promise.catch(() => undefined);
-  prefetched.set(url, { at: Date.now(), promise });
+  const had = prefetched.get(url);
+  if (had && fresh(had)) return;
+  const entry: { settledAt: number | null; promise: Promise<unknown> } = { settledAt: null, promise: api(url) };
+  entry.promise.then(
+    () => (entry.settledAt = Date.now()),
+    () => (entry.settledAt = Date.now()),
+  );
+  prefetched.set(url, entry);
 }
 
-function takePrefetched<T>(url: string): Promise<T> | null {
+/** Exported for tests. */
+export function takePrefetched<T>(url: string): Promise<T> | null {
   const p = prefetched.get(url);
   if (!p) return null;
   prefetched.delete(url);
-  return Date.now() - p.at <= PREFETCH_TTL_MS ? (p.promise as Promise<T>) : null;
+  return fresh(p) ? (p.promise as Promise<T>) : null;
 }
 
 /** Fetch JSON for a view. `url = null` skips the request. Data from a previous URL is never shown for a new one. */
