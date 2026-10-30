@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, CircleCheck, CircleQuestionMark, Clock, GitCompareArrows, Printer, TriangleAlert } from "lucide-react";
 import type { ChangeKind, ComparisonEntry } from "@/lib/audit/compare";
-import { type ComparisonData } from "@/lib/views";
+import { type AuditDetail, type ComparisonData } from "@/lib/views";
+import { CompareScreen } from "../v2/screens/CompareScreen";
 import { useApi } from "../lib/api";
 import { fmtDateTime, plural, shortUrl } from "../lib/format";
 import { Modal } from "../overlays";
@@ -93,6 +94,16 @@ function ChangeGroup({ kind, entries, onOpen }: { kind: ChangeKind; entries: Com
       ) : null}
     </Panel>
   );
+}
+
+/** The compare route: the v2 comparison (issue groups) for a crawler v2 audit, else the legacy findings comparison. */
+export function AuditCompareView() {
+  const { auditId } = useParams<{ auditId: string }>();
+  const { apiBase } = useWs();
+  const { data, error, reload } = useApi<AuditDetail>(`${apiBase}/audits/${auditId}`);
+  if (error) return (<><PageHeader title="Comparison" /><ErrorState error={error} onRetry={reload} /></>);
+  if (!data) return <PageSkeleton />;
+  return data.audit.crawler ? <CompareScreen auditId={auditId} /> : <CompareView />;
 }
 
 export function CompareView({ printMode }: { printMode?: boolean }) {
