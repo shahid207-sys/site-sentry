@@ -89,10 +89,16 @@ function Explorer() {
   const { get, set } = useQueryState();
   const [text, setText] = useQueryText("q");
   const view: View = get("view") === "flat" ? "flat" : "grouped";
-  const state = get("state");
-  const priority = get("priority");
-  const category = get("category");
-  const template = get("template");
+  // Filter selects apply at once and reach the URL right after (like the text filter), so a change over 50,000 rows
+  // is not held up by a router navigation.
+  const [stateQ, setStateQ] = useQueryText("state", 0);
+  const [priorityQ, setPriorityQ] = useQueryText("priority", 0);
+  const [categoryQ, setCategoryQ] = useQueryText("category", 0);
+  const [templateQ, setTemplateQ] = useQueryText("template", 0);
+  const state = stateQ || null;
+  const priority = priorityQ || null;
+  const category = categoryQ || null;
+  const template = templateQ || null;
   const rule = get("rule");
   const sortParam = get("sort");
   const openParam = get("open");
@@ -129,16 +135,20 @@ function Explorer() {
   const matcher = useMemo(() => textMatcher(text), [text]);
 
   // Phase 4 gate instrumentation: filter input change → filtered rows committed (performance.measure "ss-filter").
-  // `text` is a dependency too, so a keystroke that leaves the rows unchanged still closes its mark.
+  // `filters` is a dependency too, so a change that leaves the rows unchanged still closes its mark.
   const visible = view === "flat" ? rows : shownGroups;
   useLayoutEffect(() => {
     if (typeof performance === "undefined" || !performance.getEntriesByName("ss-filter-start", "mark").length) return;
     performance.measure("ss-filter", "ss-filter-start");
     performance.clearMarks("ss-filter-start");
-  }, [visible, text]);
+  }, [visible, filters]);
   const onText = (v: string) => {
     performance.mark("ss-filter-start");
     setText(v);
+  };
+  const onSelect = (setter: (v: string) => void, v: string) => {
+    performance.mark("ss-filter-start");
+    setter(v);
   };
 
   // ---------- drawer ----------
@@ -255,7 +265,7 @@ function Explorer() {
             className="pl-9"
           />
         </div>
-        <Select aria-label="State" className="w-auto" value={state ?? ""} onChange={(e) => set({ state: e.target.value })}>
+        <Select aria-label="State" className="w-auto" value={state ?? ""} onChange={(e) => onSelect(setStateQ, e.target.value)}>
           <option value="">All states</option>
           <option value="open">Open (new, persistent, regressed, not re-checked)</option>
           {ISSUE_STATES.map((s) => (
@@ -264,7 +274,7 @@ function Explorer() {
             </option>
           ))}
         </Select>
-        <Select aria-label="Priority" className="w-auto" value={priority ?? ""} onChange={(e) => set({ priority: e.target.value })}>
+        <Select aria-label="Priority" className="w-auto" value={priority ?? ""} onChange={(e) => onSelect(setPriorityQ, e.target.value)}>
           <option value="">All priorities</option>
           {PRIORITIES.map((p) => (
             <option key={p} value={p}>
@@ -273,7 +283,7 @@ function Explorer() {
           ))}
           {view === "flat" ? <option value="none">No open group</option> : null}
         </Select>
-        <Select aria-label="Category" className="w-auto" value={category ?? ""} onChange={(e) => set({ category: e.target.value })}>
+        <Select aria-label="Category" className="w-auto" value={category ?? ""} onChange={(e) => onSelect(setCategoryQ, e.target.value)}>
           <option value="">All categories</option>
           {categories.map((c) => (
             <option key={c} value={c}>
@@ -281,7 +291,7 @@ function Explorer() {
             </option>
           ))}
         </Select>
-        <Select aria-label="Template" className="w-auto max-w-56" value={template ?? ""} onChange={(e) => set({ template: e.target.value })}>
+        <Select aria-label="Template" className="w-auto max-w-56" value={template ?? ""} onChange={(e) => onSelect(setTemplateQ, e.target.value)}>
           <option value="">All templates</option>
           {view === "flat" ? <option value="none">No template</option> : null}
           {template && template !== "none" && !templates.some((t) => t.id === template) ? <option value={template}>{template}</option> : null}

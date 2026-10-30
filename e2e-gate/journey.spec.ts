@@ -48,7 +48,10 @@ async function json<T>(page: Page, url: string): Promise<T> {
 /** A screen is settled when the network is idle and no loading skeleton is left. */
 async function settled(page: Page) {
   await page.waitForLoadState("networkidle");
-  await expect(page.locator('[role=status][aria-label^="Loading"]')).toHaveCount(0);
+  const loading = page.locator('[role=status][aria-label^="Loading"]');
+  await expect
+    .poll(() => loading.evaluateAll((els) => els.map((e) => e.getAttribute("aria-label"))), { message: "loading regions left on the screen", timeout: 15_000 })
+    .toEqual([]);
 }
 
 async function axe(page: Page, screen: string) {
@@ -226,36 +229,35 @@ test("@filter filter 50k generated findings", async ({ page }) => {
 
   const input = page.locator("[data-filter-input]");
   // Typing that narrows, widens, regex, a no-match and clearing: each keystroke is one filter change.
-  const inputs: [string, string][] = [
-    ["section-1", "type 'section-1'"],
-    ["section-12", "narrow to 'section-12'"],
-    ["page-49", "replace with 'page-49'"],
-    ["re:page-4\\d{3}$", "regex"],
-    ["zzz-nothing", "no match"],
-    ["", "clear"],
+  // Each expected count follows from the generated data: 5,000 URLs /section-(i % 50)/page-i, 10 rules each.
+  const inputs: [string, string, number][] = [
+    ["section-1", "type 'section-1'", 11_000],
+    ["section-12", "narrow to 'section-12'", 1_000],
+    ["page-49", "replace with 'page-49'", 1_110],
+    ["re:page-4\\d{3}$", "regex", 10_000],
+    ["zzz-nothing", "no match", 0],
+    ["", "clear", 50_000],
   ];
-  await page.evaluate(() => performance.clearMeasures("ss-filter"));
-  for (const [value, label] of inputs) {
-    const before = await page.evaluate(() => performance.getEntriesByName("ss-filter").length);
-    await input.fill(value);
-    await expect.poll(() => page.evaluate(() => performance.getEntriesByName("ss-filter").length)).toBeGreaterThan(before);
-    const ms = await page.evaluate(() => {
+  const lastMeasure = () =>
+    page.evaluate(() => {
       const e = performance.getEntriesByName("ss-filter");
       return e[e.length - 1].duration;
     });
-    const shown = await page.getByTestId("issue-count").innerText();
-    out.filter.push({ label: `${label} → ${shown.trim()}`, rows, ms });
+  const shownCount = async () => Number((await page.getByTestId("issue-count").innerText()).split(" of ")[0].replace(/[^\d]/g, ""));
+  await page.evaluate(() => performance.clearMeasures("ss-filter"));
+  for (const [value, label, expected] of inputs) {
+    const before = await page.evaluate(() => performance.getEntriesByName("ss-filter").length);
+    await input.fill(value);
+    await expect.poll(() => page.evaluate(() => performance.getEntriesByName("ss-filter").length)).toBeGreaterThan(before);
+    const ms = await lastMeasure();
+    await expect.poll(shownCount, { message: `rows shown for ${label}` }).toBe(expected);
+    out.filter.push({ label: `${label} → ${expected.toLocaleString("en")} rows`, rows, ms });
   }
-  // A state filter (select) over the same rows.
+  // A filter select (State) over the same rows; the select marks the change itself.
   const before = await page.evaluate(() => performance.getEntriesByName("ss-filter").length);
-  await page.evaluate(() => performance.mark("ss-filter-start"));
   await page.getByLabel("State").selectOption({ index: 1 });
   await expect.poll(() => page.evaluate(() => performance.getEntriesByName("ss-filter").length)).toBeGreaterThan(before);
-  const ms = await page.evaluate(() => {
-    const e = performance.getEntriesByName("ss-filter");
-    return e[e.length - 1].duration;
-  });
-  out.filter.push({ label: "State filter (select)", rows, ms });
+  out.filter.push({ label: `State filter (select) → ${(await shownCount()).toLocaleString("en")} rows`, rows, ms: await lastMeasure() });
   save();
   out.steps.push({ name: "Filter timings", ok: true, detail: out.filter.map((f) => `${f.label}: ${f.ms.toFixed(1)} ms`).join("; ") });
   save();

@@ -51,6 +51,27 @@ export interface Resource<T> {
   setData: (d: T) => void;
 }
 
+// Requests started ahead of the component that reads them (a view that knows which request its child screen makes
+// next). The first useApi load of the same URL within PREFETCH_TTL_MS takes the promise instead of fetching again.
+// Short, so a screen that mounts later (an audit that finishes while its page is open) fetches fresh data.
+const PREFETCH_TTL_MS = 5_000;
+const prefetched = new Map<string, { at: number; promise: Promise<unknown> }>();
+
+/** Starts a GET now so a screen mounted later does not wait on a request chain. Failures surface to that screen. */
+export function prefetchApi(url: string): void {
+  if (prefetched.has(url)) return;
+  const promise = api(url);
+  promise.catch(() => undefined);
+  prefetched.set(url, { at: Date.now(), promise });
+}
+
+function takePrefetched<T>(url: string): Promise<T> | null {
+  const p = prefetched.get(url);
+  if (!p) return null;
+  prefetched.delete(url);
+  return Date.now() - p.at <= PREFETCH_TTL_MS ? (p.promise as Promise<T>) : null;
+}
+
 /** Fetch JSON for a view. `url = null` skips the request. Data from a previous URL is never shown for a new one. */
 export function useApi<T>(url: string | null): Resource<T> {
   const [state, setState] = useState<{ url: string | null; data: T | null; error: ApiError | null; loading: boolean }>({ url, data: null, error: null, loading: !!url });
@@ -63,7 +84,7 @@ export function useApi<T>(url: string | null): Resource<T> {
     ctrl.current = c;
     setState((s) => (s.url === url ? { ...s, loading: true } : { url, data: null, error: null, loading: true }));
     try {
-      const d = await api<T>(url, { signal: c.signal });
+      const d = await (takePrefetched<T>(url) ?? api<T>(url, { signal: c.signal }));
       if (!c.signal.aborted) setState({ url, data: d, error: null, loading: false });
     } catch (e) {
       if ((e as Error).name === "AbortError" || c.signal.aborted) return;

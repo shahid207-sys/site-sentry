@@ -55,14 +55,23 @@ interface SpecOut {
   filter?: { label: string; rows: number; ms: number }[];
 }
 
-function runSpec(base: string, step: "audit" | "verify" | "filter", env: Record<string, string>, outFile: string): { ok: boolean; out: SpecOut } {
-  const r = spawnSync(process.execPath, ["node_modules/@playwright/test/cli.js", "test", "--config", "e2e-gate/playwright.config.ts", "--grep", `@${step}`], {
-    env: { ...process.env, ...env, E2E_BASE_URL: base, GATE_P4_STEP: step, GATE_P4_OUT: outFile },
-    stdio: "inherit",
-    timeout: 20 * 60_000,
+/**
+ * One Playwright step in a child process. Asynchronous on purpose: the fixture site is served from this process, so a
+ * blocking spawnSync would leave the crawler unable to reach it (robots.txt times out and the crawl is disallowed).
+ */
+function runSpec(base: string, step: "audit" | "verify" | "filter", env: Record<string, string>, outFile: string): Promise<{ ok: boolean; out: SpecOut }> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, ["node_modules/@playwright/test/cli.js", "test", "--config", "e2e-gate/playwright.config.ts", "--grep", `@${step}`], {
+      env: { ...process.env, ...env, E2E_BASE_URL: base, GATE_P4_STEP: step, GATE_P4_OUT: outFile },
+      stdio: "inherit",
+    });
+    const timer = setTimeout(() => child.kill(), 20 * 60_000);
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      const out = existsSync(outFile) ? (JSON.parse(readFileSync(outFile, "utf8")) as SpecOut) : {};
+      resolve({ ok: code === 0, out });
+    });
   });
-  const out = existsSync(outFile) ? (JSON.parse(readFileSync(outFile, "utf8")) as SpecOut) : {};
-  return { ok: r.status === 0, out };
 }
 
 /** Lighthouse CLI (its own Chrome launcher) on one URL; scores 0–100. */
@@ -139,13 +148,13 @@ async function main() {
 
     console.log("\n== E2E: add a site, audit, monitor, triage, export");
     const specEnv = { GATE_P4_ORIGIN: site.origins.main, GATE_P4_GENERATED: generated.auditId };
-    const audit = runSpec(base, "audit", specEnv, path.join(outDir, "audit.json"));
+    const audit = await runSpec(base, "audit", specEnv, path.join(outDir, "audit.json"));
     for (const s of audit.out.steps ?? []) info(`${s.ok ? "ok  " : "FAIL"} ${s.name}: ${s.detail}`);
     check("E2E: add site → wizard → monitor → Issues triage → CSV export", audit.ok && !!audit.out.auditId, audit.ok ? `audit ${audit.out.auditId}; ${audit.out.steps?.length ?? 0} steps` : "the spec failed (output above)");
 
     console.log("\n== E2E: the fix patch is on; verify the fix");
     process.env[FIX_PATCH_ENV] = "1";
-    const verify = audit.out.auditId ? runSpec(base, "verify", { ...specEnv, GATE_P4_AUDIT: audit.out.auditId }, path.join(outDir, "verify.json")) : { ok: false, out: {} as SpecOut };
+    const verify = audit.out.auditId ? await runSpec(base, "verify", { ...specEnv, GATE_P4_AUDIT: audit.out.auditId }, path.join(outDir, "verify.json")) : { ok: false, out: {} as SpecOut };
     delete process.env[FIX_PATCH_ENV];
     for (const s of verify.out.steps ?? []) info(`${s.ok ? "ok  " : "FAIL"} ${s.name}: ${s.detail}`);
     check("E2E: Verify fix resolves the patched finding and the board shows it Verified", verify.ok, verify.ok ? `${verify.out.steps?.length ?? 0} steps` : "the spec failed (output above)");
@@ -160,7 +169,7 @@ async function main() {
     );
 
     console.log("\n== Filtering 50,000 findings");
-    const filter = runSpec(base, "filter", specEnv, path.join(outDir, "filter.json"));
+    const filter = await runSpec(base, "filter", specEnv, path.join(outDir, "filter.json"));
     const timings = filter.out.filter ?? [];
     for (const t of timings) info(`${t.label}: ${t.rows.toLocaleString("en")} rows shown, ${t.ms.toFixed(1)} ms`);
     const worst = timings.length ? Math.max(...timings.map((t) => t.ms)) : Infinity;

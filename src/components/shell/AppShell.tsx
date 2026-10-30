@@ -212,10 +212,11 @@ function Shell({ ws, children }: { ws: Workspace; children: ReactNode }) {
             type="button"
             onClick={() => setPalette(true)}
             className="ml-auto flex h-10 shrink-0 items-center gap-2.5 rounded-[10px] border border-line bg-surface-secondary px-3 text-sm text-fg-3 transition-colors hover:border-line-strong hover:bg-surface hover:text-fg-2 md:ml-0 lg:w-[380px]"
-            aria-label="Search and jump to (Ctrl+K)"
+            aria-keyshortcuts="Control+K"
           >
             <Search className="size-4 shrink-0" aria-hidden />
-            <span className="hidden truncate lg:inline">Search sites and pages…</span>
+            {/* The visible text is the accessible name; below lg it is screen-reader only. */}
+            <span className="sr-only truncate lg:not-sr-only">Search sites and pages</span>
             <kbd className="ml-auto hidden shrink-0 whitespace-nowrap rounded-md border border-line bg-surface px-1.5 py-0.5 font-sans text-[11px] text-fg-3 lg:inline">Ctrl K</kbd>
           </button>
           <div className="hidden flex-1 md:block" />

@@ -390,25 +390,26 @@ export function IconTile({ icon: Icon, tone = "accent", size = "md", className }
   );
 }
 
-/** One key figure in its own card, optionally with an icon tile and a link. Renders inside a <dl>. */
+/**
+ * One key figure in its own card, optionally with an icon tile and a link. Renders inside a <dl>: the card is the
+ * <div> that groups one dt with its dd's, and a link stretches over the card from inside the dt.
+ */
 export function StatCard({ label, value, hint, href, icon, tone = "accent" }: { label: string; value: ReactNode; hint?: ReactNode; href?: string; icon?: LucideIcon; tone?: Tone }) {
-  const inner = (
-    <>
-      <div className="flex items-start justify-between gap-3">
-        <dt className="text-[13px] font-medium text-fg-2">{label}</dt>
+  return (
+    <div className={cx("relative min-w-0 rounded-2xl border border-line bg-surface p-4 shadow-card sm:p-5", href && "transition-[border-color,box-shadow] hover:border-line-strong hover:shadow-raised")}>
+      <dt className="flex items-start justify-between gap-3 text-[13px] font-medium text-fg-2">
+        {href ? (
+          <Link href={href} className="after:absolute after:inset-0 after:rounded-2xl">
+            {label}
+          </Link>
+        ) : (
+          <span>{label}</span>
+        )}
         {icon ? <IconTile icon={icon} tone={tone} size="sm" /> : null}
-      </div>
+      </dt>
       <dd className="mt-2 text-[28px] font-semibold leading-none tracking-[-0.02em] text-fg tabular">{value}</dd>
       {hint ? <dd className="mt-2 text-xs text-fg-3">{hint}</dd> : null}
-    </>
-  );
-  const cls = "block min-w-0 rounded-2xl border border-line bg-surface p-4 shadow-card sm:p-5";
-  return href ? (
-    <Link href={href} className={cx(cls, "transition-[border-color,box-shadow] hover:border-line-strong hover:shadow-raised")}>
-      {inner}
-    </Link>
-  ) : (
-    <div className={cls}>{inner}</div>
+    </div>
   );
 }
 
