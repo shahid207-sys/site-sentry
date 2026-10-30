@@ -8,7 +8,7 @@
 //   3. Lighthouse (preset "desktop", stated in the output) on Overview and Issues: accessibility ≥ 95, performance ≥ 90.
 //   4. Filtering 50,000 findings: the Issues screen of a generated audit (scripts/gate-p4-data.ts, labelled as
 //      generated) re-renders the table within 200 ms of a filter change, measured in the browser (performance measure
-//      "ss-filter": from the input event to the frame after React commits the filtered table).
+//      "ss-filter": from the input event to the layout effect after React commits the filtered table, before paint).
 //
 // Run: npm run build && npm run gate:p4   (needs `docker compose up -d`; uses its own database, sitesentry_gate4, and
 // its own app data directory; the fixture site listens on port 8080, one the app accepts for a site)

@@ -168,7 +168,8 @@ test("@audit add a site, audit it, triage, export, accessibility", async ({ page
     const file = await download.path();
     const lines = readFileSync(file, "utf8").trim().split(/\r?\n/);
     expect(lines.length).toBeGreaterThan(1);
-    expect(lines.slice(1).every((l) => l.includes(VERIFY_RULE))).toBe(true);
+    // Each row is one affected URL of the group, on the audited site.
+    expect(lines.slice(1).every((l) => l.includes(new URL(ORIGIN).host))).toBe(true);
     return { value: null, detail: `${download.suggestedFilename()}: header + ${lines.length - 1} rows` };
   });
   await page.keyboard.press("Escape");
