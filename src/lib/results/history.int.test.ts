@@ -35,9 +35,9 @@ const page = (title: string, thin = false) =>
   send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title></head><body><main><h1>${title}</h1><p>${words(thin ? 20 : THIN_WORDS + 50, title.replace(/\W/g, ""))}</p></main></body></html>`, "text/html; charset=utf-8");
 
 /** One audit of project `project`: /a (thin or not), /b, and the extra linked paths; `gone` paths answer 404. */
-async function audit(project: string, s: { thinA: boolean; extra?: string[]; gone?: string[] }): Promise<string> {
+async function audit(project: string, s: { thinA: boolean; extra?: string[]; gone?: string[]; robots?: string }): Promise<string> {
   const links = ["/a", "/b", ...(s.extra ?? []), ...(s.gone ?? [])];
-  srv.routes.set("/robots.txt", send("User-agent: *\nAllow: /\n", "text/plain"));
+  srv.routes.set("/robots.txt", send(s.robots ?? "User-agent: *\nAllow: /\n", "text/plain"));
   srv.routes.set("/", send(`<!doctype html><html lang="en"><head><title>Home</title></head><body><main><h1>Home</h1><p>${words(THIN_WORDS + 50, "home")}</p>${links.map((l) => `<a href="${l}">${l}</a>`).join("")}</main></body></html>`, "text/html"));
   srv.routes.set("/a", page("Page A", s.thinA));
   srv.routes.set("/b", page("Page B"));
@@ -104,7 +104,14 @@ describe("history rules", () => {
     expect(row.analysis.states).toEqual(await stateCounts(db, a3));
     expect(row.health.categories.site?.rulesRan).toBe(3);
 
-    // Fourth: fixed again, the 404s unlinked, no new URL. Both history findings resolve.
+    // A narrower audit (robots.txt blocks /b, which audit 3 answered) re-checks no site-level finding of audit 3:
+    // the history findings stay open even though it reports neither.
+    const narrow = await audit(project, { thinA: false, extra: ["/ok"], robots: "User-agent: *\nDisallow: /b\n" });
+    expect(await historyFindings(narrow)).toEqual([]);
+    expect(await stateOf(narrow, "SITE-004")).toBe("not_rechecked");
+    expect(await stateOf(narrow, "SITE-005")).toBe("not_rechecked");
+
+    // Fourth: fixed again, the 404s unlinked, no new URL, the whole site crawled. Both history findings resolve.
     const a4 = await audit(project, { thinA: false, extra: ["/ok"] });
     expect(await historyFindings(a4)).toEqual([]);
     expect(await stateOf(a4, "SITE-004")).toBe("resolved");
@@ -122,9 +129,9 @@ describe("history rules", () => {
 
     // Re-analysing an earlier audit rewrites the later audits' history results to the same thing.
     await db.execute(sql`delete from findings where crawl_id = ${a3}::uuid and rule_id = 'SITE-004'`);
-    const before = await Promise.all([a2, a3, a4].map((c) => db.execute(sql`select fingerprint, state from issue_states where crawl_id = ${c}::uuid order by fingerprint`).then((r) => r.rows)));
+    const before = await Promise.all([a2, a3, narrow, a4].map((c) => db.execute(sql`select fingerprint, state from issue_states where crawl_id = ${c}::uuid order by fingerprint`).then((r) => r.rows)));
     expect((await analyseCrawl(db, a1)).outcome).toBe("analysed");
     expect(await historyFindings(a3)).toEqual(f3);
-    expect(await Promise.all([a2, a3, a4].map((c) => db.execute(sql`select fingerprint, state from issue_states where crawl_id = ${c}::uuid order by fingerprint`).then((r) => r.rows)))).toEqual(before);
+    expect(await Promise.all([a2, a3, narrow, a4].map((c) => db.execute(sql`select fingerprint, state from issue_states where crawl_id = ${c}::uuid order by fingerprint`).then((r) => r.rows)))).toEqual(before);
   });
 });

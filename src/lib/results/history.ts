@@ -49,9 +49,10 @@ export async function historyContext(db: Exec, crawlId: string, origin: string, 
 
 /**
  * (Re)writes crawl `crawlId`'s history-rule results. Needs the crawl's other occurrences, issue groups and states.
- * `indexable`: the crawl's indexable pages, the reach denominator. Returns the findings and groups it wrote.
+ * `indexable`: the crawl's indexable pages, the reach denominator. `complete`: see rechecked; a history finding is
+ * re-checked like a site rule's (a narrower or incomplete audit leaves it open). Returns the findings and groups it wrote.
  */
-export async function writeHistoryFindings(db: Exec, crawlId: string, origin: string, indexable: number, rules: HistoryRule[] = HISTORY_RULES): Promise<{ findings: number; groups: number }> {
+export async function writeHistoryFindings(db: Exec, crawlId: string, origin: string, indexable: number, complete: boolean, rules: HistoryRule[] = HISTORY_RULES): Promise<{ findings: number; groups: number }> {
   const ids = rules.map((r) => r.id);
   const only = onlyRules("rule_id", ids);
   for (const table of ["findings", "finding_occurrences", "rule_runs", "issue_groups", "issue_group_templates"]) {
@@ -88,7 +89,7 @@ export async function writeHistoryFindings(db: Exec, crawlId: string, origin: st
   }
   await insertOccurrences(db, crawlId, occurrences);
   const groups = await writeIssueGroups(db, crawlId, rules, indexable, ids);
-  // After rule_runs: a history finding of an earlier audit resolves when the rules ran here and did not report it.
-  await writeIssueStates(db, crawlId, false, ids);
+  // After rule_runs: a history finding of an earlier audit resolves only in an audit that re-checked it (rechecked).
+  await writeIssueStates(db, crawlId, complete, ids);
   return { findings: found.length, groups };
 }

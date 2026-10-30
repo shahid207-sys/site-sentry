@@ -50,8 +50,6 @@ export function rechecked(checker: string, complete: boolean, wide: string[], s 
     and case (select scope from rules where id = ${row}.rule_id)
       when 'page' then exists (select 1 from crawl_urls u where u.crawl_id = ${c} and u.normalised_url = ${row}.url and u.state in (${ANSWERED_SQL}))
       when 'resource' then exists (select 1 from resources r where r.crawl_id = ${c} and r.url = ${row}.url and r.state = 'done')
-      -- A history rule judges the audit as a whole (SITE-004, SITE-005): running is re-checking.
-      when 'history' then true
       else ${complete}
         and (select o.crawl_id from issue_states o join crawls p on p.id = o.crawl_id join crawls k on k.id = ${c}
              where o.fingerprint = ${row}.fingerprint and o.outcome = 'issue' and p.kind = 'audit' and p.workspace = k.workspace

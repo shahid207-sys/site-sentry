@@ -489,7 +489,7 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
       // After rule_runs: a fingerprint counts as re-checked only when its rule ran in this crawl.
       let states = verify ? await writeVerifyStates(tx, crawlId, verify) : await writeIssueStates(tx, crawlId, crawl.complete);
       if (!verify && historyRules.length) {
-        const h = await writeHistoryFindings(tx, crawlId, row.site_origin, basis.indexable, historyRules);
+        const h = await writeHistoryFindings(tx, crawlId, row.site_origin, basis.indexable, crawl.complete, historyRules);
         total += h.findings;
         issueGroups += h.groups;
         states = await stateCounts(tx, crawlId);
@@ -503,9 +503,10 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
       for (const later of await laterAudits(tx, crawlId)) {
         if (later.kind === "verify" && later.config.verify) await writeVerifyStates(tx, later.id, later.config.verify);
         else {
-          await writeIssueStates(tx, later.id, await crawlComplete(tx, later.id, later.status));
+          const complete = await crawlComplete(tx, later.id, later.status);
+          await writeIssueStates(tx, later.id, complete);
           // Its regressions may have changed: rewrite its history results, then the counts its analysis reports.
-          if (historyRules.length) await writeHistoryFindings(tx, later.id, later.site_origin, later.indexable, historyRules);
+          if (historyRules.length) await writeHistoryFindings(tx, later.id, later.site_origin, later.indexable, complete, historyRules);
           await tx.execute(sql`update crawls set analysis = analysis || jsonb_build_object(
               'findings', (select count(*)::int from findings where crawl_id = ${later.id}::uuid),
               'issueGroups', (select count(*)::int from issue_groups where crawl_id = ${later.id}::uuid),
