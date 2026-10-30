@@ -7,7 +7,9 @@ import { compareCrawls, crawlOverview, depthHistogram, duplicateClusters, issueG
 import { issueRows, pageDetail, urlRows, type IssueRow, type PageDetail, type UrlRow } from "../results/explore";
 import { auditTriage, fixBoard, setTriage, triageLog, type BoardCard, type TriageChange, type TriageEntry, type TriageEvent } from "../results/triage";
 import { startVerification, type StartedVerification } from "../results/verify";
+import { pageRender, type PageRenderDetail } from "../results/render";
 import { previousAudit } from "../results/states";
+import { blobStoreFromEnv } from "../snapshot/blob-store";
 import { RULES } from "../rules/registry";
 import { RULE_TITLES } from "../rules/titles";
 import { WorkflowError } from "../workflow/deps";
@@ -105,6 +107,14 @@ export async function getAuditPage(ws: Workspace, auditId: string, url: string):
   const page = await pageDetail(getDb(), crawlId, url);
   if (!page) throw new WorkflowError("NOT_FOUND", "This audit has no such URL.");
   return page;
+}
+
+/** One URL's render (raw vs rendered, lab metrics, requests, axe-core); `html` adds both documents for the diff. */
+export async function getAuditPageRender(ws: Workspace, auditId: string, url: string, html: boolean): Promise<PageRenderDetail> {
+  const crawlId = await auditCrawl(ws, auditId);
+  const r = await pageRender(getDb(), blobStoreFromEnv(), crawlId, url, { html });
+  if (!r) throw new WorkflowError("NOT_FOUND", "This audit has no such URL.");
+  return r;
 }
 
 export interface CatalogRule {

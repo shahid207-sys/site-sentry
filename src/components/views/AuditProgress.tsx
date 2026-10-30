@@ -7,6 +7,7 @@ import {
   CircleAlert,
   CircleCheck,
   CircleMinus,
+  CircleX,
   CircleSlash,
   FileSearch,
   ListTodo,
@@ -38,16 +39,18 @@ import {
 import type { AuditDetail, AuditSummary } from "@/lib/views";
 
 // One row per real engine phase (lib/crawl/engine.ts), in the order the engine runs them.
-const STAGES: { phase: Exclude<AuditPhase, "done">; label: string; desc: string }[] = [
+// "render" is crawler v2's render phase (Phase 5), between the crawl and the analysis; the legacy engine has none.
+const STAGES: { phase: Exclude<AuditPhase, "done"> | "render"; label: string; desc: string }[] = [
   { phase: "robots", label: "Read robots.txt", desc: "Fetch the site's robots.txt so disallowed URLs are never crawled." },
   { phase: "sitemap", label: "Read the XML sitemap", desc: "Collect page URLs from the sitemap when the audit scope uses it." },
   { phase: "pages", label: "Fetch and check pages", desc: "Fetch each page within the page and depth limits and run the selected checks." },
   { phase: "links", label: "Check link targets", desc: "Request the status of internal links and images that were not crawled." },
+  { phase: "render", label: "Render pages", desc: "Load pages in a headless browser to see what JavaScript changes, measure lab Core Web Vitals and run accessibility checks." },
   { phase: "finalize", label: "Group and save findings", desc: "Fingerprint findings, compare with the previous audit and save the results." },
 ];
 const ORDER: AuditPhase[] = ["robots", "sitemap", "pages", "links", "finalize", "done"];
 
-type StageState = "done" | "current" | "queued" | "skipped" | "off" | "not_reached";
+type StageState = "done" | "current" | "queued" | "skipped" | "off" | "not_reached" | "failed";
 const STATE_LABEL: Record<StageState, string> = {
   done: "Done",
   current: "Running…",
@@ -55,6 +58,7 @@ const STATE_LABEL: Record<StageState, string> = {
   skipped: "Not needed",
   off: "Off for this audit",
   not_reached: "Not reached",
+  failed: "Failed",
 };
 
 function stageStates(d: AuditDetail): StageState[] {
@@ -62,7 +66,16 @@ function stageStates(d: AuditDetail): StageState[] {
   const running = a.status === "running";
   const ok = a.status === "completed" || a.status === "partial";
   const cur = ORDER.indexOf(a.phase);
-  return STAGES.map((s, i) => {
+  return STAGES.map((s) => {
+    if (s.phase === "render") {
+      const r = a.crawler?.render;
+      if (!a.crawler || !(r ?? a.config.render)) return "off";
+      if (r?.status === "done") return "done";
+      if (r?.status === "failed") return "failed";
+      if (r?.status === "running") return "current";
+      return running || a.status === "completed" ? "queued" : "not_reached";
+    }
+    const i = ORDER.indexOf(s.phase);
     // Crawler v2: link targets are crawled URLs, so there is no separate link step. The last step is the rule
     // analysis the worker runs after the crawl (crawls.analysis), so it follows that status.
     if (a.crawler && s.phase === "links") return "off";
@@ -137,6 +150,17 @@ function UrlStates({ states }: { states: Record<string, number> }) {
   );
 }
 
+/** The render stage's progress, e.g. " Sampled: 12 of 40 pages rendered, 1 timed out." */
+function renderNote(a: AuditSummary): string | null {
+  const r = a.crawler?.render;
+  const mode = r?.mode ?? a.config.render;
+  if (!mode || mode === "off") return null;
+  const label = mode === "sampled" ? "Sampled, one page per template" : "Every HTML page";
+  if (!r || !r.planned) return ` ${label}.`;
+  const extra = [r.timeouts ? `${r.timeouts} timed out` : "", r.errors ? plural(r.errors, "error") : ""].filter(Boolean).join(", ");
+  return ` ${label}: ${r.rendered} of ${plural(r.planned, "page")} rendered${extra ? `, ${extra}` : ""}.`;
+}
+
 /** A v2 audit whose crawl completed but whose rule analysis has not finished yet: the monitor keeps polling. */
 export const analysing = (a: AuditSummary) => !!a.crawler && a.status === "completed" && a.crawler.analysis !== "completed" && a.crawler.analysis !== "failed";
 
@@ -156,6 +180,13 @@ function Outcome({ audit, href }: { audit: AuditSummary; href: string }) {
     return (
       <Notice tone="error" title="Crawl complete, but the SEO checks failed" action={open}>
         The analysis job stopped with an error, so this audit has no findings. That is not a clean result: re-run the audit, and check the worker log if it fails again.
+      </Notice>
+    );
+  const rendering = audit.crawler?.render;
+  if (analysing(audit) && rendering && rendering.status === "running")
+    return (
+      <Notice tone="info" title="Crawl complete: rendering pages">
+        {rendering.planned ? `${rendering.rendered} of ${plural(rendering.planned, "page")} rendered in a headless browser. ` : ""}The SEO checks run when rendering has finished.
       </Notice>
     );
   if (analysing(audit))
@@ -433,6 +464,7 @@ export function AuditProgressView({ onFinished }: { onFinished?: () => void } = 
                     st === "current" && "bg-accent-soft text-accent-ink",
                     (st === "queued" || st === "not_reached") && "border border-line bg-elevated text-xs font-semibold text-fg-3",
                     (st === "skipped" || st === "off") && "bg-elevated text-fg-3",
+                    st === "failed" && "bg-sev-high-soft text-sev-high",
                   )}
                   aria-hidden
                 >
@@ -440,6 +472,8 @@ export function AuditProgressView({ onFinished }: { onFinished?: () => void } = 
                     <CircleCheck className="size-4.5" />
                   ) : st === "current" ? (
                     <LoaderCircle className="size-4.5 animate-spin" />
+                  ) : st === "failed" ? (
+                    <CircleX className="size-4.5" />
                   ) : st === "skipped" || st === "off" ? (
                     <CircleMinus className="size-4.5" />
                   ) : (
@@ -452,13 +486,16 @@ export function AuditProgressView({ onFinished }: { onFinished?: () => void } = 
                     <span
                       className={cx(
                         "text-xs font-medium",
-                        st === "done" ? "text-ok" : st === "current" ? "text-accent-ink" : st === "not_reached" ? "text-sev-high" : "text-fg-3",
+                        st === "done" ? "text-ok" : st === "current" ? "text-accent-ink" : st === "not_reached" || st === "failed" ? "text-sev-high" : "text-fg-3",
                       )}
                     >
                       {STATE_LABEL[st]}
                     </span>
                   </div>
-                  <p className="mt-0.5 text-[13px] text-fg-2">{stage.desc}</p>
+                  <p className="mt-0.5 text-[13px] text-fg-2">
+                    {stage.desc}
+                    {stage.phase === "render" ? renderNote(a) : null}
+                  </p>
                 </div>
               </li>
             );

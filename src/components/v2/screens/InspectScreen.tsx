@@ -3,6 +3,7 @@
 // slice. The URL and the tab are in the query string (?url=…&tab=…), so every view is linkable and back-button safe.
 // URLs the crawler did not read as a page (redirects, blocked, not fetched) show their crawl facts and the reason in
 // plain words. PageSummary is the compact form the URL explorer's drawer shows.
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 import { ExternalLink, FileSearch, SearchX, Table2 } from "lucide-react";
@@ -18,8 +19,12 @@ import { ruleTitle, useQueryState } from "../hooks";
 import { readSnapshot, stateWords } from "./inspect/snapshot";
 import { CopyButton, HeadTagsTab, HeadersTab, HeadingsTab, ImagesTab, IssuesTab, LinksTab, OverviewTab, StructuredDataTab, inspectHref } from "./inspect/tabs";
 
+// Its own chunk: most visits never open it.
+const RenderedTab = dynamic(() => import("./inspect/rendered"), { loading: () => <Skeleton className="h-72 w-full rounded-2xl" /> });
+
 const TABS = [
   { id: "overview", label: "Overview" },
+  { id: "rendered", label: "Raw vs rendered" },
   { id: "headers", label: "Headers" },
   { id: "head", label: "Head tags" },
   { id: "headings", label: "Headings" },
@@ -149,6 +154,8 @@ function Inspector() {
       <div>
         {tab === "overview" ? (
           <OverviewTab d={d} s={snapshot} auditBase={auditBase} />
+        ) : tab === "rendered" ? (
+          <RenderedTab auditApi={auditApi} url={r.url} />
         ) : tab === "headers" ? (
           <HeadersTab s={snapshot} row={r} />
         ) : tab === "head" ? (

@@ -9,6 +9,7 @@ import { testRedis } from "@/test/redis";
 import { runCrawl } from "@/lib/crawl/v2/runner";
 import { analyseCrawl } from "@/lib/rules/analyse";
 import { unanalysedCrawls } from "@/lib/rules/queue";
+import { pageRender } from "@/lib/results/render";
 import { blobStoreFromEnv, getRawHtml } from "@/lib/snapshot/blob-store";
 import { RenderPool } from "./pool";
 import { crawlGate, markRenderFailed, planRenders, renderCrawl, unrenderedCrawls, type RenderedExtract, type RenderProgress } from "./run";
@@ -101,6 +102,18 @@ describe("render phase", () => {
     const html = await getRawHtml(store, js.rendered_html_key!);
     expect(html).toContain("Rendered");
 
+    // The inspector's view of it: field by field, the rendered-only link, and both documents for the diff.
+    const view = (await pageRender(db, store, c, `${srv.origin}/js`, { html: true }))!;
+    expect(view).toMatchObject({ mode: "full", reason: null, render: { status: "rendered", metrics: { source: "lab" } }, links: { renderedOnly: [`${srv.origin}/only-js`] } });
+    const row = (f: string) => view.compare!.find((x) => x.field === f);
+    expect(row("Canonical")).toEqual({ field: "Canonical", raw: `${srv.origin}/js`, rendered: `${srv.origin}/js-canonical` });
+    expect(row("H1")).toEqual({ field: "H1", raw: null, rendered: "Rendered" });
+    expect(row("Title")).toEqual({ field: "Title", raw: "JS", rendered: "JS" });
+    expect(view.html!.raw).toContain('<div id="root"></div>');
+    expect(view.html!.rendered).toContain("<h1>Rendered</h1>");
+    expect((await pageRender(db, store, c, `${srv.origin}/js`))!.html).toBeUndefined();
+    expect(await pageRender(db, store, c, `${srv.origin}/nope`)).toBeNull();
+
     expect(await progress(c)).toMatchObject({ mode: "full", status: "done", planned: 5, rendered: 5, timeouts: 0, errors: 0 });
     expect(await unrenderedCrawls(db)).not.toContain(c);
     expect(await unanalysedCrawls(db)).toContain(c);
@@ -124,6 +137,7 @@ describe("render phase", () => {
     expect(await renderCrawl({ db, pool, store }, c)).toBe("done");
     expect((await renders(c)).length).toBe(plan.length);
     expect((await full(c)).length).toBe(5);
+    expect((await pageRender(db, store, c, `${srv.origin}/articles/22`))!).toMatchObject({ mode: "sampled", reason: "not_sampled", render: null, compare: null });
   });
 
   it("a crawl without a render mode is not rendered; a failed phase still lets analysis run", { timeout: 120_000 }, async () => {
@@ -131,12 +145,14 @@ describe("render phase", () => {
     expect(await renderCrawl({ db, pool, store }, off)).toBe("skipped");
     expect(await unrenderedCrawls(db)).not.toContain(off);
     expect((await analyseCrawl(db, off)).outcome).toBe("analysed");
+    expect((await pageRender(db, store, off, `${srv.origin}/js`))!).toMatchObject({ mode: "off", reason: "off", render: null });
 
     const failed = await crawl("full");
     await markRenderFailed(db, failed, "Chromium could not start.");
     expect(await progress(failed)).toMatchObject({ mode: "full", status: "failed", error: "Chromium could not start." });
     expect(await unrenderedCrawls(db)).not.toContain(failed);
     expect((await analyseCrawl(db, failed)).outcome).toBe("analysed");
+    expect((await pageRender(db, store, failed, `${srv.origin}/js`))!).toMatchObject({ mode: "full", reason: "phase_failed", phase: { status: "failed" } });
   });
 });
 
