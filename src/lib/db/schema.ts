@@ -488,3 +488,47 @@ export const auditResults = pgTable(
   },
   (t) => [primaryKey({ columns: [t.workspace, t.auditId] })],
 );
+
+/**
+ * Fix board column of an issue group (subject "rule:<id>"), and a person's call on one fingerprint (subject
+ * "fp:<fingerprint>": marked fixed, or ignored with a reason). Kept per project, so it carries over to the next audit
+ * of the site. Triage never changes issue states, counts or the health score: only a crawl does (states.ts).
+ */
+export const TRIAGE_STATUSES = ["todo", "in_progress", "ready", "fixed", "ignored"] as const;
+export type TriageStatus = (typeof TRIAGE_STATUSES)[number];
+export const issueTriage = pgTable(
+  "issue_triage",
+  {
+    workspace: text("workspace").notNull(),
+    /** projectKey of the audits it applies to (crawls.site_id, else the site origin). */
+    project: text("project").notNull(),
+    subject: text("subject").notNull(),
+    status: text("status").$type<TriageStatus>().notNull(),
+    assignee: text("assignee"),
+    /** Why it was ignored (required for "ignored"), or a note. */
+    note: text("note"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.workspace, t.project, t.subject] }),
+    check("issue_triage_status_ck", sql`${t.status} in (${list(TRIAGE_STATUSES)})`),
+    check("issue_triage_subject_ck", sql`${t.subject} ~ '^(rule|fp):.+'`),
+  ],
+);
+
+/** Audit log of triage changes: who set what, when. */
+export const triageEvents = pgTable(
+  "triage_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    workspace: text("workspace").notNull(),
+    project: text("project").notNull(),
+    subject: text("subject").notNull(),
+    /** Status, assignee and note after the change, and before it (null: first change). */
+    after: jsonb("after").notNull(),
+    before: jsonb("before"),
+    actor: text("actor").notNull(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("triage_events_subject_idx").on(t.workspace, t.project, t.subject, t.id)],
+);
