@@ -5,9 +5,9 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { FileText, RefreshCw } from "lucide-react";
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useEffect, type ReactNode } from "react";
 import type { CrawlOverview } from "@/lib/results/queries";
-import { useApi, type Resource } from "../lib/api";
+import { prefetchApi, useApi, type Resource } from "../lib/api";
 import { fmtDateTime, hostOf } from "../lib/format";
 import { useWs } from "../shell/context";
 import { ErrorState, LinkButton, PageHeader, PageSkeleton, Tag, cx } from "../ui";
@@ -49,13 +49,26 @@ function sectionOf(pathname: string, auditBase: string): AuditSection {
   return AUDIT_SECTIONS.find((s) => s.path && rest.startsWith(s.path))?.id ?? "overview";
 }
 
+/** The first requests of a section's screen, which mounts only once the overview is in. */
+const SECTION_DATA: Partial<Record<AuditSection, string[]>> = {
+  overview: ["/groups", "/compare/groups"],
+  issues: ["/groups", "/triage"],
+};
+
+/** Starts the overview and the section screen's first requests together instead of one after the other. */
+export function prefetchAuditSection(auditApi: string, section: AuditSection) {
+  for (const p of ["/overview", ...(SECTION_DATA[section] ?? [])]) prefetchApi(`${auditApi}${p}`);
+}
+
 export function AuditFrame({ auditId, title, children, actions }: { auditId: string; title?: string; children: ReactNode; actions?: ReactNode }) {
   const { base, apiBase, sites } = useWs();
   const pathname = usePathname();
   const auditBase = `${base}/audits/${auditId}`;
   const auditApi = `${apiBase}/audits/${auditId}`;
-  const ov: Resource<CrawlOverview> = useApi<CrawlOverview>(`${auditApi}/overview`);
   const section = sectionOf(pathname, auditBase);
+  // Before useApi's own effect, so its /overview load takes the prefetched request.
+  useEffect(() => prefetchAuditSection(auditApi, section), [auditApi, section]);
+  const ov: Resource<CrawlOverview> = useApi<CrawlOverview>(`${auditApi}/overview`);
   const site = ov.data ? sites.data?.find((s) => s.site.id === ov.data!.project)?.site : undefined;
   const name = site?.name ?? (ov.data ? hostOf(ov.data.siteOrigin) : "Audit");
   const crumbs = [{ label: "Audits", href: `${base}/audits` }, { label: name, href: section === "overview" ? undefined : auditBase }];
@@ -91,6 +104,8 @@ export function AuditFrame({ auditId, title, children, actions }: { auditId: str
           <Link
             key={s.id}
             href={`${auditBase}${s.path}`}
+            // Not on load (the sections' requests would compete with this one's data; see AppShell's nav).
+            prefetch={false}
             aria-current={section === s.id ? "page" : undefined}
             className={cx("-mb-px shrink-0 border-b-2 px-3 pb-2.5 pt-1 text-sm transition-colors", section === s.id ? "border-accent font-medium text-fg" : "border-transparent text-fg-2 hover:text-fg")}
           >

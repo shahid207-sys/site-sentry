@@ -14,7 +14,8 @@ import { SeverityCountsInline } from "../domain";
 import { DeleteAuditDialog } from "./Audits";
 import { OverviewScreen } from "../v2/screens/OverviewScreen";
 import { analysing, AuditProgressView } from "./AuditProgress";
-import { api, prefetchApi, useApi } from "../lib/api";
+import { api, useApi } from "../lib/api";
+import { prefetchAuditSection } from "../v2/AuditFrame";
 import { fmtDateTime, fmtDuration, plural, shortUrl } from "../lib/format";
 import { Drawer, useToast } from "../overlays";
 import { useWs } from "../shell/context";
@@ -534,8 +535,8 @@ export function AuditDetailView() {
   const sp = useSearchParams();
   const pathname = usePathname();
   const { data, error, loading, reload } = useApi<AuditDetail>(`${apiBase}/audits/${auditId}`);
-  // A finished v2 audit renders the overview screen, which fetches /overview: start it alongside the detail.
-  useEffect(() => prefetchApi(`${apiBase}/audits/${auditId}/overview`), [apiBase, auditId]);
+  // A finished v2 audit renders the overview screen: start its requests alongside the detail.
+  useEffect(() => prefetchAuditSection(`${apiBase}/audits/${auditId}`, "overview"), [apiBase, auditId]);
   const tab = (sp.get("tab") as (typeof TABS)[number]["id"] | null) ?? "findings";
   const router = useRouter();
   const [deleting, setDeleting] = useState(false);

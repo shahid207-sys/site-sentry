@@ -21,7 +21,7 @@ function SidebarNav({ ws, onNavigate }: { ws: Workspace; onNavigate?: () => void
       <p className="mb-2 px-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-fg-3">Workspace</p>
       <ul className="flex flex-col gap-1">
         <li>
-          <Link href="/" onClick={onNavigate} className="group flex h-10 items-center gap-3 rounded-[10px] px-3 text-sm font-medium text-fg-2 transition-colors hover:bg-hover hover:text-fg">
+          <Link href="/" prefetch={false} onClick={onNavigate} className="group flex h-10 items-center gap-3 rounded-[10px] px-3 text-sm font-medium text-fg-2 transition-colors hover:bg-hover hover:text-fg">
             <House className="size-[18px] shrink-0 text-fg-3 group-hover:text-fg-2" aria-hidden />
             <span className="truncate">Home</span>
           </Link>
@@ -33,6 +33,9 @@ function SidebarNav({ ws, onNavigate }: { ws: Workspace; onNavigate?: () => void
             <li key={n.label}>
               <Link
                 href={`/${ws}${n.href}`}
+                // No viewport prefetch: every screen would request every section's shell on load, and those requests
+                // queue on the server ahead of the screen's own data. A click loads the section.
+                prefetch={false}
                 onClick={onNavigate}
                 aria-current={active ? "page" : undefined}
                 className={cx(
@@ -66,6 +69,7 @@ function WorkspaceSwitch({ ws }: { ws: Workspace }) {
             role="radio"
             aria-checked={ws === w}
             href={target(w)}
+            prefetch={false}
             className={cx("flex h-8 items-center justify-center gap-1.5 rounded-lg text-[13px] font-medium transition-colors", ws === w ? (w === "sample" ? "bg-surface text-sample shadow-card" : "bg-surface text-fg shadow-card") : "text-fg-2 hover:text-fg")}
           >
             {w === "sample" ? <FlaskConical className="size-3.5" aria-hidden /> : null}

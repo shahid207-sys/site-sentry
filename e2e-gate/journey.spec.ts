@@ -129,9 +129,10 @@ test("@audit add a site, audit it, triage, export, accessibility", async ({ page
     await page.getByLabel("Assignee").fill("Gate reviewer");
     await page.getByRole("dialog").getByRole("button", { name: "Assign", exact: true }).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
-    const t = await json<Triage>(page, `${auditApi}/triage`);
-    const e = t.entries.find((x) => x.assignee === "Gate reviewer");
-    expect(e, "an entry with the assignee").toBeTruthy();
+    // The dialog closes when the request starts; the entry appears when it is saved.
+    const assigned = async () => (await json<Triage>(page, `${auditApi}/triage`)).entries.find((x) => x.assignee === "Gate reviewer");
+    await expect.poll(assigned, { message: "an entry with the assignee" }).toBeTruthy();
+    const e = await assigned();
     return { value: null, detail: `${e!.subject} assigned` };
   });
   await axe(page, "Issues (all URLs)");
@@ -147,9 +148,9 @@ test("@audit add a site, audit it, triage, export, accessibility", async ({ page
     await page.getByLabel("Reason (required)").fill("Gate: intentionally left as is");
     await page.getByRole("dialog").getByRole("button", { name: "Ignore", exact: true }).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
-    const t = await json<Triage>(page, `${auditApi}/triage`);
-    const e = t.entries.find((x) => x.status === "ignored");
-    expect(e?.note).toBe("Gate: intentionally left as is");
+    const ignored = async () => (await json<Triage>(page, `${auditApi}/triage`)).entries.find((x) => x.status === "ignored");
+    await expect.poll(async () => (await ignored())?.note, { message: "the ignored entry's reason" }).toBe("Gate: intentionally left as is");
+    const e = await ignored();
     return { value: null, detail: `${e!.subject} ignored with its reason` };
   });
 
