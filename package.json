@@ -23,6 +23,7 @@
     "gate:p3": "node --max-old-space-size=768 --heapsnapshot-near-heap-limit=1 --diagnostic-dir=.data --import tsx scripts/gate-p3.ts"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "3.14.19",
     "bullmq": "6.3.14",
     "cheerio": "^1.2.0",
     "drizzle-orm": "0.45.4",

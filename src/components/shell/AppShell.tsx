@@ -8,6 +8,8 @@ import { Logo } from "../Logo";
 import { ToastProvider } from "../overlays";
 import { LinkButton, PageSkeleton, cx } from "../ui";
 import { CommandPalette } from "./CommandPalette";
+import { ShortcutSheet } from "./ShortcutSheet";
+import { ThemeToggle } from "./ThemeToggle";
 import { useWs, WorkspaceProvider } from "./context";
 import { NAV } from "./nav";
 
@@ -217,6 +219,7 @@ function Shell({ ws, children }: { ws: Workspace; children: ReactNode }) {
             <kbd className="ml-auto hidden shrink-0 whitespace-nowrap rounded-md border border-line bg-surface px-1.5 py-0.5 font-sans text-[11px] text-fg-3 lg:inline">Ctrl K</kbd>
           </button>
           <div className="hidden flex-1 md:block" />
+          <ThemeToggle />
           <LinkButton href={newAuditHref} variant="primary" size="sm" icon={Plus} className="md:h-10 md:rounded-[10px] md:px-4 md:text-sm">
             <span className="hidden sm:inline">New audit</span>
             <span className="sm:hidden">Audit</span>
@@ -242,6 +245,7 @@ function Shell({ ws, children }: { ws: Workspace; children: ReactNode }) {
       </div>
 
       <CommandPalette open={palette} onClose={() => setPalette(false)} />
+      <ShortcutSheet />
     </div>
   );
 }
