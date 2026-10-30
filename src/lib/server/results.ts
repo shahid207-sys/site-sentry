@@ -1,4 +1,5 @@
 import "server-only";
+import { sql } from "drizzle-orm";
 import { getCrawlQueue } from "../crawl/v2/audit-bridge";
 import { getDb } from "../db/client";
 import type { Workspace } from "../model";
@@ -74,21 +75,30 @@ export async function getAuditGroups(ws: Workspace, auditId: string): Promise<Is
   return mapped(() => issueGroups(getDb(), crawlId));
 }
 
-/** Every fingerprint of a v2 audit with its effective state, for the Issues explorer. */
-export async function getAuditIssues(ws: Workspace, auditId: string): Promise<IssueRow[]> {
-  const { crawlId } = await getAuditOverview(ws, auditId);
-  return issueRows(getDb(), crawlId);
+/** The audit crawl behind a v2 audit of this workspace, without the overview's counts (row-level reads call it per request). */
+async function auditCrawl(ws: Workspace, auditId: string): Promise<string> {
+  const { crawlId } = await crawlOf(ws, auditId);
+  const r = await getDb().execute(sql`select workspace, kind from crawls where id = ${crawlId}::uuid`);
+  const c = r.rows[0] as { workspace: string; kind: string } | undefined;
+  if (!c || c.workspace !== ws || c.kind !== "audit") throw new WorkflowError("NOT_FOUND", "Audit not found.");
+  return crawlId;
+}
+
+/** Every fingerprint of a v2 audit with its effective state, for the Issues explorer (one rule's, with messages, when given). */
+export async function getAuditIssues(ws: Workspace, auditId: string, ruleId?: string): Promise<IssueRow[]> {
+  const crawlId = await auditCrawl(ws, auditId);
+  return issueRows(getDb(), crawlId, ruleId);
 }
 
 /** Every URL of a v2 audit with its page facts, for the URL explorer. */
 export async function getAuditUrls(ws: Workspace, auditId: string): Promise<UrlRow[]> {
-  const { crawlId } = await getAuditOverview(ws, auditId);
+  const crawlId = await auditCrawl(ws, auditId);
   return urlRows(getDb(), crawlId);
 }
 
 /** Everything a v2 audit knows about one of its URLs (normalised form), for the Page inspector. */
 export async function getAuditPage(ws: Workspace, auditId: string, url: string): Promise<PageDetail> {
-  const { crawlId } = await getAuditOverview(ws, auditId);
+  const crawlId = await auditCrawl(ws, auditId);
   const page = await pageDetail(getDb(), crawlId, url);
   if (!page) throw new WorkflowError("NOT_FOUND", "This audit has no such URL.");
   return page;

@@ -18,17 +18,23 @@ export interface IssueRow {
   /** What the audit observed: an issue, or could not judge (inconclusive); null when carried over unobserved. */
   outcome: "issue" | "inconclusive" | null;
   templateId: string | null;
-  /** The finding's message in this audit; null when the audit did not observe it (e.g. not_rechecked). */
+  /**
+   * The finding's message in this audit; null when the audit did not observe it (e.g. not_rechecked), and on the
+   * whole-audit list (issueRows without a rule), which stays small enough to filter 50k rows in the browser.
+   */
   message: string | null;
   /** True when a later fix verification resolved it (the state shown is then resolved). */
   verified: boolean;
 }
 
-/** Every fingerprint of the audit, open or not, ordered by rule then URL. */
-export async function issueRows(db: Exec, crawlId: string): Promise<IssueRow[]> {
-  const r = await db.execute(sql`select e.fingerprint, e.rule_id, e.url, e.state, e.outcome, e.template_id, e.verify_state,
-      (select left(f.message, 300) from findings f where f.crawl_id = ${crawlId}::uuid and f.fingerprint = e.fingerprint order by f.id limit 1) as message
-    from ${effectiveStates(crawlId)} e order by e.rule_id collate "C", e.url collate "C", e.fingerprint`);
+/** Every fingerprint of the audit, open or not, ordered by rule then URL; only rule `ruleId`'s, with messages, when given. */
+export async function issueRows(db: Exec, crawlId: string, ruleId?: string): Promise<IssueRow[]> {
+  const message =
+    ruleId === undefined
+      ? sql`null::text`
+      : sql`(select left(f.message, 300) from findings f where f.crawl_id = ${crawlId}::uuid and f.fingerprint = e.fingerprint order by f.id limit 1)`;
+  const r = await db.execute(sql`select e.fingerprint, e.rule_id, e.url, e.state, e.outcome, e.template_id, e.verify_state, ${message} as message
+    from ${effectiveStates(crawlId)} e ${ruleId === undefined ? sql`` : sql`where e.rule_id = ${ruleId}`} order by e.rule_id collate "C", e.url collate "C", e.fingerprint`);
   return (r.rows as Record<string, unknown>[]).map((x) => ({
     fingerprint: x.fingerprint as string,
     ruleId: x.rule_id as string,
@@ -70,10 +76,11 @@ export interface UrlRow {
   openIssues: number;
 }
 
-/** Every URL of the crawl, in discovery order. */
-export async function urlRows(db: Exec, crawlId: string): Promise<UrlRow[]> {
+/** Every URL of the crawl in discovery order, or only `only` (a normalised URL). */
+export async function urlRows(db: Exec, crawlId: string, only?: string): Promise<UrlRow[]> {
+  const one = (col: string) => (only === undefined ? sql`` : sql`and ${sql.raw(col)} = ${only}`);
   const r = await db.execute(sql`with open as (
-      select e.url, count(*)::int as n from ${effectiveStates(crawlId)} e where e.state in (${sql.raw(OPEN_STATES.map((x) => `'${x}'`).join(", "))}) group by e.url)
+      select e.url, count(*)::int as n from ${effectiveStates(crawlId)} e where e.state in (${sql.raw(OPEN_STATES.map((x) => `'${x}'`).join(", "))}) ${one("e.url")} group by e.url)
     select u.normalised_url, u.state, u.reason, u.status_code, u.content_type, u.depth, u.link_depth, u.inbound, u.pagerank, u.template_id,
       u.redirect_target, u.discovered_via, u.elapsed_ms, u.bytes, s.title, s.description,
       (select o->>'text' from jsonb_array_elements(s.outline) o where o->>'level' = '1' limit 1) as h1,
@@ -81,7 +88,7 @@ export async function urlRows(db: Exec, crawlId: string): Promise<UrlRow[]> {
       (select c->>'resolved' from jsonb_array_elements(s.canonicals) c where c->>'location' <> 'body' limit 1) as canonical,
       coalesce((s.robots->'noindex'->>'meta')::boolean or (s.robots->'noindex'->>'header')::boolean, false) as noindex, coalesce(o.n, 0) as open_issues
     from crawl_urls u left join page_snapshots s on s.url_id = u.id left join open o on o.url = u.normalised_url
-    where u.crawl_id = ${crawlId}::uuid order by u.id`);
+    where u.crawl_id = ${crawlId}::uuid ${one("u.normalised_url")} order by u.id`);
   return (r.rows as Record<string, unknown>[]).map((x) => ({
     url: x.normalised_url as string,
     state: x.state as string,
@@ -144,7 +151,7 @@ export const EDGE_LIMIT = 500;
 
 /** Everything the crawl knows about one URL (its normalised form); null when the crawl has no such URL. */
 export async function pageDetail(db: Exec, crawlId: string, url: string): Promise<PageDetail | null> {
-  const row = (await urlRows(db, crawlId)).find((u) => u.url === url);
+  const [row] = await urlRows(db, crawlId, url);
   if (!row) return null;
   const snap = (
     await db.execute(sql`select s.requested_url, s.final_url, s.status_code, s.content_type, s.redirect_chain, s.headers, s.bytes, s.truncated,

@@ -67,9 +67,13 @@ describe("explorer reads", () => {
       perRule.set(i.ruleId, s);
     }
     for (const g of await issueGroups(db, audit)) expect(perRule.get(g.ruleId), g.ruleId).toEqual(g.states);
+    expect(issues.every((i) => i.message === null)).toBe(true);
     const thin = issues.find((i) => i.ruleId === "CNT-005" && i.url === u("/a"));
     expect(thin).toMatchObject({ state: "persistent", outcome: "issue", verified: false });
-    expect(thin?.message).toBeTruthy();
+    // One rule's rows carry their messages.
+    const cnt = await issueRows(db, audit, "CNT-005");
+    expect(cnt.map((i) => i.fingerprint)).toEqual(issues.filter((i) => i.ruleId === "CNT-005").map((i) => i.fingerprint));
+    expect(cnt.find((i) => i.url === u("/a"))?.message).toBeTruthy();
 
     // URL rows: page facts from the snapshot, redirects without one, open issue counts matching the issue rows.
     const urls = await urlRows(db, audit);
