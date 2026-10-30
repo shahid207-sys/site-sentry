@@ -1,5 +1,5 @@
-// Internal and external link rules (docs/SPEC.md catalog, LNK). LNK-009 (links only via JS onclick) needs the
-// Phase 5 renderer to prove a link is not crawlable and is not implemented.
+// Internal and external link rules (docs/SPEC.md catalog, LNK). LNK-009 (links only via JS onclick) reads the
+// render and lives in rendered.ts.
 //
 // Page rules judge a page's links by their targets in the crawl (SiteView); a target the crawl did not fetch is never
 // reported. Graph rules read the site pass's inbound counts, click depth and PageRank (analyse.ts, graph.ts).

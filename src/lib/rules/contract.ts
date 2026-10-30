@@ -5,6 +5,8 @@ import type { SitemapDocRecord } from "../crawl/v2/discovery";
 import type { DiscoverySource, UrlState } from "../crawl/v2/types";
 import type { LanguageSnapshot, PageFacts, PageSnapshot, RobotsSnapshot } from "../snapshot/types";
 import type { ProbeRecord } from "./probe-types";
+import type { RenderResult } from "../render/pool";
+import type { RenderedExtract } from "../render/run";
 
 export type Category = "indexability" | "metadata" | "content" | "ai_search" | "links" | "international" | "images" | "structured_data" | "security" | "site" | "performance" | "accessibility";
 export type Confidence = "verified" | "heuristic" | "advisory";
@@ -35,7 +37,9 @@ export type InconclusiveCode =
   // A response that does not prove the resource is broken or fine (403, 429, 999, 5xx, timeout).
   | "ambiguous_status"
   // The server sent no Content-Length, so the size is unknown.
-  | "size_unknown";
+  | "size_unknown"
+  // The page rendered, but the measurement did not complete (axe-core could not run, no metric was recorded).
+  | "not_measured";
 
 /** What a rule knows about the crawl as a whole. */
 export interface CrawlView {
@@ -84,6 +88,22 @@ export interface Hreflang {
   href: string;
 }
 
+/** A page's headless-browser render (page_renders): what "rendered" rules read. */
+export interface PageRenderView {
+  status: "rendered" | "timeout" | "error";
+  error: string | null;
+  finalUrl: string;
+  elapsedMs: number;
+  /** Lab data only (source "lab"). */
+  metrics: RenderResult["metrics"];
+  extract: RenderedExtract | null;
+  requests: RenderResult["requests"];
+  requestTotals: RenderResult["requestTotals"] | null;
+  scriptLinks: RenderResult["scriptLinks"];
+  scriptNavigations: string[];
+  a11y: RenderResult["a11y"];
+}
+
 /** A fetched URL with its snapshot: what page rules read. Extraction fields are empty/null when `html` is false. */
 export interface PageView extends Omit<PageSnapshot, "facts" | "robots" | "language"> {
   /** The response had an HTML body that was extracted. */
@@ -97,6 +117,11 @@ export interface PageView extends Omit<PageSnapshot, "facts" | "robots" | "langu
   state: UrlState;
   depth: number | null;
   discoveredVia: DiscoverySource[];
+  /**
+   * The page's render, when the audit rendered it. A rule that needs "rendered" is evaluated only on pages whose
+   * render status is "rendered" (analyse.ts); elsewhere it does not run for the page.
+   */
+  render?: PageRenderView | null;
 }
 
 /** One crawl_urls row with the snapshot fields site rules compare across pages. */

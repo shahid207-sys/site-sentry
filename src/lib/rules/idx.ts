@@ -1,5 +1,5 @@
-// Crawlability and indexability rules (docs/SPEC.md catalog, IDX). IDX-018 (canonical raw vs rendered) needs the
-// Phase 5 renderer and is not implemented.
+// Crawlability and indexability rules (docs/SPEC.md catalog, IDX). IDX-018 (canonical raw vs rendered) reads the
+// render and lives in rendered.ts.
 import { parseRobotsHeader } from "../snapshot/extract";
 import { finding, inconclusive, inSitemap, isIndexable, type Finding, type PageRule, type SiteRule, type UrlFacts } from "./contract";
 import { skippedByRobots } from "./probe-types";

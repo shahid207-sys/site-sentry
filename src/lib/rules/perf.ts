@@ -1,7 +1,7 @@
 // Performance rules (docs/SPEC.md catalog, PERF) that the fetched response answers, without a browser: TTFB,
 // render-blocking head resources, HTML size, text compression and DOM size. Every measured number is lab data (the
 // crawler's own request), so its evidence says source "lab"; field data (CrUX) is not available, and nothing here
-// is labelled field. PERF-001/003/007/009/011 need the rendered page; PERF-002 needs field data.
+// is labelled field. PERF-001/003/007/009/011 read the render (rendered.ts); PERF-002 needs field data.
 import type { HeadTag } from "../snapshot/types";
 import { finding, type PageRule } from "./contract";
 import { isHtml200 } from "./util";

@@ -4,7 +4,7 @@
 // redelivered or concurrent job either waits or replaces the previous result; it never leaves half a result.
 import { sql } from "drizzle-orm";
 import type { Db } from "../db/client";
-import { findings as findingsTable, type CrawlKind } from "../db/schema";
+import { findings as findingsTable, type CrawlKind, type RenderStatus } from "../db/schema";
 import { normaliseUrl } from "../crawl/normalise";
 import { isAllowed, parseRobots } from "../crawl/robots";
 import type { SitemapDocRecord } from "../crawl/v2/discovery";
@@ -12,7 +12,7 @@ import type { RobotsRecord, VerifyConfig } from "../crawl/v2/runner";
 import type { DiscoverySource, UrlState } from "../crawl/v2/types";
 import type { CanonicalTag } from "../snapshot/types";
 import { renderModeOf, type RenderMode, type RenderProgress } from "../render/run";
-import { NeedsConfig, type CrawlView, type Finding, type HistoryRule, type Hreflang, type PageRule, type PageView, type ResourceFacts, type ResourceRule, type Rule, type SiteCtx, type SiteRule, type SiteView, type UrlFacts } from "./contract";
+import { NeedsConfig, type CrawlView, type Finding, type HistoryRule, type Hreflang, type PageRenderView, type PageRule, type PageView, type ResourceFacts, type ResourceRule, type Rule, type SiteCtx, type SiteRule, type SiteView, type UrlFacts } from "./contract";
 import { bfsDepth, pageRank } from "./graph";
 import type { ProbeRecord } from "./probe-types";
 import { clusterTemplates, type ShapedPage } from "../snapshot/template";
@@ -330,6 +330,25 @@ function pageView(x: Record<string, unknown>): PageView {
     templateFingerprint: (x.template_fingerprint as string | null) ?? null,
     timings,
     facts: x.facts as PageView["facts"],
+    render: renderView(x.render as Record<string, unknown> | null),
+  };
+}
+
+/** A page_renders row (to_jsonb, so snake_case keys) as rules read it. */
+function renderView(r: Record<string, unknown> | null | undefined): PageView["render"] {
+  if (!r) return null;
+  return {
+    status: r.status as RenderStatus,
+    error: (r.error as string | null) ?? null,
+    finalUrl: r.final_url as string,
+    elapsedMs: r.elapsed_ms as number,
+    metrics: (r.metrics ?? null) as PageRenderView["metrics"],
+    extract: (r.extract ?? null) as PageRenderView["extract"],
+    requests: (r.requests ?? []) as PageRenderView["requests"],
+    requestTotals: (r.request_totals ?? null) as PageRenderView["requestTotals"],
+    scriptLinks: (r.script_links ?? null) as PageRenderView["scriptLinks"],
+    scriptNavigations: (r.script_navigations ?? []) as string[],
+    a11y: (r.a11y ?? null) as PageRenderView["a11y"],
   };
 }
 
@@ -358,6 +377,11 @@ class Stats {
       s.totalMs += performance.now() - t;
       s.evaluated++;
     }
+  }
+  /** Records that a rule cannot run in this analysis at all (it is then not evaluated). */
+  mark(ruleId: string, status: "needs_config" | "error", detail: string): void {
+    const s = this.m.get(ruleId);
+    if (s) Object.assign(s, { status, detail });
   }
   /** Corrects a rule's finding count (grouped rules store one finding per group, not one per page). */
   adjust(ruleId: string, delta: number): void {
@@ -407,8 +431,8 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
       await tx.execute(sql`delete from issue_group_templates where crawl_id = ${crawlId}::uuid`);
       await tx.execute(sql`delete from issue_states where crawl_id = ${crawlId}::uuid`);
       for (const r of rules) {
-        await tx.execute(sql`insert into rules (id, version, category, scope, confidence, impact, updated_at) values (${r.id}, ${r.version}, ${r.category}, ${r.scope}, ${r.confidence}, ${r.impact}, now())
-          on conflict (id) do update set version = excluded.version, category = excluded.category, scope = excluded.scope, confidence = excluded.confidence, impact = excluded.impact, updated_at = now()`);
+        await tx.execute(sql`insert into rules (id, version, category, scope, confidence, impact, needs, updated_at) values (${r.id}, ${r.version}, ${r.category}, ${r.scope}, ${r.confidence}, ${r.impact}, ${JSON.stringify(r.needs)}::jsonb, now())
+          on conflict (id) do update set version = excluded.version, category = excluded.category, scope = excluded.scope, confidence = excluded.confidence, impact = excluded.impact, needs = excluded.needs, updated_at = now()`);
       }
       await linkGraph(tx, crawlId, row.site_origin, batch);
       await templates(tx, crawlId, batch);
@@ -428,6 +452,12 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
       // History rules run after this audit's states are written (results/history.ts), not in this pass.
       const historyRules = rules.filter((r): r is HistoryRule => r.scope === "history");
       const stats = new Stats(rules.filter((r) => r.scope !== "history"));
+      // Rules that read the render run only on pages with a successful one; with no render phase they cannot run.
+      const renderedRule = (r: Rule) => r.needs.includes("rendered");
+      for (const r of rules.filter(renderedRule)) {
+        if (renderMode === "off") stats.mark(r.id, "needs_config", "Rendering is off for this audit: choose a profile that renders pages (sampled or full) to run this check.");
+        else if (row.render?.status === "failed") stats.mark(r.id, "error", `The render phase failed: ${row.render.error ?? "unknown error"}`);
+      }
       const pageRules = rules.filter((r): r is PageRule => r.scope === "page");
       const siteRules = rules.filter((r): r is SiteRule => r.scope === "site");
       const resourceRules = rules.filter((r): r is ResourceRule => r.scope === "resource");
@@ -438,7 +468,9 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
       let pages = 0;
       let total = 0;
       for (let after = 0; ; ) {
-        const r = await tx.execute(sql`select s.*, coalesce(u.template_id, s.template_fingerprint) as template_fingerprint, u.normalised_url, u.state, u.depth, u.discovered_via from page_snapshots s join crawl_urls u on u.id = s.url_id
+        const r = await tx.execute(sql`select s.*, coalesce(u.template_id, s.template_fingerprint) as template_fingerprint, u.normalised_url, u.state, u.depth, u.discovered_via,
+            (select to_jsonb(pr) from page_renders pr where pr.url_id = s.url_id) as render
+          from page_snapshots s join crawl_urls u on u.id = s.url_id
           where s.crawl_id = ${crawlId}::uuid and s.id > ${after} order by s.id limit ${batch}`);
         const found: Finding[] = [];
         // Every page's own findings, grouped rules included: issue groups, reach and states count pages.
@@ -447,6 +479,7 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
           const page = pageView(x);
           pages++;
           for (const rule of pageRules) {
+            if (renderedRule(rule) && page.render?.status !== "rendered") continue;
             const own: Finding[] = [];
             stats.run(rule, { page, crawl, site }, own);
             for (const f of own) occurrences.push(occurrenceOf(rule, f, basis));

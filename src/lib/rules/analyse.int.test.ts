@@ -80,8 +80,11 @@ describe("analyseCrawl", () => {
     expect(runs).toHaveLength(RULES.filter((r) => r.scope !== "history").length);
     for (const r of RULES.filter((x) => x.scope !== "history")) {
       const run = runs.find((x) => x.rule_id === r.id)!;
-      // Resource rules run once per checked image or external link; this site has neither.
-      expect(run.evaluated, r.id).toBe(r.scope === "page" ? 5 : r.scope === "resource" ? 0 : 1);
+      // Resource rules run once per checked image or external link; this site has neither. This audit does not
+      // render, so the rules that read the render evaluate nothing and need configuration.
+      const rendered = r.needs.includes("rendered");
+      expect(run.evaluated, r.id).toBe(rendered || r.scope === "resource" ? 0 : r.scope === "page" ? 5 : 1);
+      if (rendered) expect(run.status, r.id).toBe("needs_config");
     }
     expect(runs.find((x) => x.rule_id === "AIS-002")!.status).toBe("needs_config");
     expect(runs.filter((x) => x.status === "error")).toEqual([]);

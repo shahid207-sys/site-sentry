@@ -1,7 +1,7 @@
 // Image and video rules (docs/SPEC.md catalog, IMG). Page rules read the snapshot's <img> list; the size, type and
 // intrinsic dimensions come from the resource phase (crawl.resources.images: HEAD plus the header bytes, at most
 // 2,000 images per crawl). An image the resource phase did not check is never judged on size. IMG-009 (LCP image
-// lazy-loaded) needs the Phase 5 renderer and is not implemented.
+// lazy-loaded) reads the render and lives in rendered.ts.
 import { finding, inconclusive, type CrawlView, type PageRule, type PageView, type ResourceFacts, type ResourceRule } from "./contract";
 import { entities } from "./jsonld";
 import { isHtml200 } from "./util";

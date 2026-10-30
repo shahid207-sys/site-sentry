@@ -7,7 +7,7 @@ import type { RobotsRecord } from "../crawl/v2/runner";
 import type { DiscoverySource, UrlState } from "../crawl/v2/types";
 import { extractHtml } from "../snapshot/extract";
 import { crawlView, effectiveCanonical } from "./analyse";
-import { NeedsConfig, type CrawlView, type Finding, type HistoryCtx, type PageView, type ResourceFacts, type Rule, type SiteCtx, type SiteView, type UrlFacts } from "./contract";
+import { NeedsConfig, type CrawlView, type Finding, type HistoryCtx, type PageRenderView, type PageView, type ResourceFacts, type Rule, type SiteCtx, type SiteView, type UrlFacts } from "./contract";
 import { LEGACY_TO_CATALOG } from "./legacy-map";
 import type { ProbeRecord } from "./probe-types";
 import { DEFERRED_RULES, RULES, RULES_BY_ID } from "./registry";
@@ -329,6 +329,50 @@ const SITE_ISSUES = (id: string, pos: () => [SiteView, SiteCtx["pageIssues"]], n
   },
 });
 
+/** A clean, successful render of `p`: the same canonical and content after JavaScript, fast, stable, small, cached, no axe violations. */
+function renderOf(p: PageView, over: Partial<PageRenderView> = {}): PageRenderView {
+  return {
+    status: "rendered",
+    error: null,
+    finalUrl: p.url,
+    elapsedMs: 900,
+    metrics: { source: "lab", lcpMs: 1200, cls: 0.01, lcpElement: { tag: "img", url: U("/hero.png"), loading: null, selector: "main > img" }, domNodes: 300, viewport: { width: 412, height: 915 } },
+    extract: {
+      canonicals: p.canonicals,
+      robots: p.robots!,
+      titles: p.titles,
+      outline: p.outline,
+      wordCount: p.wordCount,
+      textHash: p.textHash,
+      jsonLdBlocks: 0,
+      images: 1,
+      links: { total: 2, renderedOnly: [], renderedOnlyCount: 0, rawOnlyCount: 0 },
+    },
+    requests: [
+      { url: p.url, type: "document", outcome: "fulfilled", status: 200, transferBytes: 20_000, thirdParty: false },
+      { url: U("/app.js"), type: "script", outcome: "fulfilled", status: 200, transferBytes: 80_000, cacheControl: "max-age=31536000", thirdParty: false },
+      { url: U("/hero.png"), type: "image", outcome: "fulfilled", status: 200, transferBytes: 150_000, cacheControl: "max-age=86400", thirdParty: false },
+      { url: "https://cdn.other.test/w.js", type: "script", outcome: "fulfilled", status: 200, transferBytes: 30_000, thirdParty: true },
+      { url: "https://www.googletagmanager.com/gtm.js", type: "script", outcome: "blocked", reason: "ads_analytics", thirdParty: true },
+    ],
+    requestTotals: { count: 5, fulfilled: 4, blocked: 1, failed: 0, logged: 5 },
+    scriptLinks: { onclick: [], noHref: [], counts: { onclick: 0, noHref: 0 } },
+    scriptNavigations: [],
+    a11y: { version: "4.14.0", rules: {} },
+    ...over,
+  };
+}
+/** A clean page with a render built from it, then changed by `over`. */
+const renderedPage = (over: (r: PageRenderView) => Partial<PageRenderView>, parts: Partial<Parts> = {}): PageView => {
+  const p = pageFrom("/x/", parts);
+  const r = renderOf(p);
+  return { ...p, render: { ...r, ...over(r) } };
+};
+const metrics = (m: Partial<NonNullable<PageRenderView["metrics"]>>) => (r: PageRenderView) => ({ metrics: { ...r.metrics!, ...m } });
+const axe = (rules: NonNullable<PageRenderView["a11y"]>["rules"]) => () => ({ a11y: { version: "4.14.0", rules } });
+const axeHit = (n: number) => ({ count: n, nodes: [{ selector: "main > button", html: "<button></button>", summary: "Fix any of the following" }] });
+const big = (r: PageRenderView, bytes: number) => ({ requests: [...r.requests, { url: U("/video.mp4"), type: "media", outcome: "fulfilled" as const, status: 200, transferBytes: bytes, thirdParty: false }] });
+
 const textOf = (n: number) => Array.from({ length: n }, (_, i) => `word${i}`).join(" ");
 const BOILER = `<nav>${Array.from({ length: 60 }, (_, i) => `<a href="/n${i}/">Navigation link number ${i}</a>`).join(" ")}</nav>`;
 
@@ -500,6 +544,45 @@ const CASES: Record<string, Case> = {
   "PERF-008": PAGE("PERF-008", () => pageFrom("/x/", {}, { headers: { "content-encoding": "identity" } }), () => pageFrom("/x/")),
   "PERF-010": PAGE("PERF-010", () => pageFrom("/x/", withBody(`<main>${"<span>x</span>".repeat(1600)}</main>`)), () => pageFrom("/x/", withBody(`<main>${"<span>x</span>".repeat(1400)}</main>`))),
 
+  // ---------- rendered (Phase 5) ----------
+  "IDX-018": PAGE("IDX-018", () => renderedPage((r) => ({ extract: { ...r.extract!, canonicals: [{ ...r.extract!.canonicals[0], href: "/other/", resolved: U("/other/") }] } })), () => renderedPage(() => ({}))),
+  "AIS-004": PAGE(
+    "AIS-004",
+    () => renderedPage((r) => ({ extract: { ...r.extract!, wordCount: 600 } }), { body: "<main><p>Loading the garden guide.</p></main>" }),
+    () => renderedPage((r) => ({ extract: { ...r.extract!, wordCount: r.extract!.wordCount + 40 } })),
+  ),
+  "LNK-009": PAGE(
+    "LNK-009",
+    () => renderedPage(() => ({ scriptLinks: { onclick: [{ tag: "span", text: "Next", onclick: "location.href='/next/'", target: "/next/", selector: "main > span" }], noHref: [], counts: { onclick: 1, noHref: 0 } } })),
+    () => renderedPage(() => ({})),
+  ),
+  "IMG-009": PAGE("IMG-009", () => renderedPage(metrics({ lcpElement: { tag: "img", url: U("/hero.png"), loading: "lazy", selector: "main > img" } })), () => renderedPage(metrics({ lcpElement: { tag: "img", url: U("/hero.png"), loading: "eager", selector: "main > img" } }))),
+  "PERF-001": PAGE("PERF-001", () => renderedPage(metrics({ lcpMs: 2600 })), () => renderedPage(metrics({ lcpMs: 2500 }))),
+  "PERF-003": PAGE("PERF-003", () => renderedPage(metrics({ cls: 0.25 })), () => renderedPage(metrics({ cls: 0.1 }))),
+  "PERF-007": PAGE("PERF-007", () => renderedPage((r) => big(r, 3 * 1048576)), () => renderedPage((r) => big(r, 2 * 1048576))),
+  "PERF-009": PAGE(
+    "PERF-009",
+    () => renderedPage((r) => ({ requests: [...r.requests, { url: U("/site.css"), type: "stylesheet", outcome: "fulfilled", status: 200, transferBytes: 5_000, thirdParty: false }] })),
+    // Expires alone is enough; a third party's uncached script is not the site's to fix.
+    () =>
+      renderedPage((r) => ({
+        requests: [
+          ...r.requests,
+          { url: U("/site.css"), type: "stylesheet", outcome: "fulfilled", status: 200, transferBytes: 5_000, expires: "Thu, 01 Jan 2099 00:00:00 GMT", thirdParty: false },
+          { url: "https://cdn.other.test/x.js", type: "script", outcome: "fulfilled", status: 200, transferBytes: 1_000, thirdParty: true },
+        ],
+      })),
+  ),
+  "PERF-011": PAGE(
+    "PERF-011",
+    () => renderedPage((r) => ({ requests: [...r.requests, { url: "https://cdn.other.test/big.js", type: "script", outcome: "fulfilled", status: 200, transferBytes: 60_000, thirdParty: true }] })),
+    () => renderedPage((r) => ({ requests: [...r.requests, { url: "https://cdn.other.test/big.js", type: "script", outcome: "fulfilled", status: 200, transferBytes: 40_000, thirdParty: true }] })),
+  ),
+  "A11Y-001": PAGE("A11Y-001", () => renderedPage(axe({ "color-contrast": axeHit(3) })), () => renderedPage(axe({ label: axeHit(1) }))),
+  "A11Y-002": PAGE("A11Y-002", () => renderedPage(axe({ "select-name": axeHit(1) })), () => renderedPage(axe({ "color-contrast": axeHit(1) }))),
+  "A11Y-003": PAGE("A11Y-003", () => renderedPage(axe({ "link-name": axeHit(2), "button-name": axeHit(1) })), () => renderedPage(axe({ "target-size": axeHit(1) }))),
+  "A11Y-004": PAGE("A11Y-004", () => renderedPage(axe({ "target-size": axeHit(4) })), () => renderedPage(axe({ "button-name": axeHit(1) }))),
+
   // ---------- SITE ----------
   "SITE-001": SITE_ISSUES("SITE-001", () => [cleanSite(...templated(10, "T1")), issues("IMG-007", "T1", 9)], () => [cleanSite(...templated(10, "T1")), issues("IMG-007", "T1", 8)]),
   "SITE-002": SITE("SITE-002", () => [cleanSite(facts(pageFrom("/unlisted/"), 10))], () => [cleanSite(facts(pageFrom("/listed/", {}, { via: ["sitemap", "link"] }), 10))]),
@@ -513,8 +596,9 @@ const CASES: Record<string, Case> = {
 describe("rule catalog", () => {
   it("every registered rule has a test case, and every case names a registered rule", () => {
     expect(Object.keys(CASES).sort()).toEqual(RULES.map((r) => r.id).sort());
-    expect(RULES.length).toBe(31 + 19 + 12 + 3 + 13 + 6 + 10 + 10 + 6 + 5 + 5);
-    expect(Object.keys(DEFERRED_RULES)).toEqual(["IDX-018", "CNT-013", "CNT-014", "AIS-004", "LNK-009", "IMG-009", "PERF-001", "PERF-002", "PERF-003", "PERF-007", "PERF-009", "PERF-011", "A11Y-*"]);
+    // Per family, then the 13 rendered rules (Phase 5).
+    expect(RULES.length).toBe(31 + 19 + 12 + 3 + 13 + 6 + 10 + 10 + 6 + 5 + 5 + 13);
+    expect(Object.keys(DEFERRED_RULES)).toEqual(["CNT-013", "CNT-014", "PERF-002"]);
     // A deferred rule is never also registered.
     for (const id of Object.keys(DEFERRED_RULES)) expect(RULES_BY_ID.has(id), id).toBe(false);
   });
@@ -538,6 +622,41 @@ describe("clean baseline", () => {
     const crawl = crawlOf({ aiCrawlers: "allow" });
     const found = RULES.filter((r) => r.scope === "page").flatMap((r) => (r.scope === "page" ? r.evaluate({ page, crawl, site: cleanSite() }) : []));
     expect(found).toEqual([]);
+  });
+
+  it("no rendered rule fires on a clean render, and none judges a page without a successful one", () => {
+    const crawl = crawlOf({ aiCrawlers: "allow" });
+    const renderedRules = RULES.filter((r) => r.scope === "page" && r.needs.includes("rendered"));
+    expect(renderedRules.map((r) => r.id).sort()).toEqual(["A11Y-001", "A11Y-002", "A11Y-003", "A11Y-004", "AIS-004", "IDX-018", "IMG-009", "LNK-009", "PERF-001", "PERF-003", "PERF-007", "PERF-009", "PERF-011"]);
+    const slow = (r: PageRenderView) => ({ metrics: { ...r.metrics!, lcpMs: 9000 }, a11y: null });
+    const timedOut = renderedPage((r) => ({ ...slow(r), status: "timeout", error: "Page did not finish loading within 20 s." }));
+    for (const page of [renderedPage(() => ({})), timedOut, pageFrom("/x/")]) {
+      expect(renderedRules.flatMap((r) => (r.scope === "page" ? r.evaluate({ page, crawl, site: cleanSite() }) : [])), page.render?.status ?? "none").toEqual([]);
+    }
+  });
+
+  it("a rendered page without a measurement is inconclusive, not silent", () => {
+    const page = renderedPage(() => ({ a11y: null, metrics: { source: "lab", lcpMs: null, cls: null, lcpElement: null, domNodes: 10, viewport: { width: 412, height: 915 } } }));
+    const crawl = crawlOf();
+    for (const id of ["PERF-001", "A11Y-001", "A11Y-004"]) {
+      const r = rule(id);
+      const f = r.scope === "page" ? r.evaluate({ page, crawl, site: cleanSite() }) : [];
+      expect(f, id).toMatchObject([{ outcome: "inconclusive", evidence: { code: "not_measured" } }]);
+    }
+  });
+
+  it("lab metrics say so: no performance finding is labelled field data", () => {
+    const crawl = crawlOf();
+    for (const [id, page] of [
+      ["PERF-001", renderedPage(metrics({ lcpMs: 4000 }))],
+      ["PERF-003", renderedPage(metrics({ cls: 0.3 }))],
+      ["IMG-009", renderedPage(metrics({ lcpElement: { tag: "img", url: U("/h.png"), loading: "lazy", selector: "img" } }))],
+    ] as const) {
+      const r = rule(id);
+      const [f] = r.scope === "page" ? r.evaluate({ page, crawl, site: cleanSite() }) : [];
+      expect(f.evidence, id).toMatchObject({ source: "lab" });
+      expect(f.evidence.field ?? null, id).toBeNull();
+    }
   });
 
   it("no site rule fires on a clean site (AIS-001 reports robots.txt, not a page)", () => {

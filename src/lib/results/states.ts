@@ -36,7 +36,8 @@ export const projectKey = (alias: string) => sql.raw(`coalesce(${alias}.site_id,
  * SQL predicate: did crawl `checker` re-check fingerprint row `s` (columns rule_id, url)?
  * The rule must have run in that crawl (rule_runs status 'ran': not needs_config, not error), and its subject must
  * have been examined: a page rule's URL answered (an ANSWERED state: a page that now redirects or is no longer HTML
- * no longer has the page defect), a resource rule's resource answered (resources.state = 'done'), and for a site
+ * no longer has the page defect) and, for a rule that reads the render, the URL, when it answered 200, rendered in that crawl (a
+ * sampled render that skipped the page did not look at it), a resource rule's resource answered (resources.state = 'done'), and for a site
  * rule, a crawl that left no URL of the host unfetched (`complete`), saw at least what the audit that last observed
  * the finding saw (that audit is in `wide`, see wideAudits), and, when the subject is a URL of the crawl inventory
  * (page_subject), answered that URL. A site rule's verdict on one URL depends on other pages (a duplicate title is
@@ -48,7 +49,10 @@ export function rechecked(checker: string, complete: boolean, wide: string[], s 
   const row = sql.raw(s);
   return sql`(exists (select 1 from rule_runs rr where rr.crawl_id = ${c} and rr.rule_id = ${row}.rule_id and rr.status = 'ran')
     and case (select scope from rules where id = ${row}.rule_id)
-      when 'page' then exists (select 1 from crawl_urls u where u.crawl_id = ${c} and u.normalised_url = ${row}.url and u.state in (${ANSWERED_SQL}))
+      when 'page' then exists (select 1 from crawl_urls u where u.crawl_id = ${c} and u.normalised_url = ${row}.url and u.state in (${ANSWERED_SQL})
+          and (not coalesce((select needs ? 'rendered' from rules where id = ${row}.rule_id), false)
+            or u.status_code is distinct from 200
+            or exists (select 1 from page_renders pr where pr.url_id = u.id and pr.status = 'rendered')))
       when 'resource' then exists (select 1 from resources r where r.crawl_id = ${c} and r.url = ${row}.url and r.state = 'done')
       else ${complete}
         and (select o.crawl_id from issue_states o join crawls p on p.id = o.crawl_id join crawls k on k.id = ${c}

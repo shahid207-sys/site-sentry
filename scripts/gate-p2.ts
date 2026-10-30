@@ -334,7 +334,8 @@ export async function runGate(phase: Phase) {
 
     console.log(`\n== Rules (phase ${PHASE}: ${FAMILIES[PHASE].source})`);
     // History rules (SITE-004, SITE-005) judge an audit against earlier ones: src/lib/results/history.int.test.ts.
-    const phaseRules = RULES.filter((r) => FAMILIES[PHASE].test(r.id) && r.scope !== "history");
+    // Rules that read the render (IDX-018, AIS-004, LNK-009, IMG-009) are Phase 5's: these crawls do not render; gate:p5.
+    const phaseRules = RULES.filter((r) => FAMILIES[PHASE].test(r.id) && r.scope !== "history" && !r.needs.includes("rendered"));
     const notEvaluated = phaseRules.filter((r) => !evaluated.get(r.id));
     check(`Every phase ${PHASE} rule was evaluated`, notEvaluated.length === 0, `${phaseRules.length} rules${notEvaluated.length ? `; never evaluated: ${notEvaluated.map((r) => r.id).join(", ")}` : ""}`);
     const silent = phaseRules.filter((r) => !fired.has(r.id) && !UNIT_ONLY[r.id]);

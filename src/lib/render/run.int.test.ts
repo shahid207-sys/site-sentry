@@ -140,5 +140,55 @@ describe("render phase", () => {
   });
 });
 
+describe("rendered rules across audits", () => {
+  it("a page the next audit did not render is not re-checked; with rendering off the rules need configuration", { timeout: 180_000 }, async () => {
+    // A site of its own: every guide's script swaps the canonical (IDX-018).
+    const site = await startLocalServer();
+    const sitePool = new RenderPool({ fetch: site.fetch });
+    const project = `render-${randomUUID()}`;
+    try {
+      site.routes.set("/robots.txt", send("User-agent: *\nAllow: /\n", "text/plain"));
+      site.routes.set("/", send(`<!doctype html><html lang="en"><head><title>Guides</title></head><body><main><h1>Guides</h1><a href="/guides/1">1</a><a href="/guides/22">22</a><a href="/guides/333">333</a></main></body></html>`));
+      for (const n of [1, 22, 333])
+        site.routes.set(
+          `/guides/${n}`,
+          send(`<!doctype html><html lang="en"><head><title>Guide ${n}</title><link rel="canonical" href="/guides/${n}"><script src="/g.js"></script></head><body><main><h1>Guide ${n}</h1><p>${"guide ".repeat(60)}</p></main></body></html>`),
+        );
+      site.routes.set("/g.js", send(`document.querySelector("link[rel=canonical]").href = "/guides";`, "application/javascript"));
+
+      const audit = async (render: "full" | "sampled" | undefined) => {
+        const c = await newCrawl(db, { siteOrigin: site.origin, siteId: project, status: "queued", maxDepth: 3, config: render ? { render } : {} });
+        expect(await runCrawl({ db, redis, politeness: { keyPrefix: `test:render:${randomUUID()}:` }, fetch: site.fetch, owner: "test", leaseMs: 30_000 }, c)).toBe("completed");
+        if (render) expect(await renderCrawl({ db, pool: sitePool, store }, c)).toBe("done");
+        expect((await analyseCrawl(db, c)).outcome).toBe("analysed");
+        return c;
+      };
+      const states = async (c: string) =>
+        Object.fromEntries(
+          ((await db.execute(sql`select url, state from issue_states where crawl_id = ${c}::uuid and rule_id = 'IDX-018' order by url`)).rows as { url: string; state: string }[]).map((r) => [r.url.slice(site.origin.length), r.state]),
+        );
+      const run = async (c: string) => (await db.execute(sql`select status, detail from rule_runs where crawl_id = ${c}::uuid and rule_id = 'IDX-018'`)).rows[0] as { status: string; detail: string | null };
+
+      const a = await audit("full");
+      expect(await states(a)).toEqual({ "/guides/1": "new", "/guides/22": "new", "/guides/333": "new" });
+      const [f] = (await db.execute(sql`select evidence from findings where crawl_id = ${a}::uuid and rule_id = 'IDX-018' and url = ${`${site.origin}/guides/1`}`)).rows as { evidence: { raw: string; rendered: string } }[];
+      expect(f.evidence).toEqual({ raw: `${site.origin}/guides/1`, rendered: `${site.origin}/guides` });
+
+      // Sampled: one guide stands for the template. The two it skipped were fetched but not looked at after JavaScript.
+      const b = await audit("sampled");
+      expect(await states(b)).toEqual({ "/guides/1": "persistent", "/guides/22": "not_rechecked", "/guides/333": "not_rechecked" });
+
+      // Rendering off: the rule cannot run, and says why.
+      const c = await audit(undefined);
+      expect(await run(c)).toMatchObject({ status: "needs_config", detail: expect.stringMatching(/Rendering is off/) });
+      expect(await states(c)).toEqual({ "/guides/1": "not_rechecked", "/guides/22": "not_rechecked", "/guides/333": "not_rechecked" });
+      expect((await run(a)).status).toBe("ran");
+    } finally {
+      await sitePool.close();
+      await site.close();
+    }
+  });
+});
+
 /** Every page full mode would render. */
 const full = (c: string) => planRenders(db, c, "full");
