@@ -169,6 +169,9 @@ describe("at-most-once fetch accounting", () => {
     await upsertUrls(db, d, Array.from({ length: 6 }, (_, i) => u(`/q${i}`, "link", 1)));
     expect(await reserve(db, d, "cap", 2, null)).toHaveLength(2);
     expect((await reserve(db, d, "cap2", 8, null)).map((r) => r.url)).toEqual(["https://example.test/q2"]);
+    // A reservation whose lease expired (its worker died) no longer holds a slot.
+    await db.execute(sql`update crawl_urls set lease_until = now() - interval '1 second' where crawl_id = ${d}::uuid and lease_owner = 'cap'`);
+    expect((await reserve(db, d, "cap2", 8, null)).map((r) => r.url)).toEqual(["https://example.test/q3", "https://example.test/q4"]);
     await releaseReservations(db, "cap");
     await releaseReservations(db, "cap2");
   });

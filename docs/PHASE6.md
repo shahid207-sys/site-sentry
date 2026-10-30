@@ -29,6 +29,9 @@ stub or mock stands in for any of it.
   the due schedules with `FOR UPDATE SKIP LOCKED`, and moves their next run in the same transaction. So several
   instances never launch one slot twice. Each claimed schedule is launched through `launchAudit`, the New audit
   path. The launch, or its error, is recorded in `schedule_runs`.
+- **A site with an audit running** (one started by hand, say) skips the slot, recorded as an error on the run: the
+  schedule never adopts an audit it did not start, so it never alerts on someone else's audit. Audits that finished
+  while nobody had them open are synced from their crawl first, so they do not count as running.
 - **Missed slots are not caught up.** A server that was down for a week runs a weekly schedule once when it comes
   back, not once per missed slot. Resuming a paused schedule moves it to the next slot after now.
 - **Run now** sets the next run to now. The tick picks it up within a minute.

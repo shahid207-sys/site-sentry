@@ -174,9 +174,10 @@ export async function reserve(db: Db, crawlId: string, owner: string, limit: num
       order by depth nulls last, id
       -- Never more than the budget left after the URLs already reserved: the budget is charged at commit, and
       -- concurrent commits would otherwise decide which reserved URLs get the last slots (not breadth-first order).
+      -- An expired reservation (a worker that died) holds no slot; commit still enforces the budget either way.
       limit (select case when k.budget is null then ${limit}::int
           else greatest(0, least(${limit}::int, k.budget - k.fetches_committed
-            - (select count(*)::int from crawl_urls q where q.crawl_id = k.id and q.state = 'queued'))) end
+            - (select count(*)::int from crawl_urls q where q.crawl_id = k.id and q.state = 'queued' and q.lease_until > now()))) end
         from crawls k where k.id = ${crawlId}::uuid)
       for update skip locked
     )
