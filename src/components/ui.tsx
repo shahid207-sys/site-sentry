@@ -228,7 +228,7 @@ export function Breadcrumbs({ crumbs, className }: { crumbs: Crumb[]; className?
           return (
             <li key={i} className="flex min-w-0 max-w-full items-center gap-1">
               {c.href && !last && c.href !== pathname ? (
-                <Link href={c.href} className="truncate rounded-sm hover:text-fg">
+                <Link href={c.href} prefetch={false} className="truncate rounded-sm hover:text-fg">
                   {c.label}
                 </Link>
               ) : (
@@ -399,7 +399,7 @@ export function StatCard({ label, value, hint, href, icon, tone = "accent" }: { 
     <div className={cx("relative min-w-0 rounded-2xl border border-line bg-surface p-4 shadow-card sm:p-5", href && "transition-[border-color,box-shadow] hover:border-line-strong hover:shadow-raised")}>
       <dt className="flex items-start justify-between gap-3 text-[13px] font-medium text-fg-2">
         {href ? (
-          <Link href={href} className="after:absolute after:inset-0 after:rounded-2xl">
+          <Link href={href} prefetch={false} className="after:absolute after:inset-0 after:rounded-2xl">
             {label}
           </Link>
         ) : (

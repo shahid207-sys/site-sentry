@@ -77,7 +77,7 @@ function WorkspaceSwitch({ ws }: { ws: Workspace }) {
           </Link>
         ))}
       </div>
-      <Link href="/" className="mt-3 flex items-center gap-1.5 px-1 text-[13px] text-fg-3 hover:text-fg">
+      <Link href="/" prefetch={false} className="mt-3 flex items-center gap-1.5 px-1 text-[13px] text-fg-3 hover:text-fg">
         SiteSentry home
         <ArrowUpRight className="size-3.5" aria-hidden />
       </Link>
@@ -165,7 +165,7 @@ function Shell({ ws, children }: { ws: Workspace; children: ReactNode }) {
       {/* Desktop sidebar: labels always visible. */}
       <aside className="no-print sticky top-0 hidden h-dvh w-[252px] shrink-0 flex-col border-r border-line bg-surface md:flex">
         <div className="flex h-16 items-center px-5">
-          <Link href="/" aria-label="SiteSentry home">
+          <Link href="/" prefetch={false} aria-label="SiteSentry home">
             <Logo />
           </Link>
         </div>
@@ -186,7 +186,7 @@ function Shell({ ws, children }: { ws: Workspace; children: ReactNode }) {
           <button type="button" aria-label="Close menu" className="absolute inset-0 bg-scrim" onClick={() => setMobileOpen(false)} />
           <aside role="dialog" aria-modal="true" aria-label="Navigation" className="relative flex h-full w-[272px] max-w-[85vw] flex-col border-r border-line bg-surface shadow-pop">
             <div className="flex h-16 items-center justify-between px-4">
-              <Link href="/" aria-label="SiteSentry home" onClick={() => setMobileOpen(false)}><Logo /></Link>
+              <Link href="/" prefetch={false} aria-label="SiteSentry home" onClick={() => setMobileOpen(false)}><Logo /></Link>
               <button type="button" onClick={() => setMobileOpen(false)} className="rounded p-1.5 text-fg-3 hover:bg-hover hover:text-fg" aria-label="Close menu">
                 <X className="size-4" />
               </button>
@@ -209,7 +209,7 @@ function Shell({ ws, children }: { ws: Workspace; children: ReactNode }) {
           <button type="button" onClick={() => setMobileOpen(true)} className="-ml-1 rounded p-1.5 text-fg-2 hover:bg-hover hover:text-fg md:hidden" aria-label="Open menu">
             <Menu className="size-5" />
           </button>
-          <Link href="/" className="md:hidden" aria-label="SiteSentry home">
+          <Link href="/" prefetch={false} className="md:hidden" aria-label="SiteSentry home">
             <Logo compact />
           </Link>
           <button
@@ -238,7 +238,7 @@ function Shell({ ws, children }: { ws: Workspace; children: ReactNode }) {
               Sample workspace
             </span>
             <span className="text-fg-2">Two fictional sites with deterministic results. Nothing here is a real scan.</span>
-            <Link href="/live" className="text-fg underline decoration-line underline-offset-4 hover:decoration-fg sm:ml-auto">
+            <Link href="/live" prefetch={false} className="text-fg underline decoration-line underline-offset-4 hover:decoration-fg sm:ml-auto">
               Go to my sites
             </Link>
           </div>

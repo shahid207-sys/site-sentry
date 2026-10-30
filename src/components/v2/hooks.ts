@@ -93,16 +93,22 @@ export function useHotkeys(map: Record<string, (e: KeyboardEvent) => void>, enab
 
 let catalog: Promise<CatalogRule[]> | null = null;
 
+/** Starts loading the rule catalog (once per page load); a screen that needs it early calls this before it mounts. */
+export function loadRules(apiBase: string): Promise<CatalogRule[]> {
+  catalog ??= api<CatalogRule[]>(`${apiBase}/rules`).catch((e) => {
+    catalog = null;
+    throw e;
+  });
+  catalog.catch(() => undefined);
+  return catalog;
+}
+
 /** The rule catalog (titles, why / fix / acceptance), fetched once per page load. */
 export function useRules(apiBase: string): Map<string, CatalogRule> | null {
   const [rules, setRules] = useState<CatalogRule[] | null>(null);
   useEffect(() => {
     let live = true;
-    catalog ??= api<CatalogRule[]>(`${apiBase}/rules`).catch((e) => {
-      catalog = null;
-      throw e;
-    });
-    catalog.then((r) => live && setRules(r)).catch(() => undefined);
+    loadRules(apiBase).then((r) => live && setRules(r)).catch(() => undefined);
     return () => {
       live = false;
     };

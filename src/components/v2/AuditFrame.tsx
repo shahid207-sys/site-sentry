@@ -11,6 +11,7 @@ import { prefetchApi, useApi, type Resource } from "../lib/api";
 import { fmtDateTime, hostOf } from "../lib/format";
 import { useWs } from "../shell/context";
 import { ErrorState, LinkButton, PageHeader, PageSkeleton, Tag, cx } from "../ui";
+import { loadRules } from "./hooks";
 
 export const AUDIT_SECTIONS = [
   { id: "overview", label: "Overview", path: "" },
@@ -58,6 +59,8 @@ const SECTION_DATA: Partial<Record<AuditSection, string[]>> = {
 /** Starts the overview and the section screen's first requests together instead of one after the other. */
 export function prefetchAuditSection(auditApi: string, section: AuditSection) {
   for (const p of ["/overview", ...(SECTION_DATA[section] ?? [])]) prefetchApi(`${auditApi}${p}`);
+  // Issues renders its group list once the rule catalog is in: start it with the rest, not after them.
+  if (section === "issues") void loadRules(auditApi.replace(/\/audits\/[^/]+$/, "")).catch(() => undefined);
 }
 
 export function AuditFrame({ auditId, title, children, actions }: { auditId: string; title?: string; children: ReactNode; actions?: ReactNode }) {
