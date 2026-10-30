@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { failureText } from "@/lib/audit/failure";
 import type { AuditPhase } from "@/lib/model";
+import type { CrawlOverview } from "@/lib/results/queries";
 import { api, useApi } from "../lib/api";
 import { fmtDuration, plural } from "../lib/format";
 import { useToast } from "../overlays";
@@ -62,8 +63,15 @@ function stageStates(d: AuditDetail): StageState[] {
   const ok = a.status === "completed" || a.status === "partial";
   const cur = ORDER.indexOf(a.phase);
   return STAGES.map((s, i) => {
-    // Crawler v2 (Phase 1) crawls only: link checks and findings come with the Phase 2 rule engine.
-    if (a.crawler && (s.phase === "links" || s.phase === "finalize")) return "off";
+    // Crawler v2: link targets are crawled URLs, so there is no separate link step. The last step is the rule
+    // analysis the worker runs after the crawl (crawls.analysis), so it follows that status.
+    if (a.crawler && s.phase === "links") return "off";
+    if (a.crawler && s.phase === "finalize") {
+      const st = a.crawler.analysis;
+      if (st === "completed") return "done";
+      if (st === "running") return "current";
+      return st === "failed" || !(running || a.status === "completed") ? "not_reached" : "queued";
+    }
     if (a.crawler && !running) return a.progress.done > 0 || s.phase !== "pages" ? "done" : "not_reached";
     if (a.crawler && i < cur) return "done";
     if (s.phase === "links" && !a.config.checkLinks) return "off";
@@ -129,6 +137,9 @@ function UrlStates({ states }: { states: Record<string, number> }) {
   );
 }
 
+/** A v2 audit whose crawl completed but whose rule analysis has not finished yet: the monitor keeps polling. */
+const analysing = (a: AuditSummary) => !!a.crawler && a.status === "completed" && a.crawler.analysis !== "completed" && a.crawler.analysis !== "failed";
+
 function Outcome({ audit, href }: { audit: AuditSummary; href: string }) {
   const open = (
     <LinkButton href={href} variant="primary" size="sm" icon={ArrowRight}>
@@ -141,10 +152,18 @@ function Outcome({ audit, href }: { audit: AuditSummary; href: string }) {
         {audit.emptyReason ?? "No HTML page was fetched, so no checks ran."} This is not a clean result.
       </Notice>
     );
-  if (audit.crawler && audit.status === "completed")
+  if (audit.crawler && audit.status === "completed" && audit.crawler.analysis === "failed")
     return (
-      <Notice tone="warn" title="Crawl complete: no checks were run" action={open}>
-        Crawler v2 records which URLs were found and fetched. SEO checks are not run on it yet, so this audit has no findings; that is not a clean result.
+      <Notice tone="error" title="Crawl complete, but the SEO checks failed" action={open}>
+        The analysis job stopped with an error, so this audit has no findings. That is not a clean result: re-run the audit, and check the worker log if it fails again.
+      </Notice>
+    );
+  if (analysing(audit))
+    return (
+      <Notice tone="info" title="Crawl complete: running the SEO checks">
+        {audit.crawler?.analysis === "running"
+          ? "The rule engine is checking the fetched pages. This page updates when it has finished."
+          : "Waiting for the analysis worker to pick up this crawl. If nothing changes, check that the worker is running with analysis on."}
       </Notice>
     );
   if (audit.status === "completed")
@@ -189,7 +208,7 @@ export function AuditProgressView() {
 
   // Step loop
   useEffect(() => {
-    if (!initialAudit || initialAudit.audit.status !== "running") return;
+    if (!initialAudit || (initialAudit.audit.status !== "running" && !analysing(initialAudit.audit))) return;
 
     alive.current = true;
     let timeoutId: ReturnType<typeof setTimeout>;
@@ -216,7 +235,7 @@ export function AuditProgressView() {
         if (!alive.current) return;
         setAudit(updated);
 
-        if (res.audit.status !== "running") {
+        if (res.audit.status !== "running" && !analysing(res.audit)) {
           toast({ tone: "ok", title: "Audit finished", detail: `${plural(res.audit.progress.inspected, "page")} inspected.` });
           return;
         }
@@ -266,6 +285,8 @@ export function AuditProgressView() {
   };
 
   const currentAudit = audit || initialAudit;
+  // v2 findings live in issue groups, not in the store: count them once the analysis has finished.
+  const overview = useApi<CrawlOverview>(currentAudit?.audit.crawler?.analysis === "completed" ? `${apiBase}/audits/${auditId}/overview` : null);
   const crumbs = [
     { label: "Audits", href: `${base}/audits` },
     ...(currentAudit ? [{ label: currentAudit.site.name, href: `${base}/audits?site=${currentAudit.site.id}` }] : []),
@@ -278,6 +299,7 @@ export function AuditProgressView() {
   const a = currentAudit.audit;
   const p = a.progress;
   const isRunning = a.status === "running";
+  const checking = analysing(a);
   // No made-up percentage: until the engine knows how many pages are planned, the bar waits.
   const pct = a.status === "completed" ? 100 : p.planned ? Math.min(100, Math.round((p.done / p.planned) * 100)) : isRunning ? null : 0;
   const states = stageStates(currentAudit);
@@ -330,14 +352,16 @@ export function AuditProgressView() {
         <div className="space-y-4">
           <div className="flex items-baseline justify-between gap-3">
             <p className="flex items-center gap-2 text-base font-semibold text-fg">
-              {isRunning ? <LoaderCircle className="size-4 animate-spin text-accent-ink" aria-hidden /> : null}
+              {isRunning || checking ? <LoaderCircle className="size-4 animate-spin text-accent-ink" aria-hidden /> : null}
               {isRunning
                 ? a.crawler?.status === "paused"
                   ? "Paused"
                   : a.crawler?.status === "cancelling"
                     ? "Cancelling…"
                     : STAGES.find((s) => s.phase === a.phase)?.label ?? "Working…"
-                : "Finished"}
+                : checking
+                  ? "Running the SEO checks…"
+                  : "Finished"}
             </p>
             <p className="text-sm text-fg-2">
               {p.planned ? `${p.done} of ${plural(p.planned, "page")}` : "Planning pages…"}
@@ -364,7 +388,15 @@ export function AuditProgressView() {
         items={[
           { label: "Pages inspected", value: p.inspected, hint: p.planned ? `${p.done} of ${p.planned} processed` : "None yet", icon: FileSearch, tone: "accent" },
           { label: "Pages remaining", value: isRunning ? Math.max(0, p.planned - p.done) : 0, hint: isRunning ? "Still queued" : "Crawl finished", icon: ListTodo, tone: "info" },
-          { label: "Findings", value: currentAudit.findings?.length ?? 0, hint: isRunning ? "Recorded so far" : "In this audit", icon: CircleAlert, tone: "high" },
+          a.crawler
+            ? {
+                label: "Issues",
+                value: overview.data ? overview.data.issueGroups : "–",
+                hint: overview.data ? `${plural(overview.data.rulesRan, "check")} ran` : a.crawler.analysis === "failed" ? "The checks failed" : "After the checks run",
+                icon: CircleAlert,
+                tone: "high",
+              }
+            : { label: "Findings", value: currentAudit.findings?.length ?? 0, hint: isRunning ? "Recorded so far" : "In this audit", icon: CircleAlert, tone: "high" },
           { label: "Failed or skipped", value: p.failed + p.skipped, hint: `${p.failed} failed · ${p.skipped} skipped`, icon: CircleSlash, tone: "medium" },
         ]}
       />

@@ -229,6 +229,8 @@ export interface CrawlerV2Ref {
   startRedirect?: { from: string; to: string };
   /** Fetched HTML pages whose raw HTML could not be stored (page_snapshots.blob_status = 'blob_missing'). */
   blobMissing?: number;
+  /** The rule analysis that runs after the crawl (crawls.analysis.status); absent until the analysis worker starts it. */
+  analysis?: "running" | "completed" | "failed";
   syncedAt: string;
 }
 

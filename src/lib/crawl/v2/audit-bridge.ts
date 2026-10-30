@@ -91,6 +91,7 @@ interface CrawlStatusRow {
   error: { code?: string; message?: string } | null;
   finished_at: string | null;
   start_redirect: StartRedirect | null;
+  analysis: CrawlerV2Ref["analysis"] | null;
 }
 
 /** Read the crawl's status and URL counts from Postgres and mirror them onto the audit. */
@@ -99,7 +100,7 @@ export async function syncAudit(db: Db, store: Store, auditId: string): Promise<
   if (!audit) throw new WorkflowError("NOT_FOUND", "Audit not found.");
   if (!audit.crawler) return audit;
   const crawlId = audit.crawler.crawlId;
-  const r = await db.execute(sql`select status, robots, discovery_done, error, finished_at, start_redirect from crawls where id = ${crawlId}::uuid`);
+  const r = await db.execute(sql`select status, robots, discovery_done, error, finished_at, start_redirect, analysis->>'status' as analysis from crawls where id = ${crawlId}::uuid`);
   const row = r.rows[0] as unknown as CrawlStatusRow | undefined;
   if (!row) throw new WorkflowError("NOT_FOUND", "The crawl for this audit no longer exists.");
   const states = (await stateCounts(db, crawlId)) as Record<string, number>;
@@ -114,7 +115,7 @@ export async function syncAudit(db: Db, store: Store, auditId: string): Promise<
   return store.update((d) => {
     const a = d.audits[auditId];
     if (!a?.crawler) throw new WorkflowError("NOT_FOUND", "Audit not found.");
-    a.crawler = { ...a.crawler, status: row.status, states, blobMissing, ...(moved ? { startRedirect: moved } : {}), syncedAt: new Date().toISOString() };
+    a.crawler = { ...a.crawler, status: row.status, states, blobMissing, ...(moved ? { startRedirect: moved } : {}), ...(row.analysis ? { analysis: row.analysis } : {}), syncedAt: new Date().toISOString() };
     a.progress = { ...a.progress, planned: total, done: total - sum(ACTIVE), inspected: sum(INSPECTED), failed: sum(FAILED), skipped: sum(SKIPPED) };
     a.heartbeatAt = new Date().toISOString();
     const finished: Partial<Record<CrawlerV2Ref["status"], AuditStatus>> = { completed: "completed", cancelled: "cancelled", failed: "failed" };

@@ -5,6 +5,7 @@ import { testDb } from "@/test/db";
 import { testRedis, testThrottlePrefix } from "@/test/redis";
 import { send, startLocalServer, type LocalServer } from "@/test/local-server";
 import { createAudit } from "../engine";
+import { analyseCrawl } from "../../rules/analyse";
 import { emptyStore, MemoryStore } from "../../store/store";
 import type { Deps } from "../../workflow/deps";
 import { controlCrawl, crawlerV2Enabled, startCrawl, syncAudit } from "./audit-bridge";
@@ -79,6 +80,10 @@ describe("crawler v2 audit bridge", () => {
       progress: { planned: 3, done: 3, inspected: 3, failed: 0, skipped: 0 },
     });
     expect(after.finishedAt).not.toBeNull();
+    // The rule analysis runs after the crawl: its status is mirrored too, so the monitor can wait for it.
+    expect(after.crawler!.analysis).toBeUndefined();
+    expect((await analyseCrawl(db, await crawlIdOf())).outcome).toBe("analysed");
+    expect((await syncAudit(db, store, auditId)).crawler!.analysis).toBe("completed");
   });
 
   it("a crawl failed by a refused stored scope rule shows scope_rule_invalid on the audit", async () => {
