@@ -91,12 +91,22 @@ const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
 
 export const rawHtmlKey = (crawlId: string, urlId: number) => `crawls/${crawlId.toLowerCase()}/html/${urlId}.html.gz`;
+/** The DOM after a headless-browser render (src/lib/render). */
+export const renderedHtmlKey = (crawlId: string, urlId: number) => `crawls/${crawlId.toLowerCase()}/rendered/${urlId}.html.gz`;
 
-/** Store a page's raw HTML gzipped; returns the key. */
-export async function putRawHtml(store: BlobStore, crawlId: string, urlId: number, html: string): Promise<string> {
-  const Key = rawHtmlKey(crawlId, urlId);
+async function putHtml(store: BlobStore, Key: string, html: string): Promise<string> {
   await store.putObject({ Key, Body: await gzipAsync(Buffer.from(html, "utf8")), ContentType: "text/html; charset=utf-8", ContentEncoding: "gzip" });
   return Key;
+}
+
+/** Store a page's raw HTML gzipped; returns the key. */
+export function putRawHtml(store: BlobStore, crawlId: string, urlId: number, html: string): Promise<string> {
+  return putHtml(store, rawHtmlKey(crawlId, urlId), html);
+}
+
+/** Store a page's rendered DOM gzipped; returns the key. Read it back with getRawHtml. */
+export function putRenderedHtml(store: BlobStore, crawlId: string, urlId: number, html: string): Promise<string> {
+  return putHtml(store, renderedHtmlKey(crawlId, urlId), html);
 }
 
 export async function getRawHtml(store: BlobStore, key: string): Promise<string | null> {

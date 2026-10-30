@@ -76,6 +76,8 @@ export interface CrawlConfig {
   aiCrawlers?: "allow" | "block";
   /** Pages the user marks as high-value (LNK-012); unset means the rule reports needs_config. */
   keyPages?: string[];
+  /** Render mode (src/lib/render/run.ts): off, sampled or full. Unset is off. */
+  render?: "off" | "sampled" | "full";
   /**
    * A fix verification (crawls.kind 'verify'): fetch the seeds and their redirect targets only. No start-URL check,
    * no sitemaps, no probes, no resource phase; the analysis runs `ruleId` alone and writes states for `fingerprints`.

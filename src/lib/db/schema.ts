@@ -56,6 +56,12 @@ export const crawls = pgTable(
     analysis: jsonb("analysis"),
     /** Health score written by the analysis job: Health in src/lib/results/health.ts. */
     health: jsonb("health"),
+    /**
+     * Render phase progress (RenderProgress in src/lib/render/run.ts): { mode, status, planned, rendered, timeouts,
+     * errors, startedAt, finishedAt, error }. Null until the render job starts; a crawl whose config.render is
+     * sampled or full is analysed only once its status is done or failed.
+     */
+    render: jsonb("render"),
     error: jsonb("error"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     startedAt: timestamp("started_at", { withTimezone: true }),
@@ -250,6 +256,52 @@ export const pageSnapshots = pgTable(
   (t) => [uniqueIndex("page_snapshots_url_uq").on(t.urlId), index("page_snapshots_crawl_idx").on(t.crawlId, t.id)],
 );
 
+export const RENDER_STATUSES = ["rendered", "timeout", "error"] as const;
+export type RenderStatus = (typeof RENDER_STATUSES)[number];
+
+/**
+ * One headless-browser render of a crawled HTML page (src/lib/render): what JavaScript changed, lab metrics, the
+ * page's requests and its accessibility violations. The rendered DOM is in object storage (rendered_html_key); the
+ * facts rules compare with the raw snapshot are extracted into `extract` by the render job, so analysis reads no blob.
+ */
+export const pageRenders = pgTable(
+  "page_renders",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    crawlId: uuid("crawl_id")
+      .notNull()
+      .references(() => crawls.id, { onDelete: "cascade" }),
+    urlId: bigint("url_id", { mode: "number" })
+      .notNull()
+      .references(() => crawlUrls.id, { onDelete: "cascade" }),
+    /** The URL rendered (the snapshot's final URL) and where the page ended (history.pushState). */
+    url: text("url").notNull(),
+    finalUrl: text("final_url").notNull(),
+    status: text("status").$type<RenderStatus>().notNull(),
+    error: text("error"),
+    renderedHtmlKey: text("rendered_html_key"),
+    elapsedMs: integer("elapsed_ms").notNull(),
+    /** RenderMetrics: LCP, CLS, LCP element, DOM size. Always lab data (source "lab"). */
+    metrics: jsonb("metrics"),
+    /** Facts extracted from the rendered DOM: RenderedExtract in src/lib/render/run.ts. */
+    extract: jsonb("extract"),
+    /** The page's requests (capped) and their totals. */
+    requests: jsonb("requests").notNull().default(sql`'[]'::jsonb`),
+    requestTotals: jsonb("request_totals"),
+    scriptLinks: jsonb("script_links"),
+    scriptNavigations: jsonb("script_navigations").notNull().default(sql`'[]'::jsonb`),
+    /** axe-core violations per rule; null when axe could not run. */
+    a11y: jsonb("a11y"),
+    consoleErrors: integer("console_errors").notNull().default(0),
+    renderedAt: timestamp("rendered_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("page_renders_url_uq").on(t.urlId),
+    index("page_renders_crawl_idx").on(t.crawlId, t.id),
+    check("page_renders_status_ck", sql`${t.status} in (${list(RENDER_STATUSES)})`),
+  ],
+);
+
 /** Rule registry (docs/SPEC.md "Core data model"): synced from src/lib/rules/registry.ts by each analysis run. */
 export const rules = pgTable("rules", {
   id: text("id").primaryKey(),
@@ -258,6 +310,8 @@ export const rules = pgTable("rules", {
   scope: text("scope").notNull(),
   confidence: text("confidence").notNull(),
   impact: smallint("impact").notNull(),
+  /** The rule's inputs (contract Need[]): a "rendered" rule re-checks a URL only where the URL was rendered. */
+  needs: jsonb("needs").notNull().default(sql`'[]'::jsonb`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

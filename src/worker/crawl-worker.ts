@@ -12,6 +12,10 @@ import { finalizeUrls, sweep } from "../lib/crawl/v2/frontier";
 import { createCrawlQueue, crawlQueueName, enqueueCrawl, redisConnection, type CrawlJob } from "../lib/crawl/v2/queue";
 import { runCrawl } from "../lib/crawl/v2/runner";
 import { createAnalysisQueue, enqueueAnalysis, startAnalysisWorker, unanalysedCrawls } from "../lib/rules/queue";
+import { renderBrowsers } from "../lib/render/pool";
+import { createRenderQueue, enqueueRender, startRenderWorker } from "../lib/render/queue";
+import { renderModeOf, unrenderedCrawls } from "../lib/render/run";
+import { blobStoreFromEnv } from "../lib/snapshot/blob-store";
 import { afterAnalysed } from "../lib/schedule/deliver";
 
 const numEnv = (name: string, fallback: number) => {
@@ -21,6 +25,10 @@ const numEnv = (name: string, fallback: number) => {
 
 const crawlStatus = async (crawlId: string) =>
   ((await db.execute(sql`select status from crawls where id = ${crawlId}::uuid`)).rows[0] as { status: string } | undefined)?.status;
+const crawlRenders = async (crawlId: string) => {
+  const row = (await db.execute(sql`select kind, config from crawls where id = ${crawlId}::uuid`)).rows[0] as { kind: string; config: { render?: unknown } } | undefined;
+  return row?.kind === "audit" && renderModeOf(row.config) !== "off";
+};
 
 function log(event: string, data: Record<string, unknown> = {}) {
   console.log(JSON.stringify({ t: new Date().toISOString(), event, ...data }));
@@ -48,12 +56,19 @@ async function main() {
           log,
           afterAnalysed: (crawlId) => afterAnalysed(db, crawlId, { policy: workerFetchPolicy(), log, appUrl: process.env.APP_URL }),
         });
+  // Rendering (Phase 5) runs in this process too unless RENDER_WORKER=off (then `npm run worker:render`). Its browsers
+  // (RENDER_BROWSERS, default 1) start on the first page to render, not at boot.
+  const renderQueue = createRenderQueue(connection);
+  const politeness = { maxConcurrency: numEnv("CRAWLER_HOST_CONCURRENCY", 3), ratePerSecond: numEnv("CRAWLER_HOST_RATE", 5), keyPrefix: process.env.CRAWLER_THROTTLE_PREFIX || undefined };
+  const render = process.env.RENDER_WORKER === "off" ? null : startRenderWorker({ db, fetch, store: blobStoreFromEnv(), analysisQueue, redis, politeness, browsers: renderBrowsers(), connection, signal: shutdown.signal, log });
 
   // Boot reconcile: recover expired claims everywhere, then make sure every unfinished crawl has a job.
   // Runners force-sweep their own crawl once they hold its lock, so a crash is recovered as soon as it is re-run.
   const swept = await sweep(db);
   const open = await db.execute(sql`select id from crawls where status in ('queued', 'running', 'cancelling') order by created_at`);
   for (const row of open.rows as { id: string }[]) await enqueueCrawl(queue, row.id);
+  const unrendered = await unrenderedCrawls(db);
+  for (const id of unrendered) await enqueueRender(renderQueue, id);
   const unanalysed = await unanalysedCrawls(db);
   for (const id of unanalysed) await enqueueAnalysis(analysisQueue, id);
   // WORKER_MEMORY_LOG: RSS and heap every 10 s to that file; past WORKER_MEMORY_LIMIT_MB a heap snapshot is written
@@ -70,7 +85,7 @@ async function main() {
       },
     });
   }
-  log("worker.boot", { owner, queue: crawlQueueName(), swept, reenqueued: open.rows.length, analysisEnqueued: unanalysed.length });
+  log("worker.boot", { owner, queue: crawlQueueName(), swept, reenqueued: open.rows.length, renderEnqueued: unrendered.length, analysisEnqueued: unanalysed.length });
 
   const worker = new Worker<CrawlJob>(
     crawlQueueName(),
@@ -78,13 +93,17 @@ async function main() {
       const crawlId = job.data.crawlId;
       log("crawl.start", { crawlId });
       try {
-        const run = () => runCrawl({ db, redis, fetch, peerCert, owner, leaseMs, politeness: { maxConcurrency: numEnv("CRAWLER_HOST_CONCURRENCY", 3), ratePerSecond: numEnv("CRAWLER_HOST_RATE", 5), keyPrefix: process.env.CRAWLER_THROTTLE_PREFIX || undefined }, signal: shutdown.signal, log }, crawlId);
+        const run = () => runCrawl({ db, redis, fetch, peerCert, owner, leaseMs, politeness, signal: shutdown.signal, log }, crawlId);
         let outcome = await run();
         // A resume that arrived while this job was still winding down from a pause could not enqueue a new job
         // (same job id), so pick it up here.
         while (outcome === "paused" && !shutdown.signal.aborted && (await crawlStatus(crawlId)) === "running") outcome = await run();
         log("crawl.end", { crawlId, outcome });
-        if (outcome === "completed" || outcome === "cancelled") await enqueueAnalysis(analysisQueue, crawlId);
+        // A crawl that renders goes to the render queue, which hands it to analysis when its pages are rendered.
+        if (outcome === "completed" || outcome === "cancelled") {
+          if (await crawlRenders(crawlId)) await enqueueRender(renderQueue, crawlId);
+          else await enqueueAnalysis(analysisQueue, crawlId);
+        }
         return outcome;
       } catch (e) {
         const error = { message: (e as Error)?.message ?? String(e), at: new Date().toISOString() };
@@ -118,8 +137,11 @@ async function main() {
     shutdown.abort();
     await worker.close();
     await analysisWorker?.close();
+    await render?.worker.close();
+    await render?.pool.close();
     await queue.close();
     await analysisQueue.close();
+    await renderQueue.close();
     redis.disconnect();
     await db.$client.end();
     process.exit(0);

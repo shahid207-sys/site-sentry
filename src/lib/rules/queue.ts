@@ -4,6 +4,7 @@ import { Queue, Worker, type ConnectionOptions } from "bullmq";
 import { sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { redisConnection } from "../crawl/v2/queue";
+import { awaitingRender } from "../render/run";
 import { analyseCrawl } from "./analyse";
 
 export interface AnalysisJob {
@@ -23,9 +24,12 @@ export async function enqueueAnalysis(queue: Queue<AnalysisJob>, crawlId: string
   await queue.add("analysis", { crawlId }, { jobId: `analysis_${crawlId}`, removeOnComplete: true, removeOnFail: 100, attempts: 3, backoff: { type: "exponential", delay: 5_000 } });
 }
 
-/** Finished crawls that have never been analysed (a crash between finishing and enqueueing loses nothing). */
+/**
+ * Finished crawls that have never been analysed (a crash between finishing and enqueueing loses nothing). A crawl
+ * still waiting for its render phase is the render queue's (unrenderedCrawls); it comes here when that ends.
+ */
 export async function unanalysedCrawls(db: Db): Promise<string[]> {
-  const r = await db.execute(sql`select id from crawls where status in ('completed', 'cancelled') and analysis is null order by finished_at nulls last`);
+  const r = await db.execute(sql`select c.id from crawls c where c.status in ('completed', 'cancelled') and c.analysis is null and not ${awaitingRender("c")} order by c.finished_at nulls last`);
   return (r.rows as { id: string }[]).map((x) => x.id);
 }
 

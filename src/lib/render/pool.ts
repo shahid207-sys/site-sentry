@@ -123,6 +123,8 @@ export interface RenderJob {
   /** The HTML the crawler stored for it: the document the browser renders. */
   html: string;
   signal?: AbortSignal;
+  /** This page's gate (its crawl's robots.txt and host throttle); defaults to the pool's. */
+  gate?: RenderGate;
 }
 
 const LAUNCH_ARGS = [
@@ -262,7 +264,7 @@ export class RenderPool {
         log({ url: ws.url(), type: "websocket", outcome: "blocked", reason: "websocket", thirdParty: safeThirdParty(ws.url(), thirdParty) });
         void ws.close({ code: 1008, reason: "WebSockets are not opened while rendering." });
       });
-      await context.route("**/*", (route) => this.handle(route, { pageUrl, html: job.html, deadline, signal: stop.signal, log, thirdParty, scriptNavigations, documentServed: () => documentServed, serve: () => (documentServed = true) }));
+      await context.route("**/*", (route) => this.handle(route, { pageUrl, html: job.html, gate: job.gate ?? this.opts.gate, deadline, signal: stop.signal, log, thirdParty, scriptNavigations, documentServed: () => documentServed, serve: () => (documentServed = true) }));
       await context.addInitScript({ content: METRICS_SCRIPT });
 
       const page = await context.newPage();
@@ -317,6 +319,7 @@ export class RenderPool {
     c: {
       pageUrl: URL;
       html: string;
+      gate?: RenderGate;
       deadline: number;
       signal: AbortSignal;
       log: (r: RequestRecord) => void;
@@ -364,9 +367,9 @@ export class RenderPool {
     if (Date.now() >= c.deadline || c.signal.aborted) return block("budget", "failed");
 
     let pass: Awaited<ReturnType<RenderGate>> | null = null;
-    if (this.opts.gate) {
+    if (c.gate) {
       try {
-        pass = await this.opts.gate(url, c.signal);
+        pass = await c.gate(url, c.signal);
       } catch {
         return block("budget", "failed");
       }

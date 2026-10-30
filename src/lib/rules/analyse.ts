@@ -11,6 +11,7 @@ import type { SitemapDocRecord } from "../crawl/v2/discovery";
 import type { RobotsRecord, VerifyConfig } from "../crawl/v2/runner";
 import type { DiscoverySource, UrlState } from "../crawl/v2/types";
 import type { CanonicalTag } from "../snapshot/types";
+import { renderModeOf, type RenderMode, type RenderProgress } from "../render/run";
 import { NeedsConfig, type CrawlView, type Finding, type HistoryRule, type Hreflang, type PageRule, type PageView, type ResourceFacts, type ResourceRule, type Rule, type SiteCtx, type SiteRule, type SiteView, type UrlFacts } from "./contract";
 import { bfsDepth, pageRank } from "./graph";
 import type { ProbeRecord } from "./probe-types";
@@ -54,13 +55,15 @@ export interface CrawlRow {
   site_origin: string;
   status: string;
   kind?: CrawlKind;
-  config: { aiCrawlers?: "allow" | "block"; keyPages?: string[]; verify?: VerifyConfig };
+  config: { aiCrawlers?: "allow" | "block"; keyPages?: string[]; verify?: VerifyConfig; render?: RenderMode };
   robots: RobotsRecord | null;
   sitemaps: (SitemapDocRecord | { started: string })[];
   probes: ProbeRecord[];
   /** Raw `execute` returns timestamps as strings; Drizzle selects return Dates. */
   started_at: Date | string | null;
   created_at: Date | string;
+  /** Render phase progress (crawls.render); absent on rows built by callers that do not read it. */
+  render?: RenderProgress | null;
 }
 
 /** First canonical search engines read (head or Link header), normalised like crawled URLs; body canonicals are ignored. */
@@ -381,13 +384,16 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
   const log = opts.log ?? (() => {});
   const empty = (outcome: AnalysisResult["outcome"]): AnalysisResult => ({ outcome, pages: 0, findings: 0, stats: [], msPerPage: 0 });
 
-  const r0 = await db.execute(sql`select id, kind, site_origin, status, config, robots, sitemaps, probes, started_at, created_at from crawls where id = ${crawlId}::uuid`);
+  const r0 = await db.execute(sql`select id, kind, site_origin, status, config, robots, sitemaps, probes, started_at, created_at, render from crawls where id = ${crawlId}::uuid`);
   const row = r0.rows[0] as unknown as CrawlRow | undefined;
   if (!row) return empty("missing");
   // A fix verification runs its group's rule alone and writes states for its target fingerprints only.
   const verify = row.kind === "verify" ? row.config.verify : undefined;
   const rules = verify ? (opts.rules ?? RULES).filter((r) => r.id === verify.ruleId) : (opts.rules ?? RULES);
   if (row.status !== "completed" && row.status !== "cancelled") return empty("not_ready");
+  // A crawl that renders is analysed once its render phase has ended (the render job enqueues the analysis).
+  const renderMode = row.kind === "audit" ? renderModeOf(row.config) : "off";
+  if (renderMode !== "off" && row.render?.status !== "done" && row.render?.status !== "failed") return empty("not_ready");
   const startedAt = new Date().toISOString();
   await db.execute(sql`update crawls set analysis = ${JSON.stringify({ status: "running", startedAt })}::jsonb where id = ${crawlId}::uuid`);
 

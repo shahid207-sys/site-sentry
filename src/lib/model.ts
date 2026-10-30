@@ -231,6 +231,8 @@ export interface CrawlerV2Ref {
   blobMissing?: number;
   /** The rule analysis that runs after the crawl (crawls.analysis.status); absent until the analysis worker starts it. */
   analysis?: "running" | "completed" | "failed";
+  /** The render phase between crawl and analysis (crawls.render); absent when the audit does not render. */
+  render?: { mode: "sampled" | "full"; status: "running" | "done" | "failed"; planned: number; rendered: number; timeouts: number; errors: number };
   syncedAt: string;
 }
 
