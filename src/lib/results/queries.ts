@@ -67,11 +67,16 @@ export async function crawlOverview(db: Exec, crawlId: string): Promise<CrawlOve
   const c = r.rows[0] as { id: string; kind: string; workspace: string; project: string; site_origin: string; profile: string; status: string; created_at: Date | string; analysis: string | null; health: Health | null } | undefined;
   if (!c) throw new ResultsError("NOT_FOUND", "Crawl not found.");
   if (c.kind !== "audit") throw new ResultsError("INVALID", "This crawl is a fix verification, not an audit.");
-  const verified = await db.execute(sql`select count(*)::int as n from ${effectiveStates(crawlId)} e where e.verify_state = 'resolved'`);
-  const g = await db.execute(sql`select priority, count(*)::int as n from issue_groups where crawl_id = ${crawlId}::uuid and affected_urls > 0 group by priority`);
+  // Independent reads: run them together (the pool has room; this is the first request of the Overview screen).
+  const [verified, g, ran, coverage, states] = await Promise.all([
+    db.execute(sql`select count(*)::int as n from ${effectiveStates(crawlId)} e where e.verify_state = 'resolved'`),
+    db.execute(sql`select priority, count(*)::int as n from issue_groups where crawl_id = ${crawlId}::uuid and affected_urls > 0 group by priority`),
+    db.execute(sql`select count(*)::int as n from rule_runs where crawl_id = ${crawlId}::uuid and status = 'ran'`),
+    crawlCoverage(db, crawlId),
+    effectiveStateCounts(db, crawlId),
+  ]);
   const priorities: Record<Priority, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
   for (const x of g.rows as { priority: Priority; n: number }[]) priorities[x.priority] = x.n;
-  const ran = await db.execute(sql`select count(*)::int as n from rule_runs where crawl_id = ${crawlId}::uuid and status = 'ran'`);
   return {
     crawlId: c.id,
     workspace: c.workspace,
@@ -81,9 +86,9 @@ export async function crawlOverview(db: Exec, crawlId: string): Promise<CrawlOve
     status: c.status,
     createdAt: new Date(c.created_at).toISOString(),
     analysed: c.analysis === "completed",
-    coverage: await crawlCoverage(db, crawlId),
+    coverage,
     health: c.health,
-    states: await effectiveStateCounts(db, crawlId),
+    states,
     verifiedResolved: (verified.rows[0] as { n: number }).n,
     priorities,
     issueGroups: Object.values(priorities).reduce((a, b) => a + b, 0),

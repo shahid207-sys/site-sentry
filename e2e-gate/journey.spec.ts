@@ -48,7 +48,8 @@ async function json<T>(page: Page, url: string): Promise<T> {
 /** A screen is settled when the network is idle and no loading skeleton is left. */
 async function settled(page: Page) {
   await page.waitForLoadState("networkidle");
-  const loading = page.locator('[role=status][aria-label^="Loading"]');
+  // Visible ones only: Next keeps recently visited routes mounted but hidden (React Activity), skeletons included.
+  const loading = page.locator('[role=status][aria-label^="Loading"]:visible');
   await expect
     .poll(() => loading.evaluateAll((els) => els.map((e) => e.getAttribute("aria-label"))), { message: "loading regions left on the screen", timeout: 15_000 })
     .toEqual([]);
@@ -210,8 +211,9 @@ test("@verify Verify fix on the Fix board earns Verified", async ({ page }) => {
     await card.getByRole("button", { name: `Verify fix for ${VERIFY_RULE}` }).click();
     // The verification re-crawls the group's URLs and analyses them; the board reloads when it is done.
     await expect(page.getByTestId(`card-${VERIFY_RULE}`)).toHaveAttribute("data-column", "verified", { timeout: 5 * 60_000 });
-    const v = await json<{ status: string; states: Record<string, number> } | { verification: null }>(page, `/api/live/audits/${auditId}/groups/${VERIFY_RULE}/verify`);
-    expect("status" in v && v.status).toBe("analysed");
+    const v = await json<{ status: string; analysed: boolean; states: Record<string, number> } | { verification: null }>(page, `/api/live/audits/${auditId}/groups/${VERIFY_RULE}/verify`);
+    // `status` is the verification crawl's; `analysed` says its findings and states are written.
+    expect("analysed" in v && v.analysed).toBe(true);
     return { value: null, detail: `card in Verified; verification ${JSON.stringify("states" in v ? v.states : v)}` };
   });
   await axe(page, "Fix board (after verify)");

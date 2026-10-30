@@ -171,7 +171,7 @@ async function main() {
     console.log("\n== Filtering 50,000 findings");
     const filter = await runSpec(base, "filter", specEnv, path.join(outDir, "filter.json"));
     const timings = filter.out.filter ?? [];
-    for (const t of timings) info(`${t.label}: ${t.rows.toLocaleString("en")} rows shown, ${t.ms.toFixed(1)} ms`);
+    for (const t of timings) info(`${t.label} (of ${t.rows.toLocaleString("en")}): ${t.ms.toFixed(1)} ms`);
     const worst = timings.length ? Math.max(...timings.map((t) => t.ms)) : Infinity;
     check(`Issues: a filter change over ${GENERATED_FINDINGS.toLocaleString("en")} findings renders within ${TARGETS.filterMs} ms`, filter.ok && timings.length > 0 && worst < TARGETS.filterMs, timings.length ? `slowest ${worst.toFixed(1)} ms over ${timings.length} filter changes (performance measure "ss-filter", in the browser)` : "no timings recorded");
 

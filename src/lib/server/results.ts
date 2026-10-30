@@ -74,7 +74,7 @@ export async function getAuditOverview(ws: Workspace, auditId: string): Promise<
 
 /** A v2 audit's issue groups, highest priority first, with their priority inputs and states. */
 export async function getAuditGroups(ws: Workspace, auditId: string): Promise<IssueGroupRow[]> {
-  const { crawlId } = await getAuditOverview(ws, auditId);
+  const crawlId = await auditCrawl(ws, auditId);
   return mapped(() => issueGroups(getDb(), crawlId));
 }
 
