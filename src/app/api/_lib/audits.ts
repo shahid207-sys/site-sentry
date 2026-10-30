@@ -117,8 +117,16 @@ export async function launchAudit(ws: Workspace, input: AuditRequest): Promise<{
   return { audit: await startCrawl(getDb(), getCrawlQueue(), store, ws, created, site.origin, { auth }), reused };
 }
 
-async function syncRunningAudits(ws: Workspace, siteId: string): Promise<void> {
+/**
+ * Mirrors the crawl status of the site's v2 audits still marked running onto the store, so checks for "an audit is
+ * running" (new audit, delete site, clear history) see audits that finished while nobody had them open.
+ */
+export async function syncRunningAudits(ws: Workspace, siteId: string): Promise<void> {
+  if (!crawlerV2Enabled(ws)) return;
   const store = getStore(ws);
   const running = Object.values((await store.read()).audits).filter((a) => a.siteId === siteId && a.status === "running" && a.crawler);
-  for (const a of running) await syncAudit(getDb(), store, a.id);
+  for (const a of running) {
+    // An audit whose crawl cannot be read keeps its stored status; the caller's own check then decides.
+    await syncAudit(getDb(), store, a.id).catch(() => undefined);
+  }
 }
