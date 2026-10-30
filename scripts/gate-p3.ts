@@ -40,6 +40,8 @@ import { ANSWERED } from "../src/lib/results/coverage";
 import { compareCrawls, crawlOverview, issueGroups } from "../src/lib/results/queries";
 import { reportData } from "../src/lib/results/report";
 import { startVerification } from "../src/lib/results/verify";
+import { buildSampleSeed } from "../src/lib/sample/seed";
+import { JsonFileStore } from "../src/lib/store/store";
 import { crawlRow, MEMORY_LIMIT_MB, plans, setupDb, startWorker, waitFor } from "./gate-p2";
 
 const DB_URL = process.env.GATE_DATABASE_URL ?? "postgres://sitesentry:sitesentry@127.0.0.1:5433/sitesentry_gate3";
@@ -411,7 +413,10 @@ async function shareOverHttp(db: Awaited<ReturnType<typeof setupDb>>, crawl: str
   }
 }
 
-/** 7: scripts/migrate-json-store.ts on a copy of .data/store.json, dry run then real run, into a fresh database. */
+/**
+ * 7: scripts/migrate-json-store.ts on a copy of .data/store.json (or, without one, the sample seed), dry run then real
+ * run, into a fresh database.
+ */
 async function migrationCheck() {
   console.log("\n== JSON store → Postgres migration (copy of .data/store.json)");
   const url = new URL(STORE_DB_URL);
@@ -423,7 +428,16 @@ async function migrationCheck() {
   await admin.end();
   const dir = await mkdtemp(path.join(tmpdir(), "sitesentry-gate3-store-"));
   try {
-    await copyFile(path.resolve(".data", "store.json"), path.join(dir, "store.json"));
+    const local = path.resolve(".data", "store.json");
+    if (existsSync(local)) await copyFile(local, path.join(dir, "store.json"));
+    else {
+      // No local store (a fresh checkout, CI): migrate the app's deterministic sample seed instead.
+      info("no .data/store.json: migrating the sample workspace seed (buildSampleSeed)");
+      const seed = await buildSampleSeed();
+      const store = new JsonFileStore(path.join(dir, "sample"));
+      for (const [id, blob] of Object.entries(seed.blobs)) await store.writeAudit(id, blob);
+      await store.update((d) => void Object.assign(d, structuredClone(seed.state)));
+    }
     const run = (dry: boolean) => {
       const r = spawnSync(process.execPath, ["--import", "tsx", "scripts/migrate-json-store.ts", ...(dry ? ["--dry-run"] : []), "--data-dir", dir, "--db", url.toString()], { encoding: "utf8" });
       const table = (r.stdout ?? "").split("\n").filter((l) => /\s(yes|NO)$/.test(l)).map((l) => l.trim().split(/\s+/));
