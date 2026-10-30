@@ -13,6 +13,7 @@ import { CreateTaskModal, FindingBody } from "../FindingPanel";
 import { SeverityCountsInline } from "../domain";
 import { DeleteAuditDialog } from "./Audits";
 import { OverviewScreen } from "../v2/screens/OverviewScreen";
+import { analysing, AuditProgressView } from "./AuditProgress";
 import { api, useApi } from "../lib/api";
 import { fmtDateTime, fmtDuration, plural, shortUrl } from "../lib/format";
 import { Drawer, useToast } from "../overlays";
@@ -550,6 +551,8 @@ export function AuditDetailView() {
   const counts = a.findingCounts ?? { high: 0, medium: 0, low: 0 };
   const changeCounts = data.changes ? Object.values(data.changes).reduce<Record<string, number>>((m, k) => ((m[k] = (m[k] ?? 0) + 1), m), {}) : null;
 
+  // A crawler v2 audit still crawling or running its checks: the live monitor, then the overview.
+  if (a.crawler && (running || analysing(a))) return <AuditProgressView onFinished={onDone} />;
   // A finished crawler v2 audit: the v2 overview (health, issue groups, coverage), with this audit's delete action.
   if (a.crawler && !running) {
     const notices = [

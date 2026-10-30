@@ -138,7 +138,7 @@ function UrlStates({ states }: { states: Record<string, number> }) {
 }
 
 /** A v2 audit whose crawl completed but whose rule analysis has not finished yet: the monitor keeps polling. */
-const analysing = (a: AuditSummary) => !!a.crawler && a.status === "completed" && a.crawler.analysis !== "completed" && a.crawler.analysis !== "failed";
+export const analysing = (a: AuditSummary) => !!a.crawler && a.status === "completed" && a.crawler.analysis !== "completed" && a.crawler.analysis !== "failed";
 
 function Outcome({ audit, href }: { audit: AuditSummary; href: string }) {
   const open = (
@@ -194,7 +194,8 @@ function Outcome({ audit, href }: { audit: AuditSummary; href: string }) {
   );
 }
 
-export function AuditProgressView() {
+/** `onFinished`: the embedding page (the audit page) takes over once the crawl and its analysis are done. */
+export function AuditProgressView({ onFinished }: { onFinished?: () => void } = {}) {
   const { auditId } = useParams<{ auditId: string }>();
   const { base, apiBase } = useWs();
   const toast = useToast();
@@ -205,6 +206,11 @@ export function AuditProgressView() {
   const [cancelling, setCancelling] = useState(false);
   const [toggling, setToggling] = useState(false);
   const alive = useRef(true);
+  // A ref, so a new callback from the embedding page does not restart the step loop.
+  const finished = useRef(onFinished);
+  useEffect(() => {
+    finished.current = onFinished;
+  }, [onFinished]);
 
   // Step loop
   useEffect(() => {
@@ -237,6 +243,7 @@ export function AuditProgressView() {
 
         if (res.audit.status !== "running" && !analysing(res.audit)) {
           toast({ tone: "ok", title: "Audit finished", detail: `${plural(res.audit.progress.inspected, "page")} inspected.` });
+          finished.current?.();
           return;
         }
 
