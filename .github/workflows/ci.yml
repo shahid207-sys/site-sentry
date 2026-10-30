@@ -1,0 +1,55 @@
+# Phase 1–3 gates on every pull request (SPEC "Definition of done for v1"), plus lint, types, unit and integration
+# tests. The gates crawl the local fixture site and need Postgres and Redis, provided here as services on the same
+# loopback ports as docker-compose.yml.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: sitesentry
+          POSTGRES_PASSWORD: sitesentry
+          POSTGRES_DB: sitesentry
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sitesentry -d sitesentry" --health-interval 2s --health-timeout 3s --health-retries 30
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      DATABASE_URL: postgres://sitesentry:sitesentry@127.0.0.1:5433/sitesentry
+      REDIS_URL: redis://127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:int
+      - run: npm run coverage
+      # gate:p3 starts the production app for its share-link checks, so it needs a build first.
+      - run: npm run build
+      - run: npm run gate:p1
+      - run: npm run gate:p2a
+      - run: npm run gate:p2b
+      - run: npm run gate:p3
