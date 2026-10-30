@@ -4,7 +4,7 @@ import { RULE_CATEGORIES, type RuleCategory } from "@/lib/audit/types";
 import { clampToLegacyEngine, createAudit, LIMITS } from "@/lib/crawl/engine";
 import { MAX_SCOPE_RULES, normaliseSubfolder, PROFILE_IDS, resolveProfile, type ScopeRules } from "@/lib/crawl/profiles";
 import { regexProblem } from "@/lib/crawl/scope-rules";
-import { crawlerV2Enabled, getCrawlQueue, startCrawl, type CrawlAuthInput } from "@/lib/crawl/v2/audit-bridge";
+import { crawlerV2Enabled, getCrawlQueue, startCrawl, syncAudit, type CrawlAuthInput } from "@/lib/crawl/v2/audit-bridge";
 import { secretKey } from "@/lib/crawl/v2/secrets";
 import { getDb } from "@/lib/db/client";
 import type { AuditConfig, AuditRun, Workspace } from "@/lib/model";
@@ -104,6 +104,9 @@ export async function launchAudit(ws: Workspace, input: AuditRequest): Promise<{
   };
   let coverage: AuditRun["coverage"] = [];
   if (!v2) ({ config, coverage } = clampToLegacyEngine(config));
+  // A v2 audit's store status follows its crawl only when something syncs it (the audit's screens do). One that
+  // finished while nobody watched still says "running" here and would be reused instead of starting a new audit.
+  if (v2) await syncRunningAudits(ws, siteId);
 
   const { audit: created, reused } = await createAudit({ siteId, config, coverage }, await getDeps(ws));
   if (!v2 || reused) return { audit: created, reused };
@@ -112,4 +115,10 @@ export async function launchAudit(ws: Workspace, input: AuditRequest): Promise<{
   const site = (await store.read()).sites[siteId];
   const auth: CrawlAuthInput | undefined = input.auth;
   return { audit: await startCrawl(getDb(), getCrawlQueue(), store, ws, created, site.origin, { auth }), reused };
+}
+
+async function syncRunningAudits(ws: Workspace, siteId: string): Promise<void> {
+  const store = getStore(ws);
+  const running = Object.values((await store.read()).audits).filter((a) => a.siteId === siteId && a.status === "running" && a.crawler);
+  for (const a of running) await syncAudit(getDb(), store, a.id);
 }

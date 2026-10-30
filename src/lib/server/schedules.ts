@@ -119,7 +119,9 @@ export async function runDueSchedules(now = new Date()): Promise<TickResult> {
       assertLiveScans(ws);
       if (!(await getStore(ws).read()).sites[due.siteId]) throw new WorkflowError("NOT_FOUND", "The schedule's site no longer exists.");
       const request = AuditRequest.parse({ ...(due.request as object), siteId: due.siteId });
-      const { audit } = await launchAudit(ws, request);
+      const { audit, reused } = await launchAudit(ws, request);
+      // Never adopt an audit someone else started: its alert would be sent as this schedule's.
+      if (reused) throw new WorkflowError("BUSY", "The site already had an audit running, so this slot was skipped.");
       await recordRun(db, due.id, ws, { auditId: audit.id });
       out.launched.push({ scheduleId: due.id, auditId: audit.id });
     } catch (e) {
