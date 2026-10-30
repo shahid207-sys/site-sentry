@@ -3,6 +3,7 @@ import { getCrawlQueue } from "../crawl/v2/audit-bridge";
 import { getDb } from "../db/client";
 import type { Workspace } from "../model";
 import { compareCrawls, crawlOverview, issueGroups, latestVerification, ResultsError, type Comparison, type CrawlOverview, type IssueGroupRow, type VerificationResult } from "../results/queries";
+import { issueRows, pageDetail, urlRows, type IssueRow, type PageDetail, type UrlRow } from "../results/explore";
 import { startVerification, type StartedVerification } from "../results/verify";
 import { previousAudit } from "../results/states";
 import { WorkflowError } from "../workflow/deps";
@@ -71,4 +72,24 @@ export async function getAuditOverview(ws: Workspace, auditId: string): Promise<
 export async function getAuditGroups(ws: Workspace, auditId: string): Promise<IssueGroupRow[]> {
   const { crawlId } = await getAuditOverview(ws, auditId);
   return mapped(() => issueGroups(getDb(), crawlId));
+}
+
+/** Every fingerprint of a v2 audit with its effective state, for the Issues explorer. */
+export async function getAuditIssues(ws: Workspace, auditId: string): Promise<IssueRow[]> {
+  const { crawlId } = await getAuditOverview(ws, auditId);
+  return issueRows(getDb(), crawlId);
+}
+
+/** Every URL of a v2 audit with its page facts, for the URL explorer. */
+export async function getAuditUrls(ws: Workspace, auditId: string): Promise<UrlRow[]> {
+  const { crawlId } = await getAuditOverview(ws, auditId);
+  return urlRows(getDb(), crawlId);
+}
+
+/** Everything a v2 audit knows about one of its URLs (normalised form), for the Page inspector. */
+export async function getAuditPage(ws: Workspace, auditId: string, url: string): Promise<PageDetail> {
+  const { crawlId } = await getAuditOverview(ws, auditId);
+  const page = await pageDetail(getDb(), crawlId, url);
+  if (!page) throw new WorkflowError("NOT_FOUND", "This audit has no such URL.");
+  return page;
 }
