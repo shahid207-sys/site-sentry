@@ -12,6 +12,7 @@ import { CHANGE_LABELS, SEVERITIES, type AuditDetail, type AuditSummary } from "
 import { CreateTaskModal, FindingBody } from "../FindingPanel";
 import { SeverityCountsInline } from "../domain";
 import { DeleteAuditDialog } from "./Audits";
+import { OverviewScreen } from "../v2/screens/OverviewScreen";
 import { api, useApi } from "../lib/api";
 import { fmtDateTime, fmtDuration, plural, shortUrl } from "../lib/format";
 import { Drawer, useToast } from "../overlays";
@@ -549,6 +550,35 @@ export function AuditDetailView() {
   const counts = a.findingCounts ?? { high: 0, medium: 0, low: 0 };
   const changeCounts = data.changes ? Object.values(data.changes).reduce<Record<string, number>>((m, k) => ((m[k] = (m[k] ?? 0) + 1), m), {}) : null;
 
+  // A finished crawler v2 audit: the v2 overview (health, issue groups, coverage), with this audit's delete action.
+  if (a.crawler && !running) {
+    const notices = [
+      a.crawler.startRedirect ? <Notice key="r" tone="info" title="The start URL redirected">Started at {a.crawler.startRedirect.from}, redirected to {a.crawler.startRedirect.to}: the crawl covers {new URL(a.crawler.startRedirect.to).host}.</Notice> : null,
+      a.status === "completed_empty" ? <Notice key="e" tone="warn" title="Nothing was analysed">{a.emptyReason ?? "No HTML page was fetched."}</Notice> : null,
+      a.status === "failed" ? <Notice key="f" tone="error" title="The crawl failed"><FailureMessage error={a.error} fallback="Unknown error." /> Results collected before the failure are shown below and were not used to resolve any issue.</Notice> : null,
+      a.coverage.length ? (
+        <Notice key="c" tone="warn" title={a.status === "partial" || a.status === "cancelled" ? "Partial audit: some of the site was not examined" : "Coverage notes"}>
+          <ul className="mt-1 list-disc space-y-0.5 pl-5 marker:text-fg-3">{a.coverage.map((c, i) => <li key={i}>{c.message}</li>)}</ul>
+        </Notice>
+      ) : null,
+    ].filter(Boolean);
+    return (
+      <>
+        <OverviewScreen
+          notices={notices.length ? <div className="mb-6 flex flex-col gap-3">{notices}</div> : null}
+          actions={
+            <>
+              <LinkButton href={`${base}/reports/${a.id}`} icon={FileText}>Report</LinkButton>
+              <Button variant="danger" icon={Trash2} onClick={() => setDeleting(true)}>Delete</Button>
+              <LinkButton href={`${base}/audits/new?site=${data.site.id}`} variant="primary">Re-run</LinkButton>
+            </>
+          }
+        />
+        <DeleteAuditDialog audit={deleting ? a : null} onClose={() => setDeleting(false)} onDeleted={() => router.push(`${base}/audits`)} />
+      </>
+    );
+  }
+
   return (
     <>
       <PageHeader
@@ -582,15 +612,6 @@ export function AuditDetailView() {
         </div>
       ) : null}
 
-      {a.crawler && !running ? (
-        <div className="mb-6">
-          <Notice tone="warn" title="Crawl only: no checks were run">
-            This audit ran on crawler v2, which records which URLs were found and fetched. SEO checks are not run on it yet, so it has no findings. That does not mean the site has no issues.
-          </Notice>
-          {a.crawler.startRedirect ? <p className="mt-3 text-[13px] text-fg-2">Started at {a.crawler.startRedirect.from}, redirected to {a.crawler.startRedirect.to}: the crawl covers {new URL(a.crawler.startRedirect.to).host}.</p> : null}
-          {a.status === "completed_empty" ? <p className="mt-3 text-[13px] text-fg-2">Nothing was analysed: {a.emptyReason ?? "no HTML page was fetched."}</p> : null}
-        </div>
-      ) : null}
       {a.status === "failed" ? <div className="mb-6"><Notice tone="error" title="The audit failed"><FailureMessage error={a.error} fallback="Unknown error." /> Results collected before the failure are shown below and were not used to resolve any issue.</Notice></div> : null}
       {!running && a.coverage.length ? (
         <div className="mb-6">

@@ -19,7 +19,9 @@ export function useQueryState() {
   const get = useCallback((k: string) => sp.get(k), [sp]);
   const set = useCallback(
     (patch: Record<string, string | null | undefined>, opts: { push?: boolean } = {}) => {
-      const p = new URLSearchParams(sp.toString());
+      // Read the live URL, not the render's params: a debounced write (useQueryText) must not undo a filter changed
+      // since it was scheduled.
+      const p = new URLSearchParams(window.location.search);
       for (const [k, v] of Object.entries(patch)) {
         if (v === null || v === undefined || v === "") p.delete(k);
         else p.set(k, v);
@@ -28,7 +30,7 @@ export function useQueryState() {
       if (opts.push) router.push(url, { scroll: false });
       else router.replace(url, { scroll: false });
     },
-    [sp, router, pathname],
+    [router, pathname],
   );
   return { get, set, params: sp };
 }

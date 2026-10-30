@@ -105,6 +105,7 @@ export function VirtualTable<T>({
   empty,
   keyboard = true,
   activeKey,
+  onCursorChange,
 }: {
   rows: T[];
   columns: Column<T>[];
@@ -124,6 +125,8 @@ export function VirtualTable<T>({
   keyboard?: boolean;
   /** Row to highlight as open (e.g. the drawer's subject). */
   activeKey?: string | null;
+  /** The row under the keyboard cursor, for screen-level shortcuts. */
+  onCursorChange?: (row: T | undefined) => void;
 }) {
   const [density] = useDensity();
   const scroller = useRef<HTMLDivElement>(null);
@@ -141,6 +144,7 @@ export function VirtualTable<T>({
   });
   useEffect(() => virtualizer.measure(), [density, virtualizer]);
   const at = Math.min(cursor, Math.max(rows.length - 1, 0));
+  useEffect(() => onCursorChange?.(rows[at]), [at, rows, onCursorChange]);
 
   const move = (d: number) => {
     if (!rows.length) return;
