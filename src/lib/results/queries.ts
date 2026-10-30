@@ -26,10 +26,10 @@ export class ResultsError extends Error {
  */
 export const effectiveStates = (auditCrawlId: string) => sql`(select s.fingerprint, s.rule_id, s.url, s.evidence_key, s.template_id, s.outcome,
     case when v.state = 'resolved' then 'resolved' else s.state end as state, s.state as audit_state, v.state as verify_state, v.crawl_id as verified_by
-  from issue_states s left join lateral (
-    select vs.state, vs.crawl_id from issue_states vs join crawls vc on vc.id = vs.crawl_id
-    where vc.kind = 'verify' and vc.config->'verify'->>'auditCrawlId' = ${auditCrawlId} and vs.fingerprint = s.fingerprint
-    order by vc.created_at desc, vc.id desc limit 1) v on true
+  from issue_states s left join (
+    select distinct on (vs.fingerprint) vs.fingerprint, vs.state, vs.crawl_id from issue_states vs join crawls vc on vc.id = vs.crawl_id
+    where vc.kind = 'verify' and vc.config->'verify'->>'auditCrawlId' = ${auditCrawlId}
+    order by vs.fingerprint, vc.created_at desc, vc.id desc) v on v.fingerprint = s.fingerprint
   where s.crawl_id = ${auditCrawlId}::uuid)`;
 
 export async function effectiveStateCounts(db: Exec, auditCrawlId: string): Promise<StateCounts> {

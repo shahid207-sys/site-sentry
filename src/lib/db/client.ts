@@ -15,7 +15,8 @@ export function databaseUrl(): string {
 }
 
 export function createDb(url = databaseUrl(), max = 10): Db {
-  const pool = new Pool({ connectionString: url, max });
+  // JIT off: our queries are short and interactive; on a 10k-finding audit JIT compilation took longer than the query.
+  const pool = new Pool({ connectionString: url, max, options: "-c jit=off" });
   return drizzle(pool, { schema }) as Db;
 }
 
