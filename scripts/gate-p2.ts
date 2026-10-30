@@ -72,7 +72,7 @@ export async function setupDb(dbUrl: string): Promise<Db> {
 
 /** A real worker (crawl + in-process analysis worker). Politeness is raised: this gate measures rules, not crawl speed. */
 export function startWorker(
-  site: FixtureSite,
+  site: Pick<FixtureSite, "port" | "ca">,
   blobDir: string,
   memDir: string,
   onMemoryLimit: (detail: string) => void,
@@ -82,11 +82,12 @@ export function startWorker(
   extraEnv: Record<string, string> = {},
 ): { child: ChildProcess; booted: Promise<void>; exited: Promise<number | null> } {
   const env = {} as NodeJS.ProcessEnv;
-  for (const [k, v] of Object.entries(process.env)) if (!/^(CRAWL(ER)?|ANALYSIS)_/.test(k)) env[k] = v;
+  for (const [k, v] of Object.entries(process.env)) if (!/^(CRAWL(ER)?|ANALYSIS|RENDER)_/.test(k)) env[k] = v;
   Object.assign(env, {
     DATABASE_URL: dbUrl,
     CRAWL_QUEUE_NAME: queue,
     ANALYSIS_QUEUE_NAME: `${queue}-analysis`,
+    RENDER_QUEUE_NAME: `${queue}-render`, // rendering runs in this worker (RENDER_WORKER is not inherited)
     CRAWLER_LOCAL_HOSTS: LOCAL_HOSTS_ENV,
     CRAWLER_LOCAL_PORTS: String(site.port),
     CRAWLER_LOCAL_CA: site.ca, // the fixture TLS listener's certificates; read only under NODE_ENV=test
