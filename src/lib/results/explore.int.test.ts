@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { newCrawl, testDb } from "@/test/db";
 import { send, startLocalServer, type LocalServer } from "@/test/local-server";
 import { testRedis } from "@/test/redis";
+import { insertEdges } from "@/lib/crawl/v2/frontier";
 import { runCrawl, type RunnerOptions } from "@/lib/crawl/v2/runner";
 import { analyseCrawl } from "@/lib/rules/analyse";
 import { THIN_WORDS } from "@/lib/rules/cnt";
@@ -86,12 +87,16 @@ describe("explorer reads", () => {
       expect(x.openIssues, x.url).toBe(open);
     }
 
-    // Page detail: snapshot, links in (home, /c's redirect) and out, issues with their state in both audits.
+    // Page detail: snapshot, links in (home, /c's redirect) and out, issues with their state in both audits. One
+    // edge to a URL outside the crawl inventory is added, so links say which ends can be inspected.
+    await insertEdges(db, audit, [{ fromUrl: u("/a"), toUrl: u("/not-in-inventory"), via: "a", anchor: "gone", rel: null, location: "body", nofollow: false }]);
     const a = await pageDetail(db, audit, u("/a"));
     expect(a?.snapshot).toMatchObject({ status_code: 200 });
     expect(a?.linksIn.map((e) => e.url)).toEqual(expect.arrayContaining([u("/"), u("/c")]));
     expect(a?.linksInTotal).toBe(a?.linksIn.length);
     expect(a?.linksOut.map((e) => e.url)).toContain(u("/b"));
+    expect(a?.linksIn.every((e) => e.inCrawl)).toBe(true);
+    expect(Object.fromEntries(a!.linksOut.map((e) => [e.url, e.inCrawl]))).toMatchObject({ [u("/b")]: true, [u("/not-in-inventory")]: false });
     const t = a?.issues.find((i) => i.ruleId === "CNT-005");
     expect(t?.history.map((h) => [h.crawlId, h.state])).toEqual([
       [first, "new"],

@@ -122,6 +122,8 @@ export interface EdgeRow {
   rel: string | null;
   location: string | null;
   nofollow: boolean;
+  /** The other end is a URL of this crawl (so it can be inspected). */
+  inCrawl: boolean;
 }
 
 /** One fingerprint on the inspected URL, with its state in each audit of the project that saw it. */
@@ -163,11 +165,13 @@ export async function pageDetail(db: Exec, crawlId: string, url: string): Promis
     const other = col === "to_url" ? sql`from_url` : sql`to_url`;
     const where = col === "to_url" ? sql`to_url = ${url}` : sql`from_url = ${url}`;
     const [list, total] = await Promise.all([
-      db.execute(sql`select ${other} as url, via, anchor, rel, location, nofollow from url_edges where crawl_id = ${crawlId}::uuid and ${where} order by id limit ${EDGE_LIMIT}`),
+      db.execute(sql`select ${other} as url, via, anchor, rel, location, nofollow,
+          exists (select 1 from crawl_urls c where c.crawl_id = ${crawlId}::uuid and c.normalised_url = ${other}) as in_crawl
+        from url_edges where crawl_id = ${crawlId}::uuid and ${where} order by id limit ${EDGE_LIMIT}`),
       db.execute(sql`select count(*)::int as n from url_edges where crawl_id = ${crawlId}::uuid and ${where}`),
     ]);
     return {
-      rows: (list.rows as Record<string, unknown>[]).map((e) => ({ url: e.url as string, via: e.via as string, anchor: (e.anchor as string | null) ?? null, rel: (e.rel as string | null) ?? null, location: (e.location as string | null) ?? null, nofollow: Boolean(e.nofollow) })),
+      rows: (list.rows as Record<string, unknown>[]).map((e) => ({ url: e.url as string, via: e.via as string, anchor: (e.anchor as string | null) ?? null, rel: (e.rel as string | null) ?? null, location: (e.location as string | null) ?? null, nofollow: Boolean(e.nofollow), inCrawl: Boolean(e.in_crawl) })),
       total: Number((total.rows[0] as { n: number }).n),
     };
   };
