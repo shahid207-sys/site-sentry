@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@tanstack/react-virtual": "3.14.19",
+    "axe-core": "4.14.0",
     "bullmq": "6.3.14",
     "cheerio": "^1.2.0",
     "drizzle-orm": "0.45.4",
@@ -50,7 +51,6 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitest/coverage-v8": "^5.0.5",
-    "axe-core": "4.14.0",
     "drizzle-kit": "0.31.11",
     "eslint": "^9",
     "eslint-config-next": "16.4.3",
