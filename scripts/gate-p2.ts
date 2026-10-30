@@ -71,7 +71,16 @@ export async function setupDb(dbUrl: string): Promise<Db> {
 }
 
 /** A real worker (crawl + in-process analysis worker). Politeness is raised: this gate measures rules, not crawl speed. */
-export function startWorker(site: FixtureSite, blobDir: string, memDir: string, onMemoryLimit: (detail: string) => void, dbUrl: string, queue: string): { child: ChildProcess; booted: Promise<void>; exited: Promise<number | null> } {
+export function startWorker(
+  site: FixtureSite,
+  blobDir: string,
+  memDir: string,
+  onMemoryLimit: (detail: string) => void,
+  dbUrl: string,
+  queue: string,
+  /** Set last, over the defaults (gate:p6 adds its webhook receiver's host and the secret key). */
+  extraEnv: Record<string, string> = {},
+): { child: ChildProcess; booted: Promise<void>; exited: Promise<number | null> } {
   const env = {} as NodeJS.ProcessEnv;
   for (const [k, v] of Object.entries(process.env)) if (!/^(CRAWL(ER)?|ANALYSIS)_/.test(k)) env[k] = v;
   Object.assign(env, {
@@ -87,6 +96,7 @@ export function startWorker(site: FixtureSite, blobDir: string, memDir: string, 
     WORKER_MEMORY_LOG: path.join(memDir, "memory.log"),
     WORKER_MEMORY_LIMIT_MB: String(MEMORY_LIMIT_MB),
     NODE_ENV: "test", // the loopback mapping above is refused under any other NODE_ENV
+    ...extraEnv,
   });
   // A heap snapshot taken near the cap (--heapsnapshot-near-heap-limit) is written to memDir (--diagnostic-dir).
   const child = spawn(process.execPath, [...HEAP_CAP_FLAGS, "--diagnostic-dir", memDir, "--import", "tsx", "src/worker/crawl-worker.ts"], { env, stdio: ["ignore", "pipe", "pipe"] });

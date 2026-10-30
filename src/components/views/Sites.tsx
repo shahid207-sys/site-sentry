@@ -12,6 +12,7 @@ import { fmtAgo, fmtDateTime, hostOf, plural, shortUrl } from "../lib/format";
 import { ConfirmDialog, Modal, useToast } from "../overlays";
 import { useWs } from "../shell/context";
 import { ClearAuditHistoryDialog } from "./Audits";
+import { ScheduledAudits } from "./Schedules";
 import {
   AuditStatusBadge,
   Button,
@@ -316,6 +317,8 @@ export function SiteDetailView() {
       </div>
 
       <ImportantUrls detail={data} canEdit={canEdit} onChange={reload} />
+
+      {canEdit ? <ScheduledAudits site={site} /> : null}
 
       {canEdit ? (
         <Panel className="mt-6" title="Danger zone">
