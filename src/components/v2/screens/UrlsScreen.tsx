@@ -292,7 +292,7 @@ function StateChip({ label, count, pressed, onClick }: { label: string; count: n
       )}
     >
       {label}
-      <span className="tabular text-xs opacity-80">{count.toLocaleString("en-GB")}</span>
+      <span className="tabular text-xs">{count.toLocaleString("en-GB")}</span>
     </button>
   );
 }

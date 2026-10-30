@@ -19,7 +19,7 @@ const VERIFY_RULE = "META-003";
 interface Out {
   auditId?: string;
   steps: { name: string; ok: boolean; detail: string }[];
-  axe: { screen: string; theme: string; violations: { id: string; impact: string | null; nodes: number; help: string }[] }[];
+  axe: { screen: string; theme: string; violations: { id: string; impact: string | null; nodes: number; help: string; targets: string[] }[] }[];
   filter: { label: string; rows: number; ms: number }[];
 }
 const out: Out = { steps: [], axe: [], filter: [] };
@@ -67,7 +67,14 @@ async function axe(page: Page, screen: string) {
     const violations = await page.evaluate(async (tags) => {
       // @ts-expect-error axe is injected above
       const r = await window.axe.run(document, { runOnly: { type: "tag", values: tags }, resultTypes: ["violations"] });
-      return (r.violations as { id: string; impact: string | null; nodes: unknown[]; help: string }[]).map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes.length, help: v.help }));
+      return (r.violations as { id: string; impact: string | null; nodes: { target: unknown[]; failureSummary?: string }[]; help: string }[]).map((v) => ({
+        id: v.id,
+        impact: v.impact,
+        nodes: v.nodes.length,
+        help: v.help,
+        // The first few failing elements, so a failure can be fixed without re-running axe by hand.
+        targets: v.nodes.slice(0, 5).map((n) => `${n.target.join(" ")}: ${(n.failureSummary ?? "").split("\n").slice(1).join(" ").trim()}`),
+      }));
     }, AXE_TAGS);
     out.axe.push({ screen, theme, violations });
   }
