@@ -3,10 +3,13 @@ import { sql } from "drizzle-orm";
 import { getCrawlQueue } from "../crawl/v2/audit-bridge";
 import { getDb } from "../db/client";
 import type { Workspace } from "../model";
-import { compareCrawls, crawlOverview, issueGroups, latestVerification, ResultsError, type Comparison, type CrawlOverview, type IssueGroupRow, type VerificationResult } from "../results/queries";
+import { compareCrawls, crawlOverview, depthHistogram, duplicateClusters, issueGroups, latestVerification, ResultsError, type Comparison, type CrawlOverview, type DuplicateCluster, type IssueGroupRow, type VerificationResult } from "../results/queries";
 import { issueRows, pageDetail, urlRows, type IssueRow, type PageDetail, type UrlRow } from "../results/explore";
+import { auditTriage, fixBoard, setTriage, triageLog, type BoardCard, type TriageChange, type TriageEntry, type TriageEvent } from "../results/triage";
 import { startVerification, type StartedVerification } from "../results/verify";
 import { previousAudit } from "../results/states";
+import { RULES } from "../rules/registry";
+import { RULE_TITLES } from "../rules/titles";
 import { WorkflowError } from "../workflow/deps";
 import { getStore } from "../workspace";
 
@@ -102,4 +105,73 @@ export async function getAuditPage(ws: Workspace, auditId: string, url: string):
   const page = await pageDetail(getDb(), crawlId, url);
   if (!page) throw new WorkflowError("NOT_FOUND", "This audit has no such URL.");
   return page;
+}
+
+export interface CatalogRule {
+  id: string;
+  title: string;
+  category: string;
+  scope: string;
+  impact: number;
+  confidence: string;
+  why: string;
+  fix: string;
+  acceptance: string;
+  docs: string | null;
+}
+
+/** The implemented rules as the app explains them (Issues drawer, Fix board, ⌘K). */
+export async function ruleCatalog(): Promise<CatalogRule[]> {
+  return RULES.map((r) => ({
+    id: r.id,
+    title: RULE_TITLES[r.id] ?? r.id,
+    category: r.category,
+    scope: r.scope,
+    impact: r.impact,
+    confidence: r.confidence,
+    why: r.explain.why,
+    fix: r.explain.fix,
+    acceptance: r.explain.acceptance,
+    docs: r.explain.docs ?? null,
+  }));
+}
+
+export interface AuditStructure {
+  /** URLs per link depth from the seeds (null: only sitemaps found them) and how many were answered. */
+  depth: { depth: number | null; urls: number; answered: number }[];
+  /** Exact and near-duplicate clusters from the duplicate rules' findings. */
+  duplicates: DuplicateCluster[];
+}
+
+/** A v2 audit's crawl depth histogram and duplicate clusters, for the Architecture and Content screens. */
+export async function getAuditStructure(ws: Workspace, auditId: string): Promise<AuditStructure> {
+  const crawlId = await auditCrawl(ws, auditId);
+  const db = getDb();
+  return { depth: await depthHistogram(db, crawlId), duplicates: await duplicateClusters(db, crawlId) };
+}
+
+/** Who a triage change is logged as: the app has no user accounts yet (Phase 6 collaboration), so one local user. */
+export const LOCAL_ACTOR = "local user";
+
+export interface AuditTriage {
+  entries: TriageEntry[];
+  board: BoardCard[];
+}
+
+/** A v2 audit's triage: board columns per issue group and per-issue calls (fixed, ignored with a reason). */
+export async function getAuditTriage(ws: Workspace, auditId: string): Promise<AuditTriage> {
+  const crawlId = await auditCrawl(ws, auditId);
+  return mapped(async () => ({ entries: await auditTriage(getDb(), crawlId), board: await fixBoard(getDb(), crawlId) }));
+}
+
+/** Set the triage of issue groups ("rule:<id>") or issues ("fp:<fingerprint>") of a v2 audit. */
+export async function updateAuditTriage(ws: Workspace, auditId: string, subjects: string[], change: TriageChange): Promise<TriageEntry[]> {
+  const crawlId = await auditCrawl(ws, auditId);
+  return mapped(() => setTriage(getDb(), crawlId, subjects, change, LOCAL_ACTOR));
+}
+
+/** The triage audit log of a v2 audit's project, or of one subject. */
+export async function getTriageLog(ws: Workspace, auditId: string, subject?: string): Promise<TriageEvent[]> {
+  const crawlId = await auditCrawl(ws, auditId);
+  return mapped(() => triageLog(getDb(), crawlId, subject));
 }
