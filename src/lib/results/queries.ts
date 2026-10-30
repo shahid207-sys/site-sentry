@@ -68,13 +68,19 @@ export async function crawlOverview(db: Exec, crawlId: string): Promise<CrawlOve
   if (!c) throw new ResultsError("NOT_FOUND", "Crawl not found.");
   if (c.kind !== "audit") throw new ResultsError("INVALID", "This crawl is a fix verification, not an audit.");
   // Independent reads: run them together (the pool has room; this is the first request of the Overview screen).
-  const [verified, g, ran, coverage, states] = await Promise.all([
-    db.execute(sql`select count(*)::int as n from ${effectiveStates(crawlId)} e where e.verify_state = 'resolved'`),
+  const [st, g, ran, coverage] = await Promise.all([
+    // States and verified fixes in one pass over the effective states.
+    db.execute(sql`select state, count(*)::int as n, count(*) filter (where verify_state = 'resolved')::int as verified from ${effectiveStates(crawlId)} e group by state`),
     db.execute(sql`select priority, count(*)::int as n from issue_groups where crawl_id = ${crawlId}::uuid and affected_urls > 0 group by priority`),
     db.execute(sql`select count(*)::int as n from rule_runs where crawl_id = ${crawlId}::uuid and status = 'ran'`),
     crawlCoverage(db, crawlId),
-    effectiveStateCounts(db, crawlId),
   ]);
+  const states: StateCounts = { new: 0, persistent: 0, resolved: 0, regressed: 0, not_rechecked: 0, inconclusive: 0 };
+  let verifiedResolved = 0;
+  for (const x of st.rows as { state: IssueState; n: number; verified: number }[]) {
+    states[x.state] = x.n;
+    verifiedResolved += x.verified;
+  }
   const priorities: Record<Priority, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
   for (const x of g.rows as { priority: Priority; n: number }[]) priorities[x.priority] = x.n;
   return {
@@ -89,7 +95,7 @@ export async function crawlOverview(db: Exec, crawlId: string): Promise<CrawlOve
     coverage,
     health: c.health,
     states,
-    verifiedResolved: (verified.rows[0] as { n: number }).n,
+    verifiedResolved,
     priorities,
     issueGroups: Object.values(priorities).reduce((a, b) => a + b, 0),
     rulesRan: (ran.rows[0] as { n: number }).n,
@@ -128,8 +134,12 @@ export async function issueGroups(db: Exec, crawlId: string, opts: { ruleIds?: s
   const r = await db.execute(sql`select g.*,
       coalesce((select jsonb_agg(jsonb_build_object('templateId', t.template_id, 'affectedUrls', t.affected_urls, 'sampleUrls', t.sample_urls) order by t.affected_urls desc, t.template_id collate "C")
         from issue_group_templates t where t.crawl_id = g.crawl_id and t.rule_id = g.rule_id), '[]'::jsonb) as templates,
-      coalesce((select jsonb_object_agg(x.state, x.n) from (select state, count(*)::int as n from ${effectiveStates(crawlId)} e where e.rule_id = g.rule_id group by state) x), '{}'::jsonb) as states
-    from issue_groups g where g.crawl_id = ${crawlId}::uuid and g.affected_urls > 0 ${only}
+      coalesce(st.states, '{}'::jsonb) as states
+    from issue_groups g
+    -- Per-rule state counts in one pass over the effective states, not one pass per group.
+    left join (select x.rule_id, jsonb_object_agg(x.state, x.n) as states
+      from (select e.rule_id, e.state, count(*)::int as n from ${effectiveStates(crawlId)} e group by e.rule_id, e.state) x group by x.rule_id) st on st.rule_id = g.rule_id
+    where g.crawl_id = ${crawlId}::uuid and g.affected_urls > 0 ${only}
     order by g.score desc, g.rule_id collate "C"`);
   return (r.rows as Record<string, unknown>[]).map((g) => ({
     ruleId: g.rule_id as string,
