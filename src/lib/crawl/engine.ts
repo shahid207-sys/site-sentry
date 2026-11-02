@@ -20,6 +20,7 @@ import { describeLimits, LEGACY_ENGINE_LIMITS, PROFILES } from "./profiles";
 import { isAllowed, parseRobots, type ParsedRobots } from "./robots";
 import { parseSitemap } from "./sitemap";
 import { isInternal, normalizePageUrl } from "./url";
+import { BOT_NAME } from "./bot";
 
 /** This in-request engine runs while CRAWLER_V2=false; its page and depth ceiling is shared with the profiles. */
 export const LIMITS = {
@@ -43,7 +44,7 @@ const depthOf = (c: AuditConfig) => c.maxDepth ?? LEGACY_ENGINE_LIMITS.maxDepth;
  */
 const clampCut = (audit: AuditRun) => audit.coverage.some((c) => c.code === "engine_limit") && audit.coverage.some((c) => c.code === "depth_limit");
 
-export const ROBOTS_TOKEN = "SiteSentryBot";
+export const ROBOTS_TOKEN = BOT_NAME;
 export const ALL_CATEGORIES: RuleCategory[] = RULE_CATEGORIES.map((c) => c.id);
 
 const errOf = (e: unknown) =>
@@ -627,6 +628,6 @@ export function describeConfig(config: AuditConfig): string[] {
   lines.push(config.maxDepth === null ? "Follow internal links with no depth limit" : config.maxDepth > 0 ? `Follow internal links up to ${config.maxDepth} click(s) deep` : "Do not follow links");
   lines.push(`At most ${config.maxPages} pages`);
   if (config.checkLinks) lines.push(`Status-check up to ${LIMITS.linkChecks} uncrawled internal link and image targets`);
-  lines.push("Read robots.txt first and skip URLs it disallows for SiteSentryBot");
+  lines.push("Read robots.txt first and skip URLs it disallows for this crawler");
   return lines;
 }

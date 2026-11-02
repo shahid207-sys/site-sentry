@@ -6,6 +6,7 @@ import { connect as tlsConnect, createSecureContext, rootCertificates, type Peer
 import { gunzipSync } from "node:zlib";
 import type { ReadableStream } from "node:stream/web";
 import { Agent, fetch } from "undici";
+import { BOT_USER_AGENT } from "../crawl/bot";
 import { isBlockedIp } from "./ip-guard";
 import type { RedirectHop } from "../audit/types";
 
@@ -28,7 +29,7 @@ export const CONNECT_TIMEOUT_MS = 10_000;
 const SOCKET_IDLE_BACKSTOP_MS = 60_000;
 // Spec "Crawler engine → Security": http(s) on 80, 443, 8080 and 8443 unless an admin overrides the policy.
 const ALLOWED_PORTS = new Set(["", "80", "443", "8080", "8443"]);
-export const USER_AGENT = "SiteSentryBot/0.2 (+technical SEO audit; respects robots.txt)";
+export const USER_AGENT = BOT_USER_AGENT;
 
 export type SafeFetchErrorCode =
   | "INVALID_URL"

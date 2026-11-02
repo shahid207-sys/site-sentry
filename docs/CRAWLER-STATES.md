@@ -113,7 +113,7 @@ Code: `src/lib/crawl/v2/politeness.ts` (throttle), `src/lib/crawl/v2/runner.ts` 
 | Requests in flight per host | 3 (`CRAWLER_HOST_CONCURRENCY`) | `HostThrottle.max`; the runner runs that many lanes |
 | Request rate per host | 5 req/s (`CRAWLER_HOST_RATE`) | minimum gap between request starts |
 | Crawl-delay | from the robots.txt group that applies to `SiteSentryBot` (else `*`), capped at 60 s | the gap becomes `max(1 / rate, Crawl-delay)` |
-| User-agent | `SiteSentryBot/1.0 (+https://sitesentry.app/bot)` | `V2_USER_AGENT` |
+| User-agent | `SiteSentryBot/1.0` by default; `CRAWLER_BOT_NAME` and `CRAWLER_BOT_URL` change it (`docs/BOT.md`) | `V2_USER_AGENT` |
 | Timeouts | 10 s connect, 30 s total | `CONNECT_TIMEOUT_MS` on the agent, `V2_TOTAL_TIMEOUT_MS` per request |
 | HTML size | 5 MB; larger pages end `oversized` | `V2_MAX_HTML_BYTES` |
 

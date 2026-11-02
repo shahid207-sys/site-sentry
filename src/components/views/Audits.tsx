@@ -261,7 +261,7 @@ export function AuditsView() {
 
 function preview(o: { mode: AuditMode; urlCount: number; sitemapUrl: string; includeImportant: boolean; importantCount: number; maxDepth: number | null; maxPages: number; checkLinks: boolean; categories: RuleCategory[]; scope: string[] }) {
   const lines: string[] = [];
-  lines.push("Read robots.txt first and skip URLs it disallows for SiteSentryBot");
+  lines.push("Read robots.txt first and skip URLs it disallows for this crawler");
   if (o.mode === "single") lines.push("Inspect the one URL you entered");
   else if (o.mode === "list") lines.push(`Inspect ${plural(o.urlCount, "listed URL")}`);
   else lines.push(`Read URLs from ${o.sitemapUrl ? "the sitemap you entered" : "the sitemap declared in robots.txt, else /sitemap.xml"}`);

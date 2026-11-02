@@ -11,6 +11,7 @@
 import axe from "axe-core";
 import { chromium, type Browser, type BrowserContext, type LaunchOptions, type Route } from "playwright";
 import { SafeFetchError, type Fetcher } from "../fetch/safe-fetch";
+import { BOT_USER_AGENT } from "../crawl/bot";
 import { isBlockedHost } from "./blocklist";
 
 export const MAX_RENDER_BROWSERS = 4;
@@ -20,7 +21,7 @@ export const RENDER_BUDGET_MS = 20_000;
 export const MAX_LOGGED_REQUESTS = 300;
 /** Elements kept per axe rule and per script-link kind. */
 export const MAX_NODES = 20;
-export const RENDER_USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36 SiteSentryBot/1.0 (+https://sitesentry.app/bot)";
+export const RENDER_USER_AGENT = `Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36 ${BOT_USER_AGENT}`;
 /**
  * A phone-sized viewport, as Google renders with its smartphone crawler. No CPU or network throttling. Not Chrome's
  * mobile emulation: with it, Chrome marks the layout shifts of the first half second as caused by input, which

@@ -44,15 +44,16 @@ import { runProbes } from "./probes";
 import type { ProbeRecord } from "../../rules/probe-types";
 import { crawlSecretScope, decryptSecret, secretKey } from "./secrets";
 import type { TerminalState } from "./types";
+import { BOT_NAME, BOT_USER_AGENT } from "../bot";
 
 /** Spec "Crawler engine → Resumability": URLs are claimed in batches of 200. */
 export const BATCH_SIZE = 200;
 /** Spec: follow at most 10 redirect hops. Each hop is its own URL row, so the cap is applied when the target is inserted. */
 export const MAX_REDIRECT_HOPS = 10;
 /** Product token matched against robots.txt groups. */
-export const ROBOTS_TOKEN = "SiteSentryBot";
+export const ROBOTS_TOKEN = BOT_NAME;
 /** Spec "Crawler engine → Politeness and speed": default user-agent and fetch limits (connect timeout is the agent's 10 s). */
-export const V2_USER_AGENT = "SiteSentryBot/1.0 (+https://sitesentry.app/bot)";
+export const V2_USER_AGENT = BOT_USER_AGENT;
 export const V2_TOTAL_TIMEOUT_MS = 30_000;
 export const V2_MAX_HTML_BYTES = 5 * 1024 * 1024;
 /**
