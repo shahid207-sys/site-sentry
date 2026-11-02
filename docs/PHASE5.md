@@ -63,7 +63,7 @@ analysis. Two options are open, and the choice is the product owner's:
 
 ## Gate
 
-`npm run build && npm run gate:p5` (Postgres and Redis from `docker compose up -d`, Chromium from
+`npm run build && npm run gate:p5` (Postgres and Redis from `docker compose up -d postgres redis`, Chromium from
 `npx playwright install chromium`). It uses its own fixture, `fixtures/render/site.ts`, on `render.test`, with
 `widgets.test` as a third-party script host. The main fixture's `/js/` pages are server-rendered with
 JavaScript-only index links, and the Phase 1–4 and 6 manifests depend on that HTML. The render fixture has:

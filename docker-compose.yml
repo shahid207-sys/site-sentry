@@ -1,14 +1,35 @@
-# Local infrastructure for crawler v2 (CRAWLER_V2=true): Postgres for crawl state, Redis for the BullMQ queue.
-# Development credentials only. Ports bind to 127.0.0.1; Postgres uses 5433 because 5432 is often taken by a local install.
-#   docker compose up -d
-#   DATABASE_URL=postgres://sitesentry:sitesentry@127.0.0.1:5433/sitesentry
-#   REDIS_URL=redis://127.0.0.1:6379
+# SiteSentry, self-hosted: web app, crawl worker, analysis worker, Postgres 16 and Redis 7.
+#   docker compose up -d --build        then open http://localhost:3000
+# Development only needs the databases:  docker compose up -d postgres redis
+# Settings come from the environment or a `.env` file next to this one (see docs/SELF-HOSTING.md and .env.example).
+# Postgres and Redis publish on 127.0.0.1 only (5433 and 6379) so the tests and gates on the host can reach them;
+# the app is published on 127.0.0.1:3000. Put a reverse proxy with authentication in front of it to share it.
+x-app: &app
+  build: .
+  image: site-sentry:local
+  restart: unless-stopped
+  environment: &env
+    DATABASE_URL: postgres://sitesentry:${POSTGRES_PASSWORD:-sitesentry}@postgres:5432/sitesentry
+    REDIS_URL: redis://redis:6379
+    CRAWLER_V2: "true"
+    SITE_SENTRY_STORE: postgres
+    SITE_SENTRY_DATA_DIR: /data
+    BLOB_DIR: /data/blobs
+    APP_URL: ${APP_URL:-http://localhost:3000}
+    TRUSTED_PROXY_HEADER: ${TRUSTED_PROXY_HEADER:-}
+    CRAWLER_SECRET_KEY: ${CRAWLER_SECRET_KEY:-}
+    CRAWLER_BOT_NAME: ${CRAWLER_BOT_NAME:-}
+    CRAWLER_BOT_URL: ${CRAWLER_BOT_URL:-}
+  volumes:
+    - appdata:/data
+
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: sitesentry
-      POSTGRES_PASSWORD: sitesentry
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sitesentry}
       POSTGRES_DB: sitesentry
     ports:
       - "127.0.0.1:5433:5432"
@@ -22,6 +43,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     # AOF so queued jobs survive a container restart; BullMQ requires noeviction.
     command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
     ports:
@@ -34,6 +56,41 @@ services:
       timeout: 3s
       retries: 30
 
+  # Applies database migrations, then exits. The app and workers wait for it.
+  migrate:
+    <<: *app
+    restart: "no"
+    command: ["npm", "run", "db:migrate"]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  app:
+    <<: *app
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+  # Crawls, and renders sampled pages with headless Chromium (RENDER_WORKER defaults to on). Analysis runs in its own service.
+  crawl-worker:
+    <<: *app
+    command: ["npm", "run", "worker"]
+    environment:
+      <<: *env
+      ANALYSIS_WORKER: "off"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+  analysis-worker:
+    <<: *app
+    command: ["npm", "run", "worker:analysis"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
 volumes:
   pgdata:
   redisdata:
+  appdata:

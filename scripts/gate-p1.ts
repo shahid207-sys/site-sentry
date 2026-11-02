@@ -7,7 +7,7 @@
 //   3. A worker killed mid-crawl is replaced and the crawl completes with no URL requested twice.
 //   4. The SSRF suites pass, and no /ssrf/ redirect reached the canary listener on 127.0.0.1.
 //
-// Run: npm run gate:p1   (needs `docker compose up -d`; uses its own database, sitesentry_gate)
+// Run: npm run gate:p1   (needs `docker compose up -d postgres redis`; uses its own database, sitesentry_gate)
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";

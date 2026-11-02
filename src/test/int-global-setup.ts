@@ -11,7 +11,7 @@ export default async function setup() {
   try {
     await admin.connect();
   } catch (e) {
-    throw new Error(`Postgres is not reachable at ${url.host} (${(e as Error).message}). Start it with: docker compose up -d`);
+    throw new Error(`Postgres is not reachable at ${url.host} (${(e as Error).message}). Start it with: docker compose up -d postgres redis`);
   }
   const exists = await admin.query("select 1 from pg_database where datname = $1", [name]);
   if (!exists.rowCount) await admin.query(`create database "${name}"`);

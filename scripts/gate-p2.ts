@@ -14,7 +14,7 @@
 //   6. The resource budgets hold, counted at the fixture server: at most 500 external URLs and 2,000 image URLs requested.
 //   7. No /.env body content is stored anywhere: its canary value is absent from every table and every blob.
 //
-// Run: npm run gate:p2a | npm run gate:p2b   (needs `docker compose up -d`; uses its own database)
+// Run: npm run gate:p2a | npm run gate:p2b   (needs `docker compose up -d postgres redis`; uses its own database)
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";

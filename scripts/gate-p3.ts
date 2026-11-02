@@ -16,7 +16,7 @@
 //   7. The JSON-store migration: dry run and real run of scripts/migrate-json-store.ts on a copy of .data/store.json,
 //      into a database of its own; their row counts match each other and the JSON.
 //
-// Run: npm run gate:p3   (needs `docker compose up -d`; uses its own databases, sitesentry_gate3 and sitesentry_gate3_store)
+// Run: npm run gate:p3   (needs `docker compose up -d postgres redis`; uses its own databases, sitesentry_gate3 and sitesentry_gate3_store)
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";

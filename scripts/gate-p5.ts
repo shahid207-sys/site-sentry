@@ -11,7 +11,7 @@
 //      "Compare HTML".
 //   5. Memory: the worker's Node process stays under 700 MB RSS (its Chromium processes are separate and not counted).
 //
-// Run: npm run build && npm run gate:p5   (needs `docker compose up -d` and `npx playwright install chromium`; its own
+// Run: npm run build && npm run gate:p5   (needs `docker compose up -d postgres redis` and `npx playwright install chromium`; its own
 // database sitesentry_gate5 and app data directory)
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";

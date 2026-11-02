@@ -10,7 +10,7 @@
 // Integrations that need real accounts (Search Console, GA4, Jira/Linear/Trello, Slack, SMTP) are not part of this
 // gate: they are reported as not built.
 //
-// Run: npm run build && npm run gate:p6   (needs `docker compose up -d`; its own database sitesentry_gate6; the fixture
+// Run: npm run build && npm run gate:p6   (needs `docker compose up -d postgres redis`; its own database sitesentry_gate6; the fixture
 // listens on 8080 and the webhook receiver on 8443, ports the app accepts)
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";

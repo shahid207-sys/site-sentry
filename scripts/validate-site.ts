@@ -7,7 +7,7 @@
 // The AI-crawler setting is left unset, so AIS-002 reports needs_config. Read-only: GET and HEAD requests only.
 //
 // Run: npx tsx scripts/validate-site.ts https://example.com [--profile standard] [--out report.json]
-//      (needs `docker compose up -d`; uses its own database, sitesentry_validate, and keeps earlier runs)
+//      (needs `docker compose up -d postgres redis`; uses its own database, sitesentry_validate, and keeps earlier runs)
 import { randomUUID } from "node:crypto";
 import { appendFile, writeFile } from "node:fs/promises";
 import { Redis } from "ioredis";
