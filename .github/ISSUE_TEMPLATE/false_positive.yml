@@ -1,0 +1,41 @@
+name: False positive report
+description: A rule reported a problem that is not a problem
+labels: [false-positive, rules]
+body:
+  - type: input
+    id: rule
+    attributes:
+      label: Rule ID and version
+      placeholder: "CNT-009 v2"
+    validations:
+      required: true
+  - type: textarea
+    id: finding
+    attributes:
+      label: The finding
+      description: The message and evidence SiteSentry showed.
+    validations:
+      required: true
+  - type: textarea
+    id: html
+    attributes:
+      label: The HTML involved (trimmed)
+      description: The smallest snippet that reproduces it. Remove anything private; do not paste pages you are not allowed to share.
+      render: html
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why is this not a problem?
+      description: Cite the specification or search-engine documentation if you can.
+    validations:
+      required: true
+  - type: dropdown
+    id: confidence
+    attributes:
+      label: Does the same pattern ever indicate a real problem?
+      options:
+        - "No, never"
+        - "Sometimes (the rule needs a narrower condition)"
+        - "Not sure"

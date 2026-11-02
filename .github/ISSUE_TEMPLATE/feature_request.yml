@@ -1,0 +1,21 @@
+name: Feature request
+description: Suggest a capability or a new rule
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like SiteSentry to do?
+      description: For a new rule, describe the defect, how it can be detected deterministically, and what a passing and a failing page look like (every rule needs both).
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
