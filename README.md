@@ -34,7 +34,7 @@ no login; do not expose it to the internet without putting authentication in fro
 With Docker (web app, crawl worker, analysis worker, Postgres and Redis):
 
 ```bash
-git clone https://github.com/<owner>/site-sentry.git
+git clone https://github.com/shahid207-sys/site-sentry.git
 cd site-sentry
 docker compose up -d --build
 # open http://localhost:3000

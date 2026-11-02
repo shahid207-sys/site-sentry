@@ -19,7 +19,7 @@ The first build downloads Chromium and the dependencies; it took about 13 minute
 ## Start
 
 ```bash
-git clone https://github.com/<owner>/site-sentry.git
+git clone https://github.com/shahid207-sys/site-sentry.git
 cd site-sentry
 cp .env.example .env     # optional; see "Configuration"
 docker compose up -d --build
