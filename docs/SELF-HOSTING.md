@@ -14,7 +14,7 @@
 ## Requirements
 
 Docker with Compose v2, about 4 GB of RAM free (each rendering browser needs 150–300 MB) and a few GB of disk.
-The first build downloads Chromium and takes several minutes.
+The first build downloads Chromium and the dependencies; it took about 13 minutes on a laptop, later builds reuse the cache.
 
 ## Start
 
@@ -39,7 +39,7 @@ Compose reads a `.env` file next to `docker-compose.yml` (not `.env.local`). The
 | `CRAWLER_BOT_URL` | unset | A page saying who runs this crawler, shown in the user-agent. **Set it before auditing sites you do not own.** |
 | `CRAWLER_SECRET_KEY` | unset | 32 random bytes, base64 (`openssl rand -base64 32`). Encrypts basic-auth credentials for custom crawls and webhook signing secrets. Without it those features are refused. Keep it: losing it makes stored secrets unreadable. |
 | `APP_URL` | `http://localhost:3000` | Public address of the app, used in alert links. |
-| `TRUSTED_PROXY_HEADER` | unset | Header your reverse proxy sets to the client IP (for example `x-forwarded-for`). Used for per-client rate limits. Without it all clients share one bucket. |
+| `TRUSTED_PROXY_HEADER` | unset | Header your reverse proxy sets to the client IP (for example `x-forwarded-for`; with it the rightmost entry is used, so the proxy must append to or overwrite it). **Until it is set, the homepage quick-audit form answers 503** (`PROXY_NOT_CONFIGURED`) in this production image, and elsewhere all clients share one rate-limit bucket. The workspace at `/live` works either way. Only set it behind a proxy you control: clients can forge the header otherwise. |
 
 More settings (worker concurrency, per-host politeness, rendering) are in [`.env.example`](../.env.example); to use one, add it to
 the `environment:` block of the relevant service.
@@ -99,4 +99,5 @@ docker compose down -v     # also deletes the volumes (all audits)
 - `migrate` exits non-zero: `docker compose logs migrate`; usually Postgres has a different password from `POSTGRES_PASSWORD` (it was set on first start).
 - Audits stay "queued": check `docker compose ps` and `docker compose logs crawl-worker`; the worker needs Redis.
 - Pages never get rendered: the render phase runs inside `crawl-worker`; Quick audits do not render at all.
+- The homepage quick-audit returns 503 `PROXY_NOT_CONFIGURED`: expected until `TRUSTED_PROXY_HEADER` is set (see Configuration); start audits from `/live` instead.
 - Port 5433 or 6379 already in use: edit the `ports:` entries as described above.
