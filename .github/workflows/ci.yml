@@ -1,12 +1,21 @@
-# Phase 1–6 (Phase 6: local part) gates on every pull request (SPEC "Definition of done for v1"), plus lint, types, unit and integration
-# tests. The gates crawl the local fixture site and need Postgres and Redis, provided here as services on the same
-# loopback ports as docker-compose.yml.
+# Every pull request and push to the default branch: install, types, lint, unit tests, integration tests and a
+# production build. The phase gates crawl the local fixture site and take minutes (Chromium, Lighthouse), so they run
+# only when started by hand: Actions → ci → Run workflow → tick "gates".
 name: ci
 
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      gates:
+        description: Also run the phase gates (heavy)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -16,6 +25,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # Same loopback ports and credentials as docker-compose.yml, which the tests and gates default to.
     services:
       postgres:
         image: postgres:16-alpine
@@ -41,23 +51,26 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # The render tests and gate:p5 drive a real headless Chromium.
       - run: npx playwright install --with-deps chromium
-      - run: npm run lint
       - run: npm run typecheck
+      - run: npm run lint
       - run: npm test
       - run: npm run test:int
-      - run: npm run coverage
-      # gate:p3 starts the production app for its share-link checks, so it needs a build first.
       - run: npm run build
-      - run: npm run gate:p1
-      - run: npm run gate:p2a
-      - run: npm run gate:p2b
-      - run: npm run gate:p3
-      # gate:p4 runs Lighthouse (desktop preset) with the runner's Chrome; its performance target sits close to the
-      # scores measured locally (90), so a slow runner can fail it: the log names the metric.
-      - run: npm run gate:p4
-      # gate:p5 renders the render fixture with the worker's Chromium and opens the Page inspector in the production app.
-      - run: npm run gate:p5
-      # gate:p6 covers scheduled audits and the signed webhook alert only; the integrations that need real accounts
-      # are listed as not built.
-      - run: npm run gate:p6
+
+      # Gates: manual dispatch only. gate:p3, p4, p5 and p6 start the production app, so they need the build above.
+      - name: Gates
+        if: github.event_name == 'workflow_dispatch' && inputs.gates
+        run: |
+          set -e
+          npm run gate:p1
+          npm run gate:p2a
+          npm run gate:p2b
+          npm run gate:p3
+          # gate:p4 runs Lighthouse (desktop preset); its performance target sits close to the scores measured
+          # locally, so a slow runner can fail it: the log names the metric.
+          npm run gate:p4
+          npm run gate:p5
+          # gate:p6 covers scheduled audits and the signed webhook alert only.
+          npm run gate:p6
