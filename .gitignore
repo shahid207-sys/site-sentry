@@ -45,3 +45,12 @@ next-env.d.ts
 # playwright
 /test-results/
 /playwright-report/
+
+# logs
+*.log
+
+# generated output: blobs, storage, gate reports and PDFs (gates write under .data/)
+/blobs/
+/storage/
+/gate-output/
+/*.pdf
