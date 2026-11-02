@@ -67,7 +67,7 @@ const LINKS: Defect[] = [
   },
   {
     // The fixture answers 404 on every /cdn-cgi/ path, as Cloudflare does to a crawler: recorded as cdn_managed, never
-    // fetched, so no LNK-001 (example-client.ae validation).
+    // fetched, so no LNK-001 (real-site validation).
     name: "Cloudflare email-protection and other /cdn-cgi/ links (negative)",
     expect: [],
     apply: (p) => void (p.body += `<p>Write to <a href="${CDN_LINKS[0]}#6a0b0e07">[email&#160;protected]</a> or check <a href="${CDN_LINKS[1]}">the edge trace</a>.</p>`),

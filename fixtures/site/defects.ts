@@ -27,7 +27,7 @@ and the smell of cooking drifted down the narrow streets. It was the kind of pla
 where doors were not locked at night, and where a stranger was noticed as soon as they stepped off the bus. Later in the
 year the storms would come, but for now the sea was calm and the sky was clear, and everyone was glad of it.`.replace(/\s+/g, " ");
 
-/** Short English service lines dense with the acronym "SEO", as on a real agency site (example-client.ae): tinyld scores
+/** Short English service lines dense with the acronym "SEO", as on a real agency site (real-site validation): tinyld scores
  * "SEO" as Irish, and on the whole text read "ga" 0.57 ahead of "en". The page is English and declares en, so META-012
  * must be silent (acronyms are dropped before detection). */
 export const ACRONYM_PROSE = [
@@ -130,7 +130,7 @@ const META: Defect[] = [
   { name: "small og:image", expect: ["META-017"], apply: (p) => void (p.og = p.og.replace(OG_IMAGE, "/assets/og-small.png")) },
   { name: "missing og:image", expect: ["META-017"], apply: (p) => void (p.og = p.og.replace(OG_IMAGE, "/assets/og-missing.png")) },
   { name: "no twitter:card", expect: ["META-018"], apply: (p) => void (p.twitter = "") },
-  // Negative case from the example-client.ae validation (META-012 noise): acronym-dense English declared as en.
+  // Negative case from the real-site validation (META-012 noise): acronym-dense English declared as en.
   { name: "acronym-dense English", expect: [], apply: (p) => ((p.lang = ' lang="en"'), (p.text = `<p>${ACRONYM_PROSE}</p>`)) },
 ];
 
@@ -234,7 +234,7 @@ const CONTENT: Defect[] = [
   { name: "near duplicate B", expect: ["CNT-007"], apply: (p) => void (p.text = `<p>${nearDuplicate("content:near")}</p>`) },
   { name: "boilerplate over 80%", expect: ["CNT-008"], apply: (p, c) => void (p.footer = BOILERPLATE_FOOTER(c.path)) },
   { name: "title and H1 share no terms", expect: ["CNT-009"], apply: (p, c) => void (p.h1 = `<h1>${topic(`other:${c.path}`)}</h1>`) },
-  // Negative cases from the example-client.ae validation (CNT-009 false positives): the title and H1 share a term only
+  // Negative cases from the real-site validation (CNT-009 false positives): the title and H1 share a term only
   // through a two-letter acronym across a <br>, or through two forms of one word. Neither may be flagged.
   {
     name: "title and H1 share an acronym across a <br>",

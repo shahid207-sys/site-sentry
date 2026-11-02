@@ -104,7 +104,7 @@ The crawler must reach every eligible URL a search engine could reach, at a spee
 
 - Default 3 concurrent requests per host, 5 req/s cap; user can raise it for their own sites.
 - Adaptive throttle: on 429, 503 or p95 latency over 3 s, halve concurrency and back off exponentially; honour `Retry-After` and `Crawl-delay`.
-- User-agent: `SiteSentryBot/1.0 (+https://sitesentry.app/bot)` by default; switchable to a Googlebot smartphone UA string for parity testing, clearly labelled in the report.
+- User-agent: `SiteSentryBot/1.0` by default (set `CRAWLER_BOT_NAME` and `CRAWLER_BOT_URL` to your own identity, see docs/BOT.md); switchable to a Googlebot smartphone UA string for parity testing, clearly labelled in the report.
 - Timeouts: 10 s connect, 30 s total, 5 MB HTML cap, 10 redirect hops max.
 
 **URL normalisation**
@@ -377,7 +377,7 @@ The UI answers three questions in order, in under ten seconds each: How healthy 
 
 ### Global patterns
 
-- **⌘K command bar:** jump to any project, audit, URL, rule ID or setting; actions like "Start Standard audit on example-client.ae".
+- **⌘K command bar:** jump to any project, audit, URL, rule ID or setting; actions like "Start Standard audit on example.com".
 - **Keyboard shortcuts:** `j/k` move through rows, `Enter` open, `e` expand evidence, `x` select, `f` mark fixed, `/` filter, `?` shortcut sheet.
 - **Filters as URL state:** every filter, sort and grouping is in the query string, so any view is shareable and back-button safe.
 - **Saved views:** e.g. "Critical on /products/*", pinned per project.
@@ -559,7 +559,7 @@ Also: a robots.txt blocking one section and GPTBot, a sitemap index with gzipped
 
 **Definition of done for v1**
 
-- [ ] Full-site crawl of example-client.ae completes with every discovered URL in a named state and the report states coverage honestly
+- [ ] Full-site crawl of a real site (your own) completes with every discovered URL in a named state and the report states coverage honestly
 - [ ] All Phase 1–3 gates pass in CI on every pull request
 - [ ] Every catalog rule implemented so far has positive and negative fixtures
 - [ ] A client-ready white-label PDF and share link generate from a real audit

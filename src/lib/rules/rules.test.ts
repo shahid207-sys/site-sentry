@@ -738,7 +738,7 @@ describe("Phase 2b details", () => {
     expect(run("SD-003", product({ review: { "@type": "Review", author: "A", reviewRating: { "@type": "Rating", ratingValue: 5 } } }))).toEqual([]);
     expect(run("SD-003", product({ review: { "@type": "Review", author: "A" } }))[0].evidence.gaps).toEqual([expect.objectContaining({ type: "Review", missing: ["reviewRating"] })]);
     // Google's Offer and ListItem lists apply only where the feature puts them: a Product's offers, a BreadcrumbList.
-    // An Offer in a service's OfferCatalog and a ListItem of a plain ItemList are not judged (example-client.ae validation).
+    // An Offer in a service's OfferCatalog and a ListItem of a plain ItemList are not judged (real-site validation).
     const service = pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "Service", name: "SEO", hasOfferCatalog: { "@type": "OfferCatalog", itemListElement: [{ "@type": "Offer", itemOffered: { "@type": "Service", name: "Audit" } }] } }));
     expect(run("SD-003", service)).toEqual([]);
     expect(run("SD-004", service)).toEqual([]);
@@ -780,7 +780,7 @@ describe("Phase 2b details", () => {
 
   it("SD-002 ignores other vocabularies and prefixed properties", () => {
     expect(run("SD-002", pageFrom("/x/", ld({ "@context": "https://example.org/vocab", "@type": "Widget", colour: "red" })))).toEqual([]);
-    // schema.org Action annotations: "<property>-input" / "-output" of a known property (example-client.ae validation).
+    // schema.org Action annotations: "<property>-input" / "-output" of a known property (real-site validation).
     const search = (k: string) => pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "WebSite", url: U("/"), potentialAction: { "@type": "SearchAction", target: U("/s?q={q}"), [k]: "required name=q" } }));
     expect(run("SD-002", search("query-input"))).toEqual([]);
     expect(run("SD-002", search("qurey-input"))[0].evidence.properties).toEqual(["qurey-input"]);
@@ -872,7 +872,7 @@ describe("details", () => {
     expect(f[0].evidence).toMatchObject({ reason: "malformed" });
   });
 
-  it("CNT-009 v2 matches two-letter terms, word forms and words split by <br> (example-client.ae false positives)", () => {
+  it("CNT-009 v2 matches two-letter terms, word forms and words split by <br> (real-site false positives)", () => {
     const pair = (title: string, h1: string) => run("CNT-009", pageFrom("/x/", { title: `<title>${title}</title>`, h1: `<h1>${h1}</h1>` }));
     expect(pair("AI Cost Optimization Dubai", "Find Where Your AI Is Wasting Money")).toEqual([]);
     expect(pair("UI/UX Design Dubai", "Stop Designing for Dribbble")).toEqual([]);

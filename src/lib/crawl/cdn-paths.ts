@@ -1,7 +1,7 @@
 // Paths a CDN injects into or serves on the site's own host. They are not pages of the site: Cloudflare, for example,
 // rewrites every e-mail address into a link to /cdn-cgi/l/email-protection#<hex> that a JavaScript decoder turns back
 // into a mailto: link for visitors, and that answers 404 to a crawler. The crawl records such URLs as `cdn_managed`
-// without fetching them, so link rules never call them broken (example-client.ae: 381 pages, all false LNK-001).
+// without fetching them, so link rules never call them broken (a real site: 381 pages, all false LNK-001).
 // Prefixes only, matched against the URL path; each entry names the CDN for the reason shown on the URL.
 
 export const CDN_PATH_PREFIXES: readonly { prefix: string; cdn: string }[] = [

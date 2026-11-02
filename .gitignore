@@ -54,3 +54,13 @@ next-env.d.ts
 /storage/
 /gate-output/
 /*.pdf
+
+# Third-party / client data never belongs in this repo: crawl exports, audit reports, reference audits, validation raw output.
+/docs/validation/*
+!/docs/validation/README.md
+/validation/
+/reference-audits/
+/reports/
+/crawl-exports/
+*.crawl.json
+*.memory.log

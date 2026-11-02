@@ -1001,7 +1001,7 @@ describe("runCrawl start URL redirects", () => {
 
   it("isTwinOrigin: www/non-www and http/https of one host are twins; other hosts, subdomains and ports are not", () => {
     const t = (a: string, b: string) => isTwinOrigin(new URL(a), new URL(b));
-    expect(t("https://example-client.ae/", "https://www.example-client.ae/")).toBe(true);
+    expect(t("https://example.com/", "https://www.example.com/")).toBe(true);
     expect(t("https://www.example.com/", "https://example.com/x")).toBe(true);
     expect(t("http://example.com/", "https://example.com/")).toBe(true);
     expect(t("http://example.com/", "https://www.example.com/")).toBe(true);

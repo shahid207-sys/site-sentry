@@ -4,7 +4,7 @@
 // joins an existing template when most of its paths are shared (Jaccard). The URL pattern (/blog/*, /services/*/*)
 // only breaks ties near the threshold; it never joins two layouts on its own.
 //
-// example-client.ae (Phase 2 validation) showed what splits real templates: wrapper <div>s that one page has and its
+// Real-site validation (Phase 2) showed what splits real templates: wrapper <div>s that one page has and its
 // sibling does not, and optional blocks inside an otherwise identical layout.
 import { createHash } from "node:crypto";
 import type { CheerioAPI } from "cheerio";
