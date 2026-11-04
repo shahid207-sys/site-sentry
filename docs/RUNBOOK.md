@@ -55,8 +55,8 @@ In PowerShell, set the variable first: `$env:ANALYSIS_WORKER = "off"`.
 ## AI analysis
 
 Off by default, per project: **Sites > the site > Edit site > AI analysis**. It runs as a queue job on the analysis worker
-after the rules finish, and only for audits started after it was turned on. Set `ANTHROPIC_API_KEY` in `.env.local` and
-restart the workers. Optional: `AI_ANALYSIS_MODEL` (default `claude-sonnet-5-5`), `AI_MAX_INPUT_TOKENS` (default 60,000,
+after the rules finish, and only for audits started after it was turned on. Set `GEMINI_API_KEY` in `.env.local` and
+restart the workers (or `AI_PROVIDER=anthropic` with `ANTHROPIC_API_KEY`). A 429 or 503 from Gemini is retried with backoff, by the wait it names. Optional: `AI_ANALYSIS_MODEL` (default `gemini-flash-latest`, or `claude-sonnet-5-5` for anthropic), `AI_MAX_INPUT_TOKENS` (default 60,000,
 the cap per audit), `AI_MAX_OUTPUT_TOKENS` (default 16,000).
 
 A finished analysis is cached by audit ID and is never paid for twice. To run it on an audit that already finished, while
@@ -80,5 +80,5 @@ On a small machine run one heavy process at a time: stop `dev:all` before `npm r
 | The audit stays "queued" | The crawl worker is not running | `npm run dev:all`, or check its `[crawl]` lines |
 | The crawl finished but "Analysis has not finished" stays | The analysis worker is not running | Check its `[analysis]` lines |
 | `relation ... does not exist` | The database is behind the code | `npm run db:migrate` |
-| AI analysis says "not configured" | `ANTHROPIC_API_KEY` is not set on the workers | Set it, restart, run it again from the overview |
+| AI analysis says "not configured" | The provider's API key is not set on the workers | Set it, restart, run it again from the overview |
 | Worker refuses to start: `CRAWLER_LOCAL_HOSTS` | That test-only setting is in your env | Remove it |

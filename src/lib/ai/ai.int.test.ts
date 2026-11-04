@@ -74,7 +74,7 @@ describe("runAiAnalysis", () => {
     expect(sent.pages[0]).toMatchObject({ role: "homepage", title: "Acme", navLinkCount: 3, ogTags: { "og:title": "Acme signs" } });
 
     const row = await readAiAnalysis(db, auditId);
-    expect(row?.model).toBe("claude-sonnet-5-5");
+    expect(row?.model).toBe("gemini-flash-latest");
     expect(row?.analysis?.executiveSummary.strengths).toHaveLength(1);
     expect(row?.analysis?.actionPlan.thisWeek.map((x) => x.text)).toEqual(["Rewrite duplicate titles."]);
     expect(row?.analysis?.actionPlan.thisQuarter).toEqual([]);
@@ -100,7 +100,7 @@ describe("runAiAnalysis", () => {
   it("sends nothing without a key or over the cap, and says so", { timeout: 120_000 }, async () => {
     const { crawlId, auditId } = await analysed();
     expect(await runAiAnalysis(db, crawlId, { client: null, env: {} })).toEqual({ status: "not_configured", cached: false });
-    expect((await readAiAnalysis(db, auditId))?.detail).toContain("ANTHROPIC_API_KEY");
+    expect((await readAiAnalysis(db, auditId))?.detail).toContain("GEMINI_API_KEY");
     const f = fake({}, 10_000);
     expect(await runAiAnalysis(db, crawlId, { client: f.client, env: { AI_MAX_INPUT_TOKENS: "100" } })).toEqual({ status: "over_budget", cached: false });
     expect(f.calls).toHaveLength(0);

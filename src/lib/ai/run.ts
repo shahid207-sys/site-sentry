@@ -2,11 +2,11 @@
 // grounding validator, one row per audit. A finished row is the cache: the job never pays for the same audit twice.
 import { sql } from "drizzle-orm";
 import type { Db } from "../db/client";
+import { aiKeyName, aiModel } from "./client";
 import { fitToBudget, buildAiInput, type AiInput } from "./input";
 import { groundAnalysis } from "./ground";
 import { AiOutputSchema, type StoredAiAnalysis, type AiStatus } from "./schema";
 
-export const DEFAULT_AI_MODEL = "claude-sonnet-5-5";
 export const DEFAULT_MAX_INPUT_TOKENS = 60_000;
 export const DEFAULT_MAX_OUTPUT_TOKENS = 16_000;
 
@@ -79,9 +79,9 @@ export async function runAiAnalysis(db: Db, crawlId: string, opts: { client: AiC
     log("ai.cached", { crawlId, auditId: c.audit_id });
     return { status: "done", cached: true };
   }
-  const model = env.AI_ANALYSIS_MODEL || DEFAULT_AI_MODEL;
+  const model = aiModel(env);
   if (!opts.client) {
-    await save(db, c.audit_id, crawlId, "not_configured", { model, detail: "ANTHROPIC_API_KEY is not set on the worker." });
+    await save(db, c.audit_id, crawlId, "not_configured", { model, detail: `${aiKeyName(env)} is not set on the worker.` });
     log("ai.not_configured", { crawlId });
     return { status: "not_configured", cached: false };
   }

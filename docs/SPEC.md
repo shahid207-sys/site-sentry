@@ -588,7 +588,7 @@ Also: a robots.txt blocking one section and GPTBot, a sitemap index with gzipped
 ## AI analysis
 
 Opt-in per project (`Site.aiAnalysis`), off by default. After the rules finish, a queue job (`src/lib/ai`) sends stored data
-only to the Anthropic API (`ANTHROPIC_API_KEY`; model `AI_ANALYSIS_MODEL`, default `claude-sonnet-5-5`): the coverage summary,
+only to the provider `AI_PROVIDER` names (`gemini`, the default, with `GEMINI_API_KEY`, or `anthropic` with `ANTHROPIC_API_KEY`; model `AI_ANALYSIS_MODEL`, default `gemini-flash-latest` or `claude-sonnet-5-5`), under one validator: the coverage summary,
 the top issue groups with evidence, and for the homepage plus one sample page per top-10 template the title, description,
 headings outline, trimmed main text, nav link count and OG tags. The site is never fetched for it.
 

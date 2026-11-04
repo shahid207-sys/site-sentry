@@ -42,7 +42,7 @@ function Points({ title, items }: { title: string; items: { text: string; citati
 
 const STATUS: Partial<Record<StoredAiAnalysis["status"], { tone: "info" | "warn"; title: string; text: string }>> = {
   queued: { tone: "info", title: "Queued", text: "The analysis worker will run this after its current job." },
-  not_configured: { tone: "warn", title: "Not configured", text: "ANTHROPIC_API_KEY is not set on the workers, so nothing was sent." },
+  not_configured: { tone: "warn", title: "Not configured", text: "The AI provider's API key is not set on the workers, so nothing was sent." },
   over_budget: { tone: "warn", title: "Over the input cap", text: "Even the smallest input is over AI_MAX_INPUT_TOKENS, so nothing was sent." },
   failed: { tone: "warn", title: "Failed", text: "The analysis did not finish." },
 };
