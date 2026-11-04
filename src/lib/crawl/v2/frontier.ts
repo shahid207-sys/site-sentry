@@ -20,6 +20,16 @@ type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 type Exec = Db | Tx;
 
 export const DEFAULT_LEASE_MS = 60_000;
+/**
+ * Non-HTML answers per crawl (feeds, JSON, images and files linked as pages), counted apart from the page budget. Only
+ * the answer shows what a URL is, so a fetch is charged as a page at commit and moved here when it comes back non-HTML.
+ * Once this is spent, URLs that look non-HTML by extension are not requested; one that does not look it is only found
+ * out by asking, and stays charged as a page. A crawl's `config.nonHtmlBudget` overrides it (tests).
+ */
+export const NON_HTML_BUDGET = 1_000;
+/** A URL whose path ends in a file type that is not a page. */
+const NON_HTML_PATH = String.raw`\.(webp|jpe?g|png|gif|svg|ico|avif|bmp|tiff?|pdf|zip|gz|rar|7z|mp3|mp4|m4a|webm|mov|avi|wav|ogg|woff2?|ttf|otf|eot|css|js|json|xml|rss|csv|docx?|xlsx?|pptx?)(\?.*)?$`;
+const nonHtmlSpent = (k: string) => sql.raw(`(${k}.budget is not null and ${k}.non_html_fetches >= coalesce((${k}.config->>'nonHtmlBudget')::int, ${NON_HTML_BUDGET}))`);
 
 export interface NewUrl {
   url: string;
@@ -163,6 +173,8 @@ export async function reserve(db: Db, crawlId: string, owner: string, limit: num
       where crawl_id = ${crawlId}::uuid and state = 'discovered'
         -- Once the budget is spent nothing more is handed out; the leftovers are finalised as budget_exhausted.
         and exists (select 1 from crawls k where k.id = ${crawlId}::uuid and (k.budget is null or k.fetches_committed < k.budget))
+        -- Past the non-HTML budget, what looks non-HTML waits for finalizeUrls.
+        and not (normalised_url ~* ${NON_HTML_PATH} and exists (select 1 from crawls k where k.id = ${crawlId}::uuid and ${nonHtmlSpent("k")}))
         and (${maxDepth}::int is null or depth is null or depth <= ${maxDepth}::int or discovered_via && array['seed','sitemap']::text[])
         -- Sitemap-only rows (null depth) wait until no row with a link depth is left to claim. Their children count
         -- from depth 0, so fetching one early would give pages that links do reach a lower depth than their real
@@ -290,6 +302,11 @@ async function writeResult(db: Db, crawlId: string, urlId: number, token: string
       where id = ${urlId} and state = 'fetching' and claim_token = ${token}
       returning id`);
     if (!done.rows.length) throw new ClaimLostError(urlId);
+    // Not a page: its charge moves to the non-HTML budget and the page budget gets the slot back.
+    if (result.state === "non_html") {
+      await tx.execute(sql`update crawls k set fetches_committed = greatest(0, fetches_committed - 1), non_html_fetches = non_html_fetches + 1
+        where k.id = ${crawlId}::uuid and not ${nonHtmlSpent("k")}`);
+    }
     const s = result.snapshot;
     if (s) {
       await insertSnapshot(tx, crawlId, urlId, s);
@@ -382,6 +399,12 @@ export async function finalizeUrls(db: Db, crawlId: string, outcome: "completed"
           updated_at = now()
         where crawl_id = ${crawlId}::uuid and state = 'discovered' and depth > ${maxDepth}::int and not (discovered_via && array['seed','sitemap']::text[])`);
     }
+    await tx.execute(sql`update crawl_urls u set state = 'budget_exhausted',
+        reason = 'The crawl''s non-HTML budget of ' || coalesce((k.config->>'nonHtmlBudget')::int, ${NON_HTML_BUDGET}) || ' was used up before this URL was fetched.',
+        lease_owner = null, lease_until = null, updated_at = now()
+      from crawls k
+      where u.crawl_id = ${crawlId}::uuid and k.id = u.crawl_id and u.state in ('discovered', 'queued')
+        and u.normalised_url ~* ${NON_HTML_PATH} and ${nonHtmlSpent("k")}`);
     await tx.execute(sql`update crawl_urls set state = 'budget_exhausted',
         reason = ${`The crawl's URL budget${budget !== null ? ` of ${budget}` : ""} was used up before this URL was fetched.`},
         lease_owner = null, lease_until = null, updated_at = now()

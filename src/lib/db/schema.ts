@@ -41,6 +41,8 @@ export const crawls = pgTable(
     maxDepth: integer("max_depth"),
     /** Fetches committed against the budget (incremented in the commit-to-send transaction). */
     fetchesCommitted: integer("fetches_committed").notNull().default(0),
+    /** Non-HTML answers, moved here from fetches_committed: they have their own budget (frontier.ts NON_HTML_BUDGET). */
+    nonHtmlFetches: integer("non_html_fetches").notNull().default(0),
     /** robots.txt as fetched: { url, status, outcome, body, sitemaps, crawlDelay }. */
     robots: jsonb("robots"),
     /** One record per sitemap document read, failed or skipped. */

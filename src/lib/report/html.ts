@@ -246,7 +246,7 @@ function limitations(d: ReportData) {
     <tr class="total"><td>Discovered</td><td class="n">${m("coverage.total", c.total)}</td></tr>
   </tbody></table>
   <ul>
-    <li>Crawl status: ${esc(d.overview.status)}; ${m("crawl.fetchesCommitted", d.crawl.fetchesCommitted)} fetches${d.crawl.budget !== null ? ` of a ${esc(d.crawl.budget)}-fetch budget` : ""}${d.crawl.maxDepth !== null ? `; links followed to depth ${esc(d.crawl.maxDepth)}` : ""}.</li>
+    <li>Crawl status: ${esc(d.overview.status)}; ${m("crawl.fetchesCommitted", d.crawl.fetchesCommitted)} page fetches and ${m("crawl.nonHtmlFetches", d.crawl.nonHtmlFetches)} non-HTML fetches${d.crawl.budget !== null ? ` of a ${esc(d.crawl.budget)}-fetch budget` : ""}${d.crawl.maxDepth !== null ? `; links followed to depth ${esc(d.crawl.maxDepth)}` : ""}.</li>
     <li>robots.txt: ${robots ? `${esc(robots.outcome ?? "not read")}${robots.status ? ` (HTTP ${esc(robots.status)})` : ""}${robots.reason ? `: ${esc(robots.reason)}` : ""}` : "not read"}.</li>
     ${res?.external ? `<li>External links: ${m("resources.external.planned", res.external.planned)} of ${m("resources.external.found", res.external.found)} checked (budget ${esc(res.external.budget)}).</li>` : ""}
     ${res?.images ? `<li>Images: ${m("resources.images.planned", res.images.planned)} of ${m("resources.images.found", res.images.found)} checked (budget ${esc(res.images.budget)}).</li>` : ""}

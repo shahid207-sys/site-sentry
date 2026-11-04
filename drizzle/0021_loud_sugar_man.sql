@@ -1,0 +1,1 @@
+ALTER TABLE "crawls" ADD COLUMN "non_html_fetches" integer DEFAULT 0 NOT NULL;

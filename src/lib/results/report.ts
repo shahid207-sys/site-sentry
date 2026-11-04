@@ -50,7 +50,7 @@ export interface ReportGroup extends IssueGroupRow {
 export interface ReportData {
   generatedAt: string;
   overview: CrawlOverview;
-  crawl: { budget: number | null; maxDepth: number | null; fetchesCommitted: number; robots: { url?: string; status?: number | null; outcome?: string; reason?: string } | null; resources: Record<string, unknown> | null; sitemaps: { url?: string }[] };
+  crawl: { budget: number | null; maxDepth: number | null; fetchesCommitted: number; nonHtmlFetches: number; robots: { url?: string; status?: number | null; outcome?: string; reason?: string } | null; resources: Record<string, unknown> | null; sitemaps: { url?: string }[] };
   /** Against the previous analysed audit of the project; null when this is the first. */
   comparison: Comparison | null;
   groups: ReportGroup[];
@@ -64,11 +64,12 @@ export interface ReportData {
 
 export async function reportData(db: Exec, crawlId: string, branding: Branding = {}): Promise<ReportData> {
   const overview = await crawlOverview(db, crawlId);
-  const c = (await db.execute(sql`select audit_id, budget, max_depth, fetches_committed, robots, resources, sitemaps from crawls where id = ${crawlId}::uuid`)).rows[0] as {
+  const c = (await db.execute(sql`select audit_id, budget, max_depth, fetches_committed, non_html_fetches, robots, resources, sitemaps from crawls where id = ${crawlId}::uuid`)).rows[0] as {
     audit_id: string;
     budget: number | null;
     max_depth: number | null;
     fetches_committed: number;
+    non_html_fetches: number;
     robots: ReportData["crawl"]["robots"];
     resources: Record<string, unknown> | null;
     sitemaps: { url?: string }[] | null;
@@ -96,7 +97,7 @@ export async function reportData(db: Exec, crawlId: string, branding: Branding =
   return {
     generatedAt: new Date().toISOString(),
     overview,
-    crawl: { budget: c.budget, maxDepth: c.max_depth, fetchesCommitted: Number(c.fetches_committed), robots: c.robots, resources: c.resources, sitemaps: c.sitemaps ?? [] },
+    crawl: { budget: c.budget, maxDepth: c.max_depth, fetchesCommitted: Number(c.fetches_committed), nonHtmlFetches: Number(c.non_html_fetches), robots: c.robots, resources: c.resources, sitemaps: c.sitemaps ?? [] },
     comparison: base ? await compareCrawls(db, base, crawlId) : null,
     groups,
     ruleRuns: (await ruleRunList(db, crawlId)).map((r) => ({ ...r, title: RULE_TITLES[r.ruleId] ?? r.ruleId })),
