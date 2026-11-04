@@ -471,18 +471,19 @@ const LNK017 = siteRule("links")({
   impact: 2,
   needs: ["raw", "graph"],
   evaluate({ site }) {
-    const out: Finding[] = [];
     /** The URL really is the page's address: answered 200 and names no other canonical. A bad target is IDX-012/013/014's. */
     const live = (url: string) => {
       const t = site.byUrl.get(url);
       return !!t?.page && t.statusCode === 200 && (!t.page.canonical || t.page.canonical === url) && !t.page.noindex;
     };
+    // Every other URL that internal links use for a destination, and how it gets there.
+    const aliases = new Map<string, { url: string; via: "redirect" | "canonical"; pages: number }[]>();
     for (const u of site.urls) {
-      const linked = u.directLinks ?? 0;
-      if (linked < 1) continue;
+      const pages = u.directLinks ?? 0;
+      if (pages < 1) continue;
       let destination: string | null = null;
-      let via = "";
-      if (u.state === "redirected" && u.redirectTarget) [destination, via] = [u.redirectTarget, "redirect"];
+      let via: "redirect" | "canonical" = "redirect";
+      if (u.state === "redirected" && u.redirectTarget) destination = u.redirectTarget;
       // A parameter URL canonicalising to its base is the normal way to handle one, not a second URL for the page.
       else if (u.page?.canonical && u.page.canonical !== u.url && !new URL(u.url).search) [destination, via] = [u.page.canonical, "canonical"];
       if (!destination || destination === u.url || !live(destination)) continue;
@@ -494,8 +495,15 @@ const LNK017 = siteRule("links")({
       } catch {
         // an unparseable target is another rule's finding
       }
-      if (!sameSite) continue;
-      out.push(finding(LNK017, u.url, `${linked} page(s) link to this URL, but the page's URL is ${destination}.`, { linked: u.url, destination, via, pages: linked }));
+      if (sameSite) aliases.set(destination, [...(aliases.get(destination) ?? []), { url: u.url, via, pages }]);
+    }
+    const out: Finding[] = [];
+    for (const [destination, forms] of aliases) {
+      const direct = site.byUrl.get(destination)?.directLinks ?? 0;
+      // One redirected URL beside the real one is a single stale link: LNK-002 reports it, on the page to fix.
+      if (forms.length + (direct > 0 ? 1 : 0) < 2 || (forms.length === 1 && forms[0].via === "redirect")) continue;
+      const shown = [...forms].sort((a, b) => b.pages - a.pages || (a.url < b.url ? -1 : 1));
+      out.push(finding(LNK017, destination, `Internal links reach this page by ${forms.length + (direct > 0 ? 1 : 0)} different URLs: ${shown.slice(0, 3).map((f) => f.url).join(", ")}${direct > 0 ? " and this URL itself" : ""}.`, { destination, directLinks: direct, forms: shown.slice(0, 10), formCount: forms.length }));
     }
     return out;
   },

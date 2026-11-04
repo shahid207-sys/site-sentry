@@ -318,7 +318,10 @@ const tls = (daysLeft: number) => probe("tls_cert", U("/"), { status: null, cert
 const exposed = (kind: "env_file" | "git_head", secret: ProbeRecord["secret"]) => probe(kind, U(kind === "env_file" ? "/.env" : "/.git/HEAD"), { contentType: "text/plain", secret });
 /** pageIssues as analyse.ts tallies them: rule → template → pages. */
 const issues = (ruleId: string, template: string, count: number) => new Map([[ruleId, new Map([[template, { count, sample: [U("/p/1/")] }]])]]);
-const templated = (n: number, template: string) => Array.from({ length: n }, (_, i) => ({ ...facts(pageFrom(`/p/${i}/`), 100 + i), page: { ...facts(pageFrom(`/p/${i}/`), 100 + i).page!, template } }));
+const templated = (n: number, template: string) => Array.from({ length: n }, (_, i) => {
+    const f = facts(pageFrom(`/p/${i}/`), 100 + i);
+    return { ...f, page: { ...f.page!, template } };
+  });
 const HISTORY = (id: string, pos: () => Partial<HistoryCtx>, neg: () => Partial<HistoryCtx>): Case => ({
   pos: () => runHistory(id, pos()),
   neg: () => runHistory(id, neg()),
@@ -504,8 +507,9 @@ const CASES: Record<string, Case> = {
   ),
   "LNK-017": SITE(
     "LNK-017",
+    () => [cleanSite({ ...redirect("/faq/", 301, "/a/", 10), directLinks: 3 }, { ...redirect("/faqs/", 301, "/a/", 11), directLinks: 1 })],
+    // One redirected URL, even beside the real one, is LNK-002's.
     () => [cleanSite({ ...redirect("/faq/", 301, "/a/", 10), directLinks: 3 })],
-    () => [cleanSite(redirect("/faq/", 301, "/a/", 10))],
   ),
   "IDX-033": SITE("IDX-033", () => [cleanSite(pageFrom("/cart/"))], () => [cleanSite(pageFrom("/cart/", { head: '<meta name="robots" content="noindex">' }))]),
   "IDX-034": SITE(

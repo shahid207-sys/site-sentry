@@ -210,8 +210,8 @@ const INDEX: Defect[] = [
   { name: "no canonical", expect: ["IDX-011"], apply: (p) => void (p.canonical = "") },
   { name: "canonical to a 404", expect: ["IDX-012", "IDX-029"], apply: (p, c) => void (p.canonical = `<link rel="canonical" href="${c.origin}/index/gone-1">`) },
   { name: "canonical chain start", expect: ["IDX-013", "IDX-029"], apply: (p, c) => void (p.canonical = `<link rel="canonical" href="${c.origin}${nextIndexPage(c.path)}">`) },
-  { name: "canonical chain middle", expect: ["IDX-029", "LNK-017"], apply: (p, c) => void (p.canonical = `<link rel="canonical" href="${c.origin}${nextIndexPage(c.path)}">`) },
-  { name: "canonical chain end (self-canonical)", expect: [], apply: () => {} },
+  { name: "canonical chain middle", expect: ["IDX-029"], apply: (p, c) => void (p.canonical = `<link rel="canonical" href="${c.origin}${nextIndexPage(c.path)}">`) },
+  { name: "canonical chain end (self-canonical)", expect: ["LNK-017"], apply: () => {} },
   { name: "canonical to a noindexed page", expect: ["IDX-014", "IDX-029"], apply: (p, c) => void (p.canonical = `<link rel="canonical" href="${c.origin}${firstNoindex()}">`) },
   { name: "two canonicals", expect: ["IDX-015"], apply: (p, c) => void (p.canonical += `<link rel="canonical" href="${c.origin}/index/">`) },
   {

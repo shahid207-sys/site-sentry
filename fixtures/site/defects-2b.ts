@@ -5,7 +5,7 @@
 // Graph structure (who links to whom) lives in server.ts: every page of an index-linked section links to its previous
 // and next page in a <nav>, so each has two inbound links and LNK-005 stays silent unless a page is meant to fire it.
 import type { Defect, RuleId } from "./defects";
-import { EXT_HOSTS, manifestPaths, REDIRECTS, ROBOTS_BLOCKED_PREFIX, SECTIONS, sectionPaths } from "./definition";
+import { EXT_HOSTS, manifestPaths, ROBOTS_BLOCKED_PREFIX, SECTIONS, sectionPaths } from "./definition";
 import { links, organization, png, SITE_NAME, type Parts } from "./pages";
 import { paragraph, topic } from "./text";
 
@@ -291,10 +291,10 @@ const INTL: Defect[] = [
   { name: "no self reference", expect: ["I18N-004"], apply: hreflang([["de", "/intl/p-9"], ["x-default", "/intl/p-9"]]) },
   { name: "self-referencing partner", expect: [], apply: hreflang([["de", "/intl/p-9"], ["en", "/intl/p-8"], ["x-default", "/intl/p-9"]]) },
   { name: "no x-default", expect: ["I18N-005"], apply: hreflang([["en", "/intl/p-10"]]) },
-  { name: "target canonicalised elsewhere (source)", expect: ["I18N-006"], apply: hreflang([["en", "/intl/p-11"], ["de", "/intl/p-12"], ["x-default", "/intl/p-11"]]) },
+  { name: "target canonicalised elsewhere (source)", expect: ["I18N-006", "LNK-017"], apply: hreflang([["en", "/intl/p-11"], ["de", "/intl/p-12"], ["x-default", "/intl/p-11"]]) },
   {
     name: "target canonicalised elsewhere (target)",
-    expect: ["IDX-029", "I18N-006", "LNK-017"], // a sitemap URL that canonicalises elsewhere, and its own hreflang names itself
+    expect: ["IDX-029", "I18N-006"], // a sitemap URL that canonicalises elsewhere, and its own hreflang names itself
     apply: (p, c) => {
       hreflang([["de", "/intl/p-12"], ["en", "/intl/p-11"], ["x-default", "/intl/p-11"]])(p);
       p.canonical = `<link rel="canonical" href="${c.origin}/intl/p-11">`;
@@ -374,11 +374,6 @@ export function structuralExpectations(): Map<string, RuleId[]> {
   for (const i of range(1, 10)) out.set(`/links/missing-${i}`, ["IDX-001"]);
   out.set("/index/", ["LNK-001"]); // it links the /index/ extras, two of them 404 and one 500
   out.set("/redirects/", ["LNK-002"]); // it links every redirect
-  // The hub links each redirect directly, so a hop that lands on a live page is a second URL for that page. A hop that
-  // lands on another hop has no live destination (LNK-007 and the chain rules own those).
-  for (const [path, spec] of Object.entries(REDIRECTS)) {
-    if ("status" in spec && !(spec.to in REDIRECTS)) out.set(path, [...(out.get(path) ?? []), "LNK-017"]);
-  }
   out.set(INTL_MISSING, ["IDX-001"]);
   // The index lists all 299 products, the listing's next-page and colour links, plus the header and nav: over 300.
   out.set("/products/", ["IMG-007", "LNK-008"]);
