@@ -198,6 +198,8 @@ Type: D = verified defect, H = heuristic, A = advisory.
 | IDX-030 | Sitemap over 50,000 URLs or 50 MB | D | 3 |
 | IDX-031 | Sitemap lastmod in the future or identical on all URLs | H | 1 |
 | IDX-032 | Indexable URL missing from sitemap | H | 2 |
+| IDX-033 | Commerce utility pages indexable (cart, checkout, my-account, wishlist, compare) | D | 3 |
+| IDX-034 | Filter or taxonomy pages indexable without a canonical to the parent | H | 3 |
 
 **AI-search readiness (AIS)**
 
@@ -232,6 +234,10 @@ Type: D = verified defect, H = heuristic, A = advisory.
 | META-017 | og:image unreachable or under 200 px | D | 1 |
 | META-018 | Missing Twitter card | A | 1 |
 | META-019 | Missing favicon | D | 1 |
+| META-020 | Title all caps, or no brand name | H | 2 |
+| META-021 | Description is a keyword list or has no call to action | A | 1 |
+| META-022 | og:image aspect ratio does not fit the twitter:card type | H | 1 |
+| META-023 | Generator meta exposes the CMS and version | D | 1 |
 
 **Headings and content (CNT)**
 
@@ -252,6 +258,12 @@ Type: D = verified defect, H = heuristic, A = advisory.
 | CNT-013 | Target keyword absent from title/H1/first 100 words (only when user mapped a keyword) | H | 2 |
 | CNT-014 | Two pages mapped to the same keyword (cannibalisation) | H | 3 |
 | CNT-015 | Readability grade far above audience setting | A | 1 |
+| CNT-016 | Fragmented headings: one phrase split across adjacent heading tags | H | 2 |
+| CNT-017 | Two or more H2s before the first H1, or no H1 with multiple H2s | H | 2 |
+| CNT-018 | Keyword stuffing: a 2-4 word phrase far above the normal rate, or repeated in bold | H | 3 |
+| CNT-019 | Stale content: newest article older than 180 days | H | 2 |
+| CNT-020 | Brand name differs across og:site_name, title suffix, logo alt and schema | H | 2 |
+| CNT-021 | Same phone or email written in different formats across the page and schema | H | 1 |
 
 **Links and architecture (LNK)**
 
@@ -271,6 +283,9 @@ Type: D = verified defect, H = heuristic, A = advisory.
 | LNK-012 | Low internal PageRank for high-value page | H | 3 |
 | LNK-013 | Pagination without crawlable next links | H | 2 |
 | LNK-014 | Faceted URLs creating crawl traps (over N parameter combos) | H | 3 |
+| LNK-015 | Navigation bloat: over 60 nav links, or the same nav rendered 2+ times | H | 2 |
+| LNK-016 | CTA mismatch: conversion link text points to the homepage or a non-matching page | H | 3 |
+| LNK-017 | Inconsistent internal URLs for the same destination | H | 2 |
 
 **Internationalisation (I18N)**
 
@@ -282,6 +297,8 @@ Type: D = verified defect, H = heuristic, A = advisory.
 | I18N-004 | Missing self-referencing hreflang | D | 2 |
 | I18N-005 | Missing x-default | A | 1 |
 | I18N-006 | hreflang points to non-canonical URL | D | 3 |
+| I18N-007 | Mixed-language site without language handling | H | 3 |
+| I18N-008 | Percent-encoded non-Latin slugs mixed with Latin slugs in one section | H | 2 |
 
 **Images and media (IMG)**
 
@@ -313,6 +330,7 @@ Type: D = verified defect, H = heuristic, A = advisory.
 | SD-008 | BreadcrumbList missing on deep pages | A | 1 |
 | SD-009 | Product without offers/price | D | 3 |
 | SD-010 | Deprecated type used (e.g. HowTo, FAQ for non-eligible sites) | A | 1 |
+| SD-011 | Self-serving AggregateRating or Review on Organization or LocalBusiness | H | 3 |
 
 **Performance and UX (PERF) — lab data labelled "lab", CrUX labelled "field"**
 

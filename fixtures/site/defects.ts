@@ -3,7 +3,7 @@
 // sitemap URL is also IDX-029); they are not computed from rule code, so the gate compares two independent things.
 import { NOINDEX_COUNT, noindexPaths, REDIRECTS, SECTIONS, sectionPaths, type RedirectSpec } from "./definition";
 import { DEFECTS_2B, EXTRAS_2B, structuralExpectations } from "./defects-2b";
-import { cleanParts, OG_IMAGE, type Parts } from "./pages";
+import { cleanParts, OG_IMAGE, type Parts, SITE_NAME } from "./pages";
 import { paragraph, topic } from "./text";
 
 export type RuleId = string;
@@ -108,11 +108,11 @@ const META: Defect[] = [
   { name: "empty description", expect: ["META-008"], apply: (p) => void (p.description = '<meta name="description" content="">') },
   { name: "duplicate description A", expect: ["META-009"], apply: (p) => dupDescription(p) },
   { name: "duplicate description B", expect: ["META-009"], apply: (p) => dupDescription(p) },
-  { name: "short description", expect: ["META-010"], apply: (p) => void (p.description = '<meta name="description" content="A short description.">') },
+  { name: "short description", expect: ["META-010"], apply: (p) => void (p.description = '<meta name="description" content="A short read.">') },
   {
     name: "long description",
     expect: ["META-010"],
-    apply: (p, c) => void (p.description = `<meta name="description" content="${paragraph(`longdesc:${c.path}`, 60).replace(/"/g, "")}">`),
+    apply: (p, c) => void (p.description = `<meta name="description" content="${paragraph(`longdesc:${c.path}`, 60).replace(/"/g, "")} Learn more.">`),
   },
   { name: "no lang", expect: ["META-011"], apply: (p) => void (p.lang = "") },
   { name: "invalid lang", expect: ["META-012"], apply: (p) => void (p.lang = ' lang="english"') },
@@ -132,6 +132,31 @@ const META: Defect[] = [
   { name: "no twitter:card", expect: ["META-018"], apply: (p) => void (p.twitter = "") },
   // Negative case from the real-site validation (META-012 noise): acronym-dense English declared as en.
   { name: "acronym-dense English", expect: [], apply: (p) => ((p.lang = ' lang="en"'), (p.text = `<p>${ACRONYM_PROSE}</p>`)) },
+  // Expert metadata rules (expert.ts).
+  {
+    name: "all-caps title",
+    expect: ["META-020"],
+    apply: (p, c) => {
+      p.title = `<title>CHOOSING GARDEN TOOLS THAT LAST ${c.path.toUpperCase()}</title>`;
+      p.h1 = "<h1>Choosing garden tools that last</h1>";
+    },
+  },
+  { name: "title without the brand", expect: ["META-020"], apply: (p) => void (p.head += `<meta property="og:site_name" content="${SITE_NAME}">`) },
+  {
+    name: "title names the brand (negative)",
+    expect: [],
+    apply: (p, c) => {
+      p.head += `<meta property="og:site_name" content="${SITE_NAME}">`;
+      p.title = `<title>Choosing garden tools ${c.path} | ${SITE_NAME}</title>`;
+      p.h1 = "<h1>Choosing garden tools</h1>";
+    },
+  },
+  { name: "keyword-list description", expect: ["META-021"], apply: (p, c) => void (p.description = `<meta name="description" content="garden spades | garden forks | hand trowels | pruning shears | watering cans ${c.path}">`) },
+  { name: "description without a call to action", expect: ["META-021"], apply: (p, c) => void (p.description = `<meta name="description" content="A short history of the garden spade in northern Europe over two centuries, with notes on ${c.path}.">`) },
+  { name: "og:image too square for summary_large_image", expect: ["META-022"], apply: (p) => void (p.head += '<meta property="og:image:width" content="800"><meta property="og:image:height" content="800">') },
+  { name: "og:image fits summary_large_image (negative)", expect: [], apply: (p) => void (p.head += '<meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">') },
+  { name: "generator exposes a version", expect: ["META-023"], apply: (p) => void (p.head += '<meta name="generator" content="WordPress 6.4.2">') },
+  { name: "generator without a version (negative)", expect: [], apply: (p) => void (p.head += '<meta name="generator" content="Hugo">') },
 ];
 
 function dupTitle(p: Parts, path: string) {
@@ -139,7 +164,7 @@ function dupTitle(p: Parts, path: string) {
   p.h1 = `<h1>${topic(path)} shared title</h1>`;
 }
 function dupDescription(p: Parts) {
-  p.description = '<meta name="description" content="One description shared by two fixture pages, which is a duplicate on purpose here.">';
+  p.description = '<meta name="description" content="One description shared by two fixture pages, which is a duplicate on purpose here. Learn more.">';
 }
 function titleIsH1(p: Parts, path: string) {
   p.title = `<title>${topic(path)} template page</title>`;
@@ -167,6 +192,10 @@ export const INDEX_EXTRAS: Extra[] = [
   { path: "/index/case-a", status: 200, expect: ["IDX-032"] },
   { path: "/index/CASE-A", status: 200, expect: ["IDX-023", "IDX-032"] },
   { path: "/index/param?sort=asc", status: 200, expect: ["IDX-024", "IDX-011", "IDX-032"], apply: (p) => void (p.canonical = "") },
+  // Expert indexability rules (expert.ts): a cart that can be indexed, and one that cannot (negative); a filter page.
+  { path: "/index/cart/", status: 200, expect: ["IDX-033", "IDX-032"] },
+  { path: "/index/wishlist/", status: 200, expect: [], apply: (p) => void (p.head += '<meta name="robots" content="noindex">') },
+  { path: "/index/shop?filter_colour=red", status: 200, expect: ["IDX-034", "IDX-032"] },
 ];
 
 /** Path of a noindexed /index/ page, used as a canonical target. */
@@ -181,7 +210,7 @@ const INDEX: Defect[] = [
   { name: "no canonical", expect: ["IDX-011"], apply: (p) => void (p.canonical = "") },
   { name: "canonical to a 404", expect: ["IDX-012", "IDX-029"], apply: (p, c) => void (p.canonical = `<link rel="canonical" href="${c.origin}/index/gone-1">`) },
   { name: "canonical chain start", expect: ["IDX-013", "IDX-029"], apply: (p, c) => void (p.canonical = `<link rel="canonical" href="${c.origin}${nextIndexPage(c.path)}">`) },
-  { name: "canonical chain middle", expect: ["IDX-029"], apply: (p, c) => void (p.canonical = `<link rel="canonical" href="${c.origin}${nextIndexPage(c.path)}">`) },
+  { name: "canonical chain middle", expect: ["IDX-029", "LNK-017"], apply: (p, c) => void (p.canonical = `<link rel="canonical" href="${c.origin}${nextIndexPage(c.path)}">`) },
   { name: "canonical chain end (self-canonical)", expect: [], apply: () => {} },
   { name: "canonical to a noindexed page", expect: ["IDX-014", "IDX-029"], apply: (p, c) => void (p.canonical = `<link rel="canonical" href="${c.origin}${firstNoindex()}">`) },
   { name: "two canonicals", expect: ["IDX-015"], apply: (p, c) => void (p.canonical += `<link rel="canonical" href="${c.origin}/index/">`) },
@@ -254,6 +283,15 @@ const CONTENT: Defect[] = [
   // A 520 KB inline state blob, as frameworks embed: over 500 KB, and mostly not text.
   { name: "HTML over 500 KB", expect: ["PERF-006", "CNT-012"], apply: (p) => void (p.body += `<script type="application/json" id="state">${JSON.stringify({ items: "x".repeat(520 * 1024) })}</script>`) },
   { name: "over 1,500 elements", expect: ["PERF-010"], apply: (p) => void (p.body += `<ul>${Array.from({ length: 1600 }, (_, i) => `<li>Item ${i + 1}</li>`).join("")}</ul>`) },
+  // Expert content rules (expert.ts).
+  { name: "phrase split across headings", expect: ["CNT-016"], apply: (p) => void (p.body += "<h2>Print</h2><h2>your vision</h2>") },
+  { name: "short headings that are labels, not a phrase (negative)", expect: [], apply: (p) => void (p.body += "<h2>Spades</h2><h2>Forks</h2>") },
+  { name: "H2 slider titles before the H1", expect: ["CNT-017"], apply: (p) => void (p.h1 = `<h2>Slide one</h2><h2>Slide two</h2>${p.h1}`) },
+  { name: "one H2 before the H1 (negative)", expect: [], apply: (p) => void (p.h1 = `<h2>Slide one</h2>${p.h1}`) },
+  { name: "keyword stuffing", expect: ["CNT-018"], apply: (p) => void (p.text += `<p>${"Buy cheap spades online today. ".repeat(20)}</p>`) },
+  { name: "keyword repeated in bold", expect: ["CNT-018"], apply: (p) => void (p.text += "<p><strong>garden spade sale</strong> and <b>garden spade sale</b> and <strong>garden spade sale</strong></p>") },
+  { name: "one phone in two formats", expect: ["CNT-021"], apply: (p) => void (p.body += "<p>Call +44 20 7946 0000 or 020 7946 0000.</p>") },
+  { name: "one phone in one format (negative)", expect: [], apply: (p) => void (p.body += "<p>Call +44 20 7946 0000 today.</p>") },
 ];
 
 /** Page path → defect. Defects take the first pages of their section (p-1, p-2…); the rest stay clean. */

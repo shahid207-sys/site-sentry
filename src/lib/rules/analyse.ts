@@ -55,7 +55,7 @@ export interface CrawlRow {
   site_origin: string;
   status: string;
   kind?: CrawlKind;
-  config: { aiCrawlers?: "allow" | "block"; keyPages?: string[]; verify?: VerifyConfig; render?: RenderMode };
+  config: { aiCrawlers?: "allow" | "block"; keyPages?: string[]; verify?: VerifyConfig; render?: RenderMode; brand?: string };
   robots: RobotsRecord | null;
   sitemaps: (SitemapDocRecord | { started: string })[];
   probes: ProbeRecord[];
@@ -95,6 +95,7 @@ export function crawlView(row: CrawlRow, extra: Partial<Pick<CrawlView, "complet
     robotsAllows: (url, agent) => (parsed ? isAllowed(parsed, agent, url).allowed : outcome === "allow_all" ? true : outcome === "disallow_all" ? false : null),
     sitemaps: (row.sitemaps ?? []).filter((d): d is SitemapDocRecord => "url" in d),
     probes: row.probes ?? [],
+    brand: row.config?.brand?.trim() || null,
     keyPages: row.config?.keyPages?.length ? row.config.keyPages.map(normalised) : null,
     complete: extra.complete ?? row.status === "completed",
     resources: extra.resources ?? { links: new Map(), images: new Map() },
@@ -222,6 +223,8 @@ async function templates(db: Exec, crawlId: string, batch: number): Promise<void
   }
 }
 
+type UrlLanguage = NonNullable<NonNullable<UrlFacts["page"]>["language"]>;
+
 async function loadSiteView(db: Exec, crawlId: string, batch: number): Promise<SiteView> {
   const urls: UrlFacts[] = [];
   for (let after = 0; ; ) {
@@ -229,8 +232,10 @@ async function loadSiteView(db: Exec, crawlId: string, batch: number): Promise<S
       select u.id, u.normalised_url, u.state, u.status_code, u.redirect_target, u.discovered_via, u.inbound, u.link_depth, u.pagerank,
         s.facts is not null as html,
         (select coalesce(jsonb_agg(jsonb_build_object('lang', l->>'hreflang', 'href', l->>'href')), '[]'::jsonb) from jsonb_array_elements(s.links) l where l->>'via' = 'hreflang') as hreflang, s.robots, s.canonicals, s.title, s.description, s.text_hash, s.simhash, coalesce(u.template_id, s.template_fingerprint) as template_fingerprint, s.word_count,
-        s.facts->'og'->>'image' as og_image, s.facts->'icons' as icons,
-        (select e->>'text' from jsonb_array_elements(s.outline) e where e->>'level' = '1' limit 1) as h1
+        s.facts->'og'->>'image' as og_image, s.facts->'icons' as icons, s.language,
+        s.facts->>'ogLocale' as og_locale, s.facts->>'published' as published, s.facts->>'bodyClass' as body_class,
+        (select e->>'text' from jsonb_array_elements(s.outline) e where e->>'level' = '1' limit 1) as h1,
+        (select count(distinct e.from_url)::int from url_edges e where e.crawl_id = u.crawl_id and e.to_url = u.normalised_url and e.via = 'link' and e.from_url <> u.normalised_url) as direct_links
       from crawl_urls u left join page_snapshots s on s.url_id = u.id
       where u.crawl_id = ${crawlId}::uuid and u.id > ${after} order by u.id limit ${batch}`);
     for (const x of r.rows as Record<string, unknown>[]) {
@@ -256,9 +261,14 @@ async function loadSiteView(db: Exec, crawlId: string, batch: number): Promise<S
               ogImage: (x.og_image as string | null) ?? null,
               icons: (x.icons as string[] | null) ?? [],
               hreflang: (x.hreflang as Hreflang[] | null) ?? [],
+              language: (x.language as UrlLanguage | null) ?? null,
+              ogLocale: (x.og_locale as string | null) ?? null,
+              published: (x.published as string | null) ?? null,
+              bodyClass: (x.body_class as string | null) ?? null,
             }
           : null,
         inbound: (x.inbound as number | null) ?? 0,
+        directLinks: (x.direct_links as number | null) ?? 0,
         linkDepth: (x.link_depth as number | null) ?? null,
         pagerank: (x.pagerank as number | null) ?? null,
       });

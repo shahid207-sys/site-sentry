@@ -39,6 +39,8 @@ export interface RobotsSnapshot {
 export interface HeadingEntry {
   level: 1 | 2 | 3 | 4 | 5 | 6;
   text: string;
+  /** Nothing but markup separates it from the heading before it (CNT-016). Absent when false, and before the expert rules. */
+  adjacent?: true;
 }
 
 export interface SnapshotLink {
@@ -119,6 +121,23 @@ export interface PageFacts {
   htmlBytes: number;
   /** Elements in the HTML as served (PERF-010). Absent on snapshots from before Phase 5. */
   domNodes?: number;
+  // The fields below are absent on snapshots from before the expert rules; those rules then do not judge the page.
+  /** Text of <strong> and <b> elements in the body, capped (CNT-018). */
+  strong?: string[];
+  /** Each outermost navigation block: its link count and a signature of its link set (LNK-015). */
+  navBlocks?: { links: number; sig: string }[];
+  /** Distinct link targets across the navigation blocks (LNK-015). */
+  navLinks?: number;
+  /** <body class>, capped (IDX-034: WooCommerce attribute archives). */
+  bodyClass?: string;
+  /** Alt text of the logo image in the page header (CNT-020). */
+  logoAlt?: string | null;
+  /** Phones and emails as written in the visible text (CNT-021). */
+  contacts?: { phones: string[]; emails: string[] };
+  /** Newest article date on the page: article:published_time or an Article's datePublished (CNT-019). */
+  published?: string | null;
+  /** og:locale (I18N-007). */
+  ogLocale?: string | null;
 }
 
 export interface PageSnapshot {

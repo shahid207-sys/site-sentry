@@ -58,7 +58,7 @@ describe("TemplateGroups", () => {
     expect(run([...urls].reverse())).toEqual(run(urls));
   });
 
-  it("SD-004 is the rule that reports per template group", () => {
-    expect(RULES.filter((r) => r.groupByTemplate).map((r) => r.id)).toEqual(["SD-004"]);
+  it("names the rules that report per template group", () => {
+    expect(RULES.filter((r) => r.groupByTemplate).map((r) => r.id).sort()).toEqual(["CNT-021", "LNK-015", "LNK-016", "META-022", "META-023", "SD-004", "SD-011"]);
   });
 });

@@ -132,6 +132,10 @@ function facts(p: PageView, id: number, g: Partial<Graph> = {}): UrlFacts {
           ogImage: p.facts?.og.image ?? null,
           icons: p.facts?.icons ?? [],
           hreflang: p.links.filter((l) => l.via === "hreflang" && l.hreflang).map((l) => ({ lang: l.hreflang!, href: l.href })),
+          language: p.language,
+          ogLocale: p.facts?.ogLocale ?? null,
+          published: p.facts?.published ?? null,
+          bodyClass: p.facts?.bodyClass ?? null,
         }
       : null,
   };
@@ -305,6 +309,8 @@ const res = (kind: ResourceFacts["kind"], url: string, over: Partial<ResourceFac
 });
 /** A page body with main text plus extra markup. */
 const withBody = (extra: string) => ({ body: `<main><p>${TEXT}</p>${extra}</main>` });
+const navOf = (n: number) => `<nav>${Array.from({ length: n }, (_, i) => `<a href="/n${i}/">Section ${i}</a>`).join("")}</nav>`;
+const spanish = () => ({ body: "<main><p>" + "La pala de jardin dura muchos anos cuando se limpia la hoja despues de cada uso y el mango se engrasa antes del invierno, porque el acero y la madera se conservan mejor si no quedan humedos durante los meses de frio. ".repeat(4) + "</p></main>" });
 const IMGTAG = (attrs: string) => withBody(`<img ${attrs}>`);
 const ld = (...blocks: unknown[]) => ({ head: blocks.map((b) => `<script type="application/ld+json">${typeof b === "string" ? b : JSON.stringify(b)}</script>`).join("") });
 const crawlWithImage = (r: Partial<ResourceFacts>) => () => crawlOf({ resources: [res("image", U("/big.png"), r)] });
@@ -459,6 +465,69 @@ const CASES: Record<string, Case> = {
   "AIS-003": SITE("AIS-003", () => [cleanSite(), crawlOf({ probes: [probe("llms_txt", U("/llms.txt"), { status: 404 })] })]),
 
   // ---------- LNK ----------
+  // ---------- expert rules (expert.ts) ----------
+  "CNT-016": PAGE("CNT-016", () => pageFrom("/x/", withBody(`<main><p>${TEXT}</p><h2>Print</h2><h2>your vision</h2></main>`)), () => pageFrom("/x/", withBody(`<main><p>${TEXT}</p><h2>Print</h2><p>Paper and ink.</p><h2>your vision</h2><h2>Spades</h2><h2>Forks</h2></main>`))),
+  "CNT-017": PAGE("CNT-017", () => pageFrom("/x/", { h1: "<h2>Slide one</h2><h2>Slide two</h2><h1>Garden tools</h1>" }), () => pageFrom("/x/", { h1: "<h2>Slide one</h2><h1>Garden tools</h1><h2>Care</h2>" })),
+  "CNT-018": PAGE("CNT-018", () => pageFrom("/x/", withBody(`<main><p>${TEXT} ${"Buy cheap spades online today. ".repeat(8)}</p></main>`)), () => pageFrom("/x/", withBody(`<main><p>${TEXT} Buy cheap spades online today.</p></main>`))),
+  "CNT-019": SITE(
+    "CNT-019",
+    () => [cleanSite(pageFrom("/blog/old/", { head: '<meta property="article:published_time" content="2025-01-01T00:00:00Z">' })), crawlOf()],
+    () => [cleanSite(pageFrom("/blog/new/", { head: '<meta property="article:published_time" content="2026-05-01T00:00:00Z">' })), crawlOf()],
+  ),
+  "CNT-020": PAGE(
+    "CNT-020",
+    () => pageFrom("/", { head: '<meta property="og:site_name" content="Acme Print">' + ld({ "@context": "https://schema.org", "@type": "Organization", name: "Zenith Graphics" }).head }),
+    () => pageFrom("/", { title: "<title>Sign printing | Acme Print</title>", head: '<meta property="og:site_name" content="Acme Print">' + ld({ "@context": "https://schema.org", "@type": "Organization", name: "Acme Print LLC" }).head }),
+  ),
+  "CNT-021": PAGE("CNT-021", () => pageFrom("/x/", withBody(`<main><p>${TEXT} Call +44 20 7946 0000 or 020 7946 0000.</p></main>`)), () => pageFrom("/x/", withBody(`<main><p>${TEXT} Call +44 20 7946 0000 today.</p></main>`))),
+  "META-020": PAGE(
+    "META-020",
+    () => pageFrom("/x/", { title: "<title>CHOOSING GARDEN TOOLS THAT LAST</title>" }),
+    () => pageFrom("/x/", { head: '<meta property="og:site_name" content="Fixture Site">' }),
+  ),
+  "META-021": PAGE(
+    "META-021",
+    () => pageFrom("/x/", { description: '<meta name="description" content="spades | forks | trowels | shears | watering cans for sale">' }),
+    () => pageFrom("/x/", { description: '<meta name="description" content="How to choose spades, forks, trowels and shears that last for decades. Compare them here.">' }),
+  ),
+  "META-022": PAGE(
+    "META-022",
+    () => pageFrom("/x/", { head: '<meta property="og:image:width" content="800"><meta property="og:image:height" content="800">' }),
+    () => pageFrom("/x/", { head: '<meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">' }),
+  ),
+  "META-023": PAGE("META-023", () => pageFrom("/x/", { head: '<meta name="generator" content="WordPress 6.4.2">' }), () => pageFrom("/x/", { head: '<meta name="generator" content="Hugo">' })),
+  "LNK-015": PAGE("LNK-015", () => pageFrom("/x/", withBody(`${navOf(6)}<main><p>${TEXT}</p></main>${navOf(6)}`)), () => pageFrom("/x/", withBody(`${navOf(6)}<main><p>${TEXT}</p></main>`))),
+  "LNK-016": PS(
+    "LNK-016",
+    () => [pageFrom("/x/", withBody(`<main><p>${TEXT}</p><a href="/">Get a quote</a></main>`)), cleanSite()],
+    () => [pageFrom("/x/", withBody(`<main><p>${TEXT}</p><a href="/a/">Compare shears</a></main>`)), cleanSite()],
+  ),
+  "LNK-017": SITE(
+    "LNK-017",
+    () => [cleanSite({ ...redirect("/faq/", 301, "/a/", 10), directLinks: 3 })],
+    () => [cleanSite(redirect("/faq/", 301, "/a/", 10))],
+  ),
+  "IDX-033": SITE("IDX-033", () => [cleanSite(pageFrom("/cart/"))], () => [cleanSite(pageFrom("/cart/", { head: '<meta name="robots" content="noindex">' }))]),
+  "IDX-034": SITE(
+    "IDX-034",
+    () => [cleanSite(pageFrom("/shop/?filter_colour=red"))],
+    () => [cleanSite(pageFrom("/shop/?filter_colour=red", { canonical: `<link rel="canonical" href="${U("/shop/")}">` }))],
+  ),
+  "I18N-007": SITE(
+    "I18N-007",
+    () => [cleanSite(pageFrom("/a1/"), pageFrom("/a2/"), pageFrom("/es1/", spanish()), pageFrom("/es2/", spanish()))],
+    () => [cleanSite(pageFrom("/a1/"), pageFrom("/a2/"))],
+  ),
+  "I18N-008": SITE(
+    "I18N-008",
+    () => [cleanSite(pageFrom("/shop/%D8%B7%D8%A8%D8%A7%D8%B9%D8%A9/"), pageFrom("/shop/printing/"))],
+    () => [cleanSite(pageFrom("/shop/%D8%B7%D8%A8%D8%A7%D8%B9%D8%A9/"), pageFrom("/other/printing/"))],
+  ),
+  "SD-011": PAGE(
+    "SD-011",
+    () => pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "LocalBusiness", name: "Acme", aggregateRating: { "@type": "AggregateRating", ratingValue: 5, reviewCount: 9 } })),
+    () => pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "LocalBusiness", name: "Acme" })),
+  ),
   "LNK-001": PS(
     "LNK-001",
     () => [pageFrom("/x/", withBody('<a href="/gone">Old guide to spades</a>')), cleanSite(bare("/gone", 404))],
@@ -597,7 +666,7 @@ describe("rule catalog", () => {
   it("every registered rule has a test case, and every case names a registered rule", () => {
     expect(Object.keys(CASES).sort()).toEqual(RULES.map((r) => r.id).sort());
     // Per family, then the 13 rendered rules (Phase 5).
-    expect(RULES.length).toBe(31 + 19 + 12 + 3 + 13 + 6 + 10 + 10 + 6 + 5 + 5 + 13);
+    expect(RULES.length).toBe(31 + 19 + 12 + 3 + 13 + 6 + 10 + 10 + 6 + 5 + 5 + 13 + 18); // the 18 expert rules
     expect(Object.keys(DEFERRED_RULES)).toEqual(["CNT-013", "CNT-014", "PERF-002"]);
     // A deferred rule is never also registered.
     for (const id of Object.keys(DEFERRED_RULES)) expect(RULES_BY_ID.has(id), id).toBe(false);

@@ -6,9 +6,9 @@ import { normaliseUrl } from "../crawl/normalise";
 import type { Finding, Rule } from "./contract";
 
 export function evidenceKey(rule: Pick<Rule, "evidenceKey"> | undefined, f: Finding): string {
-  if (rule?.evidenceKey) return rule.evidenceKey(f);
-  const k = f.evidence.groupKey;
-  return k === undefined || k === null ? "" : String(k);
+  const k = rule?.evidenceKey ? rule.evidenceKey(f) : f.evidence.groupKey;
+  // Postgres stores no NUL in text or jsonb: one in a key would fail the whole analysis, so it never leaves here.
+  return k === undefined || k === null ? "" : String(k).replaceAll("\u0000", " ");
 }
 
 export function findingFingerprint(ruleId: string, url: string, key: string): string {
