@@ -84,9 +84,10 @@ export function geminiClient(apiKey: string, deps: GeminiDeps = {}): AiClient {
       return r.totalTokens;
     },
     async complete({ model, system, user, maxTokens }) {
-      const { model: _name, ...request } = prompt(model, system, user);
+      const { systemInstruction, contents } = prompt(model, system, user);
       const r = await post<GenerateResponse>(model, "generateContent", {
-        ...request,
+        systemInstruction,
+        contents,
         generationConfig: { maxOutputTokens: maxTokens, responseMimeType: "application/json", responseJsonSchema: z.toJSONSchema(AiOutputSchema) },
       });
       const c = r.candidates?.[0];
