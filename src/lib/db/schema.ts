@@ -663,3 +663,23 @@ export const alertDeliveries = pgTable(
   },
   (t) => [uniqueIndex("alert_deliveries_schedule_crawl_uq").on(t.scheduleId, t.crawlId), check("alert_deliveries_status_ck", sql`${t.status} in (${list(ALERT_STATUSES)})`)],
 );
+
+/** One AI analysis per audit (src/lib/ai). A `done` row is the cache: the job never calls the model for that audit again. */
+export const aiAnalyses = pgTable(
+  "ai_analyses",
+  {
+    auditId: text("audit_id").primaryKey(),
+    crawlId: uuid("crawl_id")
+      .notNull()
+      .references(() => crawls.id, { onDelete: "cascade" }),
+    status: text("status").notNull(),
+    model: text("model"),
+    analysis: jsonb("analysis"),
+    /** What the grounding validator removed (DroppedCounts). */
+    dropped: jsonb("dropped"),
+    usage: jsonb("usage"),
+    detail: text("detail"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("ai_analyses_crawl_idx").on(t.crawlId), check("ai_analyses_status_ck", sql`${t.status} in ('queued', 'done', 'failed', 'not_configured', 'over_budget')`)],
+);

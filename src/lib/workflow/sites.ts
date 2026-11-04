@@ -53,7 +53,7 @@ function validateSafe(url: string): string {
   }
 }
 
-export async function updateSite(id: string, patch: { name?: string; sitemapUrl?: string | null; notes?: string; branding?: BrandingPatch }, deps: Deps): Promise<Site> {
+export async function updateSite(id: string, patch: { name?: string; sitemapUrl?: string | null; notes?: string; branding?: BrandingPatch; brandName?: string | null; aiAnalysis?: boolean }, deps: Deps): Promise<Site> {
   assertWritable(deps);
   const sitemapUrl = patch.sitemapUrl ? normalizePageUrl(validateSafe(patch.sitemapUrl)) : patch.sitemapUrl;
   return deps.store.update((d) => {
@@ -67,6 +67,13 @@ export async function updateSite(id: string, patch: { name?: string; sitemapUrl?
     if (sitemapUrl === null || sitemapUrl === "") delete s.sitemapUrl;
     else if (sitemapUrl) s.sitemapUrl = sitemapUrl;
     if (patch.notes !== undefined) s.notes = patch.notes.slice(0, 5000);
+    if (patch.brandName !== undefined) {
+      const brand = patch.brandName?.trim().slice(0, 100);
+      if (brand) s.brandName = brand;
+      else delete s.brandName;
+    }
+    if (patch.aiAnalysis === true) s.aiAnalysis = true;
+    else if (patch.aiAnalysis === false) delete s.aiAnalysis;
     if (patch.branding) {
       const b = applyBranding(s.branding, patch.branding);
       if ("error" in b) throw new WorkflowError("INVALID", b.error);

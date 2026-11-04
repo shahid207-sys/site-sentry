@@ -29,6 +29,7 @@
     "gate:p6": "node --max-old-space-size=768 --heapsnapshot-near-heap-limit=1 --diagnostic-dir=.data --import tsx scripts/gate-p6.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.4.0",
     "@tanstack/react-virtual": "3.14.19",
     "axe-core": "4.14.0",
     "bullmq": "6.3.14",

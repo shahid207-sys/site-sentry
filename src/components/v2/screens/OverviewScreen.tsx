@@ -12,6 +12,7 @@ import type { Priority } from "@/lib/results/priority";
 import { AuditFrame, useAudit } from "../AuditFrame";
 import { categoryLabel, PRIORITIES, PriorityBadge, PriorityIcon, priorityLabel, priorityText, stateLabel, urlStateLabel } from "../badges";
 import { ruleTitle } from "../hooks";
+import { AiPanel } from "../AiPanel";
 import { useApi, type Resource } from "../../lib/api";
 import { fmtDateTime, plural } from "../../lib/format";
 import { Button, EmptyState, ErrorState, LinkButton, Mono, Notice, Panel, ScoreRing, Skeleton, StatStrip, cx, scoreColor } from "../../ui";
@@ -85,6 +86,7 @@ function AnalysedOverview() {
         <ChangePanel compare={compare} />
       </div>
       <Scorecards o={o} groups={groups.data} />
+      <AiPanel />
     </div>
   );
 }

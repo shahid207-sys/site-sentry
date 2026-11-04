@@ -44,7 +44,7 @@ export async function startCrawl(
   ws: Workspace,
   audit: AuditRun,
   siteOrigin: string,
-  opts: { auth?: CrawlAuthInput; env?: Record<string, string | undefined> } = {},
+  opts: { auth?: CrawlAuthInput; env?: Record<string, string | undefined>; brand?: string; aiAnalysis?: boolean } = {},
 ): Promise<AuditRun> {
   const id = randomUUID();
   let auth: CrawlConfig["auth"];
@@ -60,6 +60,8 @@ export async function startCrawl(
     auth,
     aiCrawlers: audit.config.aiCrawlers,
     render: audit.config.render,
+    ...(opts.brand ? { brand: opts.brand } : {}),
+    ...(opts.aiAnalysis ? { aiAnalysis: true } : {}),
   };
   const [row] = await db
     .insert(crawls)

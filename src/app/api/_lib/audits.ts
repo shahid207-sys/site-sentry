@@ -117,7 +117,7 @@ export async function launchAudit(ws: Workspace, input: AuditRequest): Promise<{
   const store = getStore(ws);
   const site = (await store.read()).sites[siteId];
   const auth: CrawlAuthInput | undefined = input.auth;
-  return { audit: await startCrawl(getDb(), getCrawlQueue(), store, ws, created, site.origin, { auth }), reused };
+  return { audit: await startCrawl(getDb(), getCrawlQueue(), store, ws, created, site.origin, { auth, brand: site.brandName, aiAnalysis: site.aiAnalysis }), reused };
 }
 
 /**

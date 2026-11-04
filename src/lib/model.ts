@@ -31,6 +31,10 @@ export interface Site {
   notes?: string;
   /** White-label for this site's reports. */
   branding?: Branding;
+  /** The brand name rules compare with (META-020). Unset: inferred from og:site_name or schema. */
+  brandName?: string;
+  /** AI analysis after each audit (opt-in, docs/SPEC.md "AI analysis"). Unset is off. */
+  aiAnalysis?: boolean;
 }
 
 /** Report white-label: shown on the cover and in the header of every report of the site. */

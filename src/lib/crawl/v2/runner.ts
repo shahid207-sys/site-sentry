@@ -79,6 +79,10 @@ export interface CrawlConfig {
   keyPages?: string[];
   /** Render mode (src/lib/render/run.ts): off, sampled or full. Unset is off. */
   render?: "off" | "sampled" | "full";
+  /** The project's brand name (META-020). Unset: inferred from the page's own tags. */
+  brand?: string;
+  /** The project turned AI analysis on: the worker queues the job after the rules (src/lib/ai). */
+  aiAnalysis?: boolean;
   /**
    * A fix verification (crawls.kind 'verify'): fetch the seeds and their redirect targets only. No start-URL check,
    * no sitemaps, no probes, no resource phase; the analysis runs `ruleId` alone and writes states for `fingerprints`.

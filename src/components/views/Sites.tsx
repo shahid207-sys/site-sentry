@@ -371,6 +371,8 @@ function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose: () => 
   const [name, setName] = useState(site.name);
   const [sitemapUrl, setSitemapUrl] = useState(site.sitemapUrl ?? "");
   const [notes, setNotes] = useState(site.notes ?? "");
+  const [brandName, setBrandName] = useState(site.brandName ?? "");
+  const [aiAnalysis, setAiAnalysis] = useState(site.aiAnalysis === true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const save = async (e?: FormEvent) => {
@@ -378,7 +380,7 @@ function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose: () => 
     setBusy(true);
     setErr(null);
     try {
-      await api(`${apiBase}/sites/${site.id}`, { method: "PATCH", body: { name, sitemapUrl: sitemapUrl.trim() || null, notes } });
+      await api(`${apiBase}/sites/${site.id}`, { method: "PATCH", body: { name, sitemapUrl: sitemapUrl.trim() || null, notes, brandName: brandName.trim() || null, aiAnalysis } });
       toast({ tone: "ok", title: "Site saved" });
       onSaved();
     } catch (e2) {
@@ -398,6 +400,13 @@ function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose: () => 
           <Input id="es-sm" value={sitemapUrl} onChange={(e) => setSitemapUrl(e.target.value)} placeholder={`${site.origin}/sitemap.xml`} />
         </Field>
         <Field label="Notes" htmlFor="es-notes"><Input id="es-notes" value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={5000} /></Field>
+        <Field label="Brand name" htmlFor="es-brand" hint="Optional. Titles are checked for it; otherwise it is read from og:site_name or schema.">
+          <Input id="es-brand" value={brandName} onChange={(e) => setBrandName(e.target.value)} maxLength={100} />
+        </Field>
+        <label className="flex items-start gap-2 text-[13px] text-fg-2">
+          <input type="checkbox" className="mt-0.5" checked={aiAnalysis} onChange={(e) => setAiAnalysis(e.target.checked)} />
+          <span><strong className="font-medium text-fg-1">AI analysis</strong>: after each audit, send stored page text and findings for this site to the Claude API. Uses your API key and costs money. Off by default.</span>
+        </label>
         {err ? <p className="text-[13px] text-sev-high" role="alert">{err}</p> : null}
         <button type="submit" className="hidden" />
       </form>

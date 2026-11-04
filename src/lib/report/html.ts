@@ -9,7 +9,9 @@ import type { ReportData, ReportGroup } from "../results/report";
 import { INLINE_URLS, PRIORITY_PAGES } from "../results/report";
 import { CATEGORY_WEIGHTS, PARTIAL_COVERAGE_BELOW, UNWEIGHTED_CATEGORIES } from "../results/health";
 import { NOT_OURS, UNFETCHED } from "../results/coverage";
+import type { Citation } from "../ai/schema";
 import { BRAND_COLOR, LOGO_DATA_URL } from "./branding";
+import { checklistRows } from "./checklist";
 
 export interface RenderOptions {
   /** Where a group's full affected-URL CSV is served, for lists over INLINE_URLS rows. */
@@ -80,6 +82,115 @@ function cover(d: ReportData, b: Branding) {
 </section>`;
 }
 
+// ---------- the sections matching a reference audit: scope, summary, issues, rewrites, checklist, action plan ----------
+
+const AI_LABEL = `<span class="ai-label">AI analysis</span>`;
+
+/** Where an AI item comes from: its finding IDs (linked when the group has a page here), URLs and quoted snippets. */
+function cites(cs: Citation[]) {
+  const parts = cs.map((c) => (c.findingId ? esc(c.findingId) : `${link(c.url ?? "")}: &ldquo;${esc(c.quote)}&rdquo;`));
+  return parts.length ? `<p class="cite">Source: ${parts.join("; ")}</p>` : "";
+}
+const aiPoints = (xs: { text: string; citations: Citation[] }[]) => `<ul class="ai">${xs.map((x) => `<li>${esc(x.text)}${cites(x.citations)}</li>`).join("")}</ul>`;
+
+function scope(d: ReportData) {
+  const v = d.overview.verdict;
+  const notRan = d.ruleRuns.filter((r) => r.status !== "ran");
+  const docs = (d.crawl.sitemaps ?? []).filter((x) => x.url).length;
+  const res = d.crawl.resources as { external?: { planned: number } ; images?: { planned: number } } | null;
+  return `<section class="page">
+  <h2>Scope</h2>
+  <h3>What was checked</h3>
+  <ul>
+    <li><strong>Profile:</strong> ${esc(d.overview.profile)}, with a budget of ${d.crawl.budget === null ? "no limit" : `${d.crawl.budget.toLocaleString("en-GB")} URLs`} and ${d.crawl.maxDepth === null ? "no depth limit" : `a depth limit of ${d.crawl.maxDepth} clicks`}.</li>
+    <li><strong>URLs:</strong> ${coverageSentence(d)}.</li>
+    <li><strong>Sitemaps:</strong> ${docs} sitemap ${plural(docs, "document")} read.</li>
+    ${res?.external ? `<li><strong>External links:</strong> ${m("resources.external.planned", res.external.planned)} checked.</li>` : ""}
+    ${res?.images ? `<li><strong>Images:</strong> ${m("resources.images.planned", res.images.planned)} checked.</li>` : ""}
+    <li><strong>Rules:</strong> ${m("rulesRan", d.overview.rulesRan)} ran.</li>
+  </ul>
+  <p><strong>${v.verdict === "complete" ? "Complete" : v.verdict === "partial" ? "Partial" : "Still running"}.</strong> ${v.verdict === "complete" ? "Every in-scope URL reached a final state, with no budget cut." : v.reasons.map((r) => esc(r.message)).join(" ")} ${v.notes.map(esc).join(" ")}</p>
+  <h3>What was not checked</h3>
+  <ul>
+    ${notRan.length ? `<li>${m("rulesNotRan", notRan.length)} ${plural(notRan.length, "rule")} did not run. They are listed under Coverage and limitations, and show as Not checked in the technical checklist.</li>` : ""}
+    <li>Search performance: this audit reads the site itself. It has no data on rankings, traffic or how a search engine treats the site.</li>
+    <li>Off-site signals: backlinks, reviews and business listings.</li>
+  </ul>
+</section>`;
+}
+
+function aiSummary(d: ReportData) {
+  const a = d.ai?.analysis;
+  if (!a || (!a.executiveSummary.strengths.length && !a.executiveSummary.weaknesses.length)) return "";
+  return `<h3>${AI_LABEL}</h3>
+  ${a.executiveSummary.strengths.length ? `<h4>Strengths</h4>${aiPoints(a.executiveSummary.strengths)}` : ""}
+  ${a.executiveSummary.weaknesses.length ? `<h4>Weaknesses</h4>${aiPoints(a.executiveSummary.weaknesses)}` : ""}
+  ${a.strategy.length ? `<h4>Strategy</h4><ul class="ai">${a.strategy.map((x) => `<li><strong>${esc(x.area.replace(/_/g, " "))}.</strong> ${esc(x.text)}${cites(x.citations)}</li>`).join("")}</ul>` : ""}`;
+}
+
+function issuesTable(d: ReportData) {
+  const rows = d.groups.filter((g) => g.priority !== "info");
+  const quality = d.ai?.analysis?.qualityIssues ?? [];
+  let n = 0;
+  return `<section class="page">
+  <h2>Issues</h2>
+  ${
+    rows.length || quality.length
+      ? `<table class="issues"><thead><tr><th class="n">#</th><th>Page</th><th>Issue</th><th>Severity</th><th>Fix</th></tr></thead><tbody>
+    ${rows.map((g) => `<tr><td class="n">${++n}</td><td>${g.urls[0] ? link(g.urls[0].url) : ""}${g.affectedUrls > 1 ? `<br><span class="note">${m(`group.${g.ruleId}.affected`, g.affectedUrls)} URLs</span>` : ""}</td><td><strong>${esc(g.ruleId)}</strong> ${esc(g.title)}</td><td>${esc(g.priority)}</td><td>${esc(g.fix)}</td></tr>`).join("\n")}
+    ${quality.map((q) => `<tr><td class="n">${++n}</td><td>${link(q.url)}</td><td>${AI_LABEL} ${esc(q.issue)}${cites(q.citations)}</td><td>${esc(q.kind.replace(/_/g, " "))}</td><td>${esc(q.fix)}</td></tr>`).join("\n")}
+  </tbody></table>`
+      : "<p>No issue above info priority was found by the checks that ran.</p>"
+  }
+</section>`;
+}
+
+function rewrites(d: ReportData) {
+  const xs = d.ai?.analysis?.rewrites ?? [];
+  return `<section class="page">
+  <h2>Rewrites</h2>
+  ${
+    xs.length
+      ? `<p>${AI_LABEL} Proposed copy for key pages. Character counts are computed from the text shown.</p>
+  ${xs.map((r) => `<div class="rewrite"><h4>${link(r.url)}</h4>
+    <table><tbody>
+      <tr><th>Title</th><td>${esc(r.title)}</td><td class="n">${r.titleChars} characters</td></tr>
+      <tr><th>Description</th><td>${esc(r.description)}</td><td class="n">${r.descriptionChars} characters</td></tr>
+      <tr><th>H1</th><td colspan="2">${esc(r.h1)}</td></tr>
+    </tbody></table>${cites(r.citations)}</div>`).join("\n")}`
+      : `<p>Rewrites come from the AI analysis, which ${d.ai ? "proposed none with a valid citation" : "was not run for this audit"}.</p>`
+  }
+</section>`;
+}
+
+function technicalChecklist(d: ReportData) {
+  const rows = checklistRows(d.groups, d.ruleRuns);
+  return `<section class="page">
+  <h2>Technical checklist</h2>
+  <p class="note">Each row comes from the rules that ran in this audit. Not checked means a rule behind the row did not run or had nothing to evaluate: it says nothing either way.</p>
+  <table class="checklist"><thead><tr><th>Check</th><th>Result</th><th>Basis</th></tr></thead><tbody>
+    ${rows.map((r) => `<tr><td>${esc(r.label)}</td><td class="st st-${esc(r.status.toLowerCase().replace(/ /g, "-"))}">${esc(r.status)}</td><td class="note">${esc(r.detail)}</td></tr>`).join("\n")}
+  </tbody></table>
+</section>`;
+}
+
+function actionPlan(d: ReportData) {
+  const a = d.ai?.analysis;
+  if (a && (a.actionPlan.thisWeek.length || a.actionPlan.thisQuarter.length)) {
+    return `<section class="page">
+  <h2>Action plan</h2>
+  <p>${AI_LABEL}</p>
+  <h3>This week</h3>${a.actionPlan.thisWeek.length ? aiPoints(a.actionPlan.thisWeek) : "<p>Nothing for this period.</p>"}
+  <h3>This quarter</h3>${a.actionPlan.thisQuarter.length ? aiPoints(a.actionPlan.thisQuarter) : "<p>Nothing for this period.</p>"}
+</section>`;
+  }
+  const top = d.groups.filter((g) => g.priority !== "info").slice(0, 5);
+  return `<section class="page">
+  <h2>Action plan</h2>
+  ${top.length ? `<p>The highest-priority issue groups, in order. The AI analysis, when on, writes a dated plan here.</p><ol>${top.map((g) => `<li><strong>${esc(g.title)}</strong> (${esc(g.ruleId)}): ${esc(g.fix)}</li>`).join("")}</ol>` : "<p>No issue above info priority to act on.</p>"}
+</section>`;
+}
+
 function coverageSentence(d: ReportData) {
   const c = d.overview.coverage;
   const parts = [`${m("coverage.answered", c.answered)} of ${m("coverage.eligible", c.eligible)} discovered URLs inspected (${m("coverage.percent", c.percent)}%)`];
@@ -116,6 +227,7 @@ function summary(d: ReportData) {
   }
   <h3>Change since the last audit</h3>
   ${changes}
+  ${aiSummary(d)}
 </section>`;
 }
 
@@ -294,6 +406,14 @@ export function renderReport(d: ReportData, o: RenderOptions): string {
   .bars .bar span { display: block; height: 10px; background: var(--brand); }
   .glossary dt { font-weight: 600; margin-top: 8px; }
   .glossary dd { margin: 0; }
+  .ai-label { display: inline-block; border: 1px solid var(--brand); color: var(--brand); border-radius: 4px; padding: 0 5px; font-size: 11px; font-weight: 600; }
+  .cite { color: var(--muted); font-size: 12px; margin: 2px 0 6px; }
+  ul.ai { padding-left: 18px; }
+  table.issues td { word-break: break-word; }
+  .st-pass { color: #0a7d52; font-weight: 600; }
+  .st-fail { color: #b3261e; font-weight: 600; }
+  .st-warning { color: var(--warn); font-weight: 600; }
+  .st-not-checked { color: var(--muted); }
   header.brand { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--line); padding: 8px 0; }
   @media print {
     @page { size: A4; margin: 16mm 14mm; }
@@ -308,7 +428,12 @@ export function renderReport(d: ReportData, o: RenderOptions): string {
 <main>
 <header class="brand"><span>${esc(b.agencyName ?? "")}</span><span>${esc(host)} · ${fmtDate(d.overview.createdAt)}</span></header>
 ${cover(d, b)}
+${scope(d)}
 ${summary(d)}
+${issuesTable(d)}
+${rewrites(d)}
+${technicalChecklist(d)}
+${actionPlan(d)}
 ${limitations(d)}
 <section class="page"><h2>Priority issues</h2><p>${priority.length ? `${m("priorityPages", priority.length)} issue groups above info priority, highest priority first${d.groups.filter((g) => g.priority !== "info").length > priority.length ? `; the rest are listed by category` : ""}.` : "No issue group above info priority."}</p></section>
 ${priority.map(groupPage).join("\n")}

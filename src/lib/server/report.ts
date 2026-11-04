@@ -1,11 +1,14 @@
 import "server-only";
+import { createAiQueue, enqueueAi } from "../ai/queue";
+import { readAiAnalysis } from "../ai/run";
+import type { StoredAiAnalysis } from "../ai/schema";
 import { getDb } from "../db/client";
 import type { Workspace } from "../model";
 import { groupUrlsCsv } from "../report/csv";
 import { renderReport, REPORT_CSP } from "../report/html";
 import { createShare, listShares, revokeShare, serveShare, type CreatedShare, type ShareInfo, type ShareRequest, type ShareResponse } from "../report/shares";
 import { reportData, type ReportData } from "../results/report";
-import { ResultsError } from "../results/queries";
+import { crawlOverview, ResultsError } from "../results/queries";
 import { WorkflowError } from "../workflow/deps";
 import { getStore } from "../workspace";
 import { crawlOf } from "./results";
@@ -45,6 +48,29 @@ export async function getGroupUrlsCsv(ws: Workspace, auditId: string, ruleId: st
   const { crawlId } = await crawlOf(ws, auditId);
   await getAuditReport(ws, auditId);
   return groupUrlsCsv(getDb(), crawlId, ruleId);
+}
+
+// ---------- AI analysis ----------
+
+/** The audit's AI analysis row, and whether its project has the setting on. */
+export async function getAuditAi(ws: Workspace, auditId: string): Promise<{ enabled: boolean; ai: StoredAiAnalysis | null }> {
+  const { siteId } = await crawlOf(ws, auditId);
+  const site = (await getStore(ws).read()).sites[siteId];
+  return { enabled: site?.aiAnalysis === true, ai: await readAiAnalysis(getDb(), auditId) };
+}
+
+const g = globalThis as unknown as { __ssAiQueue?: ReturnType<typeof createAiQueue> };
+
+/** Queues the job for an audit that has finished its analysis. A finished analysis is the cache: nothing runs again. */
+export async function requestAuditAi(ws: Workspace, auditId: string): Promise<{ enabled: boolean; ai: StoredAiAnalysis | null }> {
+  const { crawlId, siteId } = await crawlOf(ws, auditId);
+  const site = (await getStore(ws).read()).sites[siteId];
+  if (site?.aiAnalysis !== true) throw new WorkflowError("INVALID", "AI analysis is off for this site: turn it on under Edit site first.");
+  const data = await mapped(() => crawlOverview(getDb(), crawlId));
+  if (!data.analysed) throw new WorkflowError("INVALID", "The audit is not analysed yet.");
+  g.__ssAiQueue ??= createAiQueue();
+  await enqueueAi(getDb(), g.__ssAiQueue, crawlId, auditId);
+  return getAuditAi(ws, auditId);
 }
 
 // ---------- share links ----------
