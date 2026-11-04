@@ -65,6 +65,12 @@ export interface PageIntent {
 
 export type AuditMode = "single" | "list" | "sitemap";
 
+export interface ResourceBudgets {
+  nonHtml?: number;
+  images?: number;
+  externalLinks?: number;
+}
+
 export interface AuditConfig {
   mode: AuditMode;
   /** Seed URLs (single/list), normalised. */
@@ -83,6 +89,8 @@ export interface AuditConfig {
   authUser?: string;
   /** Whether AI crawlers should be allowed (AIS-002, crawler v2). Unset: the rule reports that it needs this setting. */
   aiCrawlers?: "allow" | "block";
+  /** Custom profile: limits apart from the URL budget (crawler v2). Each absent one uses the engine's default. */
+  resourceBudgets?: ResourceBudgets;
   /** Headless-browser rendering after the crawl (crawler v2, Phase 5); absent = off. */
   render?: RenderMode;
   categories: RuleCategory[];

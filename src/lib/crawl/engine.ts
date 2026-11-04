@@ -627,6 +627,10 @@ export function describeConfig(config: AuditConfig): string[] {
   if (config.profile) lines.push(`${PROFILES[config.profile].label} profile: ${describeLimits(config.maxPages, config.maxDepth)}`);
   lines.push(config.maxDepth === null ? "Follow internal links with no depth limit" : config.maxDepth > 0 ? `Follow internal links up to ${config.maxDepth} click(s) deep` : "Do not follow links");
   lines.push(`At most ${config.maxPages} pages`);
+  const rb = config.resourceBudgets;
+  if (rb?.nonHtml !== undefined) lines.push(`At most ${rb.nonHtml} non-HTML URLs`);
+  if (rb?.images !== undefined) lines.push(`At most ${rb.images} images checked`);
+  if (rb?.externalLinks !== undefined) lines.push(`At most ${rb.externalLinks} external links checked`);
   if (config.checkLinks) lines.push(`Status-check up to ${LIMITS.linkChecks} uncrawled internal link and image targets`);
   lines.push("Read robots.txt first and skip URLs it disallows for this crawler");
   return lines;

@@ -97,6 +97,21 @@ async function createAudit(): Promise<AuditSummary> {
 const step = (id: string) => call<{ audit: AuditSummary; busy: boolean }>(r.step.POST(post(`/api/live/audits/${id}/step`), ctx({ id })));
 
 describe("audit API with CRAWLER_V2=true", () => {
+  it("carries the Custom profile's resource budgets to the crawl, and refuses them on other profiles", async () => {
+    await expect(call(r.audits.POST(post("/api/live/audits", { ...base, siteId: "s1", urls: [`${origin}/`], profile: "quick", resourceBudgets: { images: 5 } }), ctx({})))).rejects.toThrow("Custom profile");
+    const body = { ...base, siteId: "s1", urls: [`${origin}/`], profile: "custom", budget: 20, maxDepth: 2, resourceBudgets: { nonHtml: 7, images: 5, externalLinks: 3 } };
+    const { audit } = await call<{ audit: AuditSummary }>(r.audits.POST(post("/api/live/audits", body), ctx({})));
+    const crawlId = audit.crawler!.crawlId;
+    expect(await runCrawl({ db, redis, politeness: { keyPrefix: throttlePrefix }, fetch: fetcher(), owner: "routes-test" }, crawlId)).toBe("completed");
+    const row = (await db.execute(sql`select config, resources from crawls where id = ${crawlId}::uuid`)).rows[0] as { config: Record<string, unknown>; resources: { images: { budget: number }; external: { budget: number } } };
+    expect(row.config).toMatchObject({ nonHtmlBudget: 7, imageBudget: 5, externalLinkBudget: 3 });
+    expect(row.resources.images.budget).toBe(5);
+    expect(row.resources.external.budget).toBe(3);
+    await step(audit.id);
+    srv.hits.clear();
+    await call(r.audit.DELETE(new NextRequest(`http://localhost/api/live/audits/${audit.id}`, { method: "DELETE" }), ctx({ id: audit.id })));
+  });
+
   it("creates a crawl, reports progress from the crawls table, and finishes when the worker finishes", async () => {
     const audit = await createAudit();
     expect(audit.crawler).toMatchObject({ version: 2, status: "queued" });

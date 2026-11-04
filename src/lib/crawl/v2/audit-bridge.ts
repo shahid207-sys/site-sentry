@@ -60,6 +60,9 @@ export async function startCrawl(
     auth,
     aiCrawlers: audit.config.aiCrawlers,
     render: audit.config.render,
+    ...(audit.config.resourceBudgets?.nonHtml !== undefined ? { nonHtmlBudget: audit.config.resourceBudgets.nonHtml } : {}),
+    ...(audit.config.resourceBudgets?.images !== undefined ? { imageBudget: audit.config.resourceBudgets.images } : {}),
+    ...(audit.config.resourceBudgets?.externalLinks !== undefined ? { externalLinkBudget: audit.config.resourceBudgets.externalLinks } : {}),
     ...(opts.brand ? { brand: opts.brand } : {}),
     ...(opts.aiAnalysis ? { aiAnalysis: true } : {}),
   };

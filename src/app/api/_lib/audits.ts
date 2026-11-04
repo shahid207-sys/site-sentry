@@ -2,7 +2,7 @@ import "server-only";
 import { z } from "zod";
 import { RULE_CATEGORIES, type RuleCategory } from "@/lib/audit/types";
 import { clampToLegacyEngine, createAudit, LIMITS } from "@/lib/crawl/engine";
-import { MAX_SCOPE_RULES, normaliseSubfolder, PROFILE_IDS, RENDER_MODES, resolveProfile, type ScopeRules } from "@/lib/crawl/profiles";
+import { MAX_BUDGET, MAX_SCOPE_RULES, normaliseSubfolder, PROFILE_IDS, RENDER_MODES, resolveProfile, type ScopeRules } from "@/lib/crawl/profiles";
 import { regexProblem } from "@/lib/crawl/scope-rules";
 import { crawlerV2Enabled, getCrawlQueue, startCrawl, syncAudit, type CrawlAuthInput } from "@/lib/crawl/v2/audit-bridge";
 import { secretKey } from "@/lib/crawl/v2/secrets";
@@ -15,6 +15,8 @@ export const CATEGORY_IDS = RULE_CATEGORIES.map((c) => c.id) as [RuleCategory, .
 
 // Length and safety are checked by regexProblem in scopeFrom, which names the rule; this only bounds the payload.
 const Rules = z.array(z.string().max(10_000)).max(MAX_SCOPE_RULES).default([]);
+
+const ResourceBudget = z.number().int().min(0).max(MAX_BUDGET).optional();
 
 export const AuditRequest = z.object({
   siteId: z.string().min(1).max(80),
@@ -33,6 +35,8 @@ export const AuditRequest = z.object({
       password: z.string().min(1).max(500),
     })
     .optional(),
+  /** Custom only; each omitted limit uses the engine's default. */
+  resourceBudgets: z.object({ nonHtml: ResourceBudget, images: ResourceBudget, externalLinks: ResourceBudget }).optional(),
   /** Intent for AI crawlers (AIS-002); omitted = not set. */
   aiCrawlers: z.enum(["allow", "block"]).optional(),
   /** Render mode; omitted = the profile's default. Each profile accepts its own modes (profiles.ts). */
@@ -70,11 +74,12 @@ export function checkAuditRequest(ws: Workspace, input: AuditRequest) {
     throw new WorkflowError("INVALID", (e as Error).message);
   }
   if ((input.scope || input.auth) && input.profile !== "custom") throw new WorkflowError("INVALID", "Scope rules and basic auth are part of the Custom profile.");
+  if (input.resourceBudgets && input.profile !== "custom") throw new WorkflowError("INVALID", "Non-HTML, image and external link budgets are part of the Custom profile.");
   const scope = input.scope ? scopeFrom(input.scope) : undefined;
 
   const v2 = crawlerV2Enabled(ws);
-  if (!v2 && (scope || input.auth)) {
-    throw new WorkflowError("INVALID", "Scope rules and basic auth need crawler v2, which is off on this server (CRAWLER_V2).");
+  if (!v2 && (scope || input.auth || input.resourceBudgets)) {
+    throw new WorkflowError("INVALID", "Scope rules, basic auth and resource budgets need crawler v2, which is off on this server (CRAWLER_V2).");
   }
   // Checked before the audit exists, so a missing key cannot leave an audit with no crawl behind it.
   if (v2 && input.auth && !secretKey()) {
@@ -99,6 +104,7 @@ export async function launchAudit(ws: Workspace, input: AuditRequest): Promise<{
     maxDepth: limits.maxDepth,
     ...(scope ? { scope } : {}),
     ...(input.auth ? { authUser: input.auth.username } : {}),
+    ...(input.resourceBudgets ? { resourceBudgets: input.resourceBudgets } : {}),
     ...(v2 && input.aiCrawlers ? { aiCrawlers: input.aiCrawlers } : {}),
     ...(limits.render !== "off" ? { render: limits.render } : {}),
     categories,

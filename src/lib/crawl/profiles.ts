@@ -35,6 +35,9 @@ export const PROFILES: Record<ProfileId, CrawlProfile> = {
   custom: { id: "custom", label: "Custom", budget: 1_000, maxDepth: 10, budgetEditable: true, depthEditable: true, scopeRules: true, render: ["off", "sampled", "full"], use: "Include/exclude regex, subfolder-only, staging with auth" },
 };
 
+/** What a crawl checks apart from its URL budget, unless the Custom profile sets otherwise. */
+export const RESOURCE_BUDGET_DEFAULTS = { nonHtml: 1_000, images: 2_000, externalLinks: 500 } as const;
+
 /** Validation bounds for user-set values (not profile caps): keep a typo from queueing a crawl of a billion URLs. */
 export const MAX_BUDGET = 1_000_000;
 export const MAX_DEPTH = 100;

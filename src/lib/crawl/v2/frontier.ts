@@ -13,6 +13,7 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import type { Db } from "../../db/client";
+import { RESOURCE_BUDGET_DEFAULTS } from "../profiles";
 import type { DiscoverySource, TerminalState, UrlState } from "./types";
 import type { ExtractedHtml } from "../../snapshot/types";
 
@@ -24,9 +25,9 @@ export const DEFAULT_LEASE_MS = 60_000;
  * Non-HTML answers per crawl (feeds, JSON, images and files linked as pages), counted apart from the page budget. Only
  * the answer shows what a URL is, so a fetch is charged as a page at commit and moved here when it comes back non-HTML.
  * Once this is spent, URLs that look non-HTML by extension are not requested; one that does not look it is only found
- * out by asking, and stays charged as a page. A crawl's `config.nonHtmlBudget` overrides it (tests).
+ * out by asking, and stays charged as a page. A crawl's `config.nonHtmlBudget` (Custom profile) overrides it.
  */
-export const NON_HTML_BUDGET = 1_000;
+export const NON_HTML_BUDGET = RESOURCE_BUDGET_DEFAULTS.nonHtml;
 /** A URL whose path ends in a file type that is not a page. */
 const NON_HTML_PATH = String.raw`\.(webp|jpe?g|png|gif|svg|ico|avif|bmp|tiff?|pdf|zip|gz|rar|7z|mp3|mp4|m4a|webm|mov|avi|wav|ogg|woff2?|ttf|otf|eot|css|js|json|xml|rss|csv|docx?|xlsx?|pptx?)(\?.*)?$`;
 const nonHtmlSpent = (k: string) => sql.raw(`(${k}.budget is not null and ${k}.non_html_fetches >= coalesce((${k}.config->>'nonHtmlBudget')::int, ${NON_HTML_BUDGET}))`);

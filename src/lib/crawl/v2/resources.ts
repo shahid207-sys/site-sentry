@@ -24,11 +24,12 @@ import type { Db } from "../../db/client";
 import { MAX_IMAGE_HEAD_BYTES, SafeFetchError, type FetchOptions, type FetchResult } from "../../fetch/safe-fetch";
 import { imageSize } from "../../snapshot/image-size";
 import type { SnapshotImage, SnapshotLink } from "../../snapshot/types";
+import { RESOURCE_BUDGET_DEFAULTS } from "../profiles";
 import { isAllowed, parseRobots } from "../robots";
 import type { HostThrottle } from "./politeness";
 
-export const MAX_EXTERNAL_LINKS = 500;
-export const MAX_IMAGE_URLS = 2000;
+export const MAX_EXTERNAL_LINKS = RESOURCE_BUDGET_DEFAULTS.externalLinks;
+export const MAX_IMAGE_URLS = RESOURCE_BUDGET_DEFAULTS.images;
 /** Pages kept per resource as evidence (the count is complete). */
 export const SAMPLE_PAGES = 5;
 /** Hosts checked at the same time; each host still gets its own throttle. */

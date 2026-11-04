@@ -79,6 +79,12 @@ export interface CrawlConfig {
   keyPages?: string[];
   /** Render mode (src/lib/render/run.ts): off, sampled or full. Unset is off. */
   render?: "off" | "sampled" | "full";
+  /** Custom profile: non-HTML answers to accept (frontier.ts reads it). Unset: NON_HTML_BUDGET. */
+  nonHtmlBudget?: number;
+  /** Custom profile: image URLs to check. Unset: MAX_IMAGE_URLS. */
+  imageBudget?: number;
+  /** Custom profile: external links to check. Unset: MAX_EXTERNAL_LINKS. */
+  externalLinkBudget?: number;
   /** The project's brand name (META-020). Unset: inferred from the page's own tags. */
   brand?: string;
   /** The project turned AI analysis on: the worker queues the job after the rules (src/lib/ai). */
@@ -814,7 +820,10 @@ class Run {
       robotsToken: ROBOTS_TOKEN,
       signal: this.signal,
       log: this.log,
-      limits: this.opts.resourceLimits,
+      limits: {
+        images: this.crawl.config?.imageBudget ?? this.opts.resourceLimits?.images,
+        externalLinks: this.crawl.config?.externalLinkBudget ?? this.opts.resourceLimits?.externalLinks,
+      },
     });
     return this.resourcePhase;
   }
