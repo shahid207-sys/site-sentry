@@ -584,3 +584,19 @@ Also: a robots.txt blocking one section and GPTBot, a sitemap index with gzipped
 - [ ] Fix → Verify loop resolves only what was actually re-checked
 - [ ] UI passes Phase 4 gate, including dark mode and keyboard-only journey
 - [ ] Engineering report lists what is not done, with no unverified claims
+
+## AI analysis
+
+Opt-in per project (`Site.aiAnalysis`), off by default. After the rules finish, a queue job (`src/lib/ai`) sends stored data
+only to the Anthropic API (`ANTHROPIC_API_KEY`; model `AI_ANALYSIS_MODEL`, default `claude-sonnet-5-5`): the coverage summary,
+the top issue groups with evidence, and for the homepage plus one sample page per top-10 template the title, description,
+headings outline, trimmed main text, nav link count and OG tags. The site is never fetched for it.
+
+- **Output:** strict JSON, validated with Zod: `executiveSummary` (strengths, weaknesses), `qualityIssues[]`, `rewrites[]`,
+  `strategy[]`, `actionPlan` (`thisWeek[]`, `thisQuarter[]`). Character counts on rewrites are computed by code.
+- **Grounding:** every item must cite a finding ID of this crawl, or a URL plus a quote of 25 words or fewer found in that
+  URL's stored text. A validator drops other citations, items left uncited, items quoting words not in stored text, and
+  items claiming anything about rankings, traffic or Google penalties, and logs the counts (`ai.grounded`).
+- **Cost:** at most `AI_MAX_INPUT_TOKENS` per audit, by the API's own count; text is shortened and pages dropped to fit, and
+  if the input still does not fit nothing is sent. A finished analysis is cached by audit ID.
+- **Labelling:** shown as "AI analysis" in the UI and the report.
