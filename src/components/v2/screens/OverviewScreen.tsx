@@ -67,6 +67,7 @@ function AnalysedOverview() {
 
   return (
     <div className="flex flex-col gap-6">
+      <CoverageBanner v={o.verdict} />
       <StatStrip
         items={[
           { label: "Issue groups", value: o.issueGroups.toLocaleString("en-GB"), hint: `${plural(o.rulesRan, "rule")} ran`, href: `${auditBase}/issues` },
@@ -85,6 +86,21 @@ function AnalysedOverview() {
       </div>
       <Scorecards o={o} groups={groups.data} />
     </div>
+  );
+}
+
+// ---------- complete or partial ----------
+
+/** The audit's coverage verdict, in the crawl's own terms: every reason names its count. */
+function CoverageBanner({ v }: { v: CrawlOverview["verdict"] }) {
+  if (v.verdict === "running") return null;
+  const lines = [...v.reasons.map((r) => r.message), ...v.notes];
+  const complete = v.verdict === "complete";
+  return (
+    <Notice tone={complete ? "ok" : "warn"} title={complete ? "Complete" : "Partial"}>
+      {complete ? <p>Every in-scope URL reached a final state, and no budget cut applied.</p> : null}
+      {lines.length ? <ul className="mt-1 list-disc space-y-0.5 pl-5 marker:text-fg-3">{lines.map((l) => <li key={l}>{l}</li>)}</ul> : null}
+    </Notice>
   );
 }
 

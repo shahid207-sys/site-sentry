@@ -305,8 +305,8 @@ function NewAuditForm({ requestedSite }: { requestedSite: string }) {
   const settings = useApi<SettingsData>(`${apiBase}/settings`);
   const v2 = settings.data?.crawler.v2 ?? false;
   const canAuth = settings.data?.crawler.basicAuth ?? false;
-  // Standard is the usual audit; the in-request engine (v2 off) cannot run it in full, so start from Quick there.
-  const profile: ProfileId = chosenProfile ?? (v2 ? "standard" : "quick");
+  // Workspace audits default to Standard; Quick stays the default of the public hero form only.
+  const profile: ProfileId = chosenProfile ?? "standard";
   const [categories, setCategories] = useState<RuleCategory[]>(RULE_CATEGORIES.map((c) => c.id));
   const [checkLinks, setCheckLinks] = useState(true);
   const [includeImportant, setIncludeImportant] = useState(true);
