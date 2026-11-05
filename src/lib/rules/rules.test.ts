@@ -472,6 +472,11 @@ const CASES: Record<string, Case> = {
   "CNT-016": PAGE("CNT-016", () => pageFrom("/x/", withBody(`<main><p>${TEXT}</p><h2>Print</h2><h2>your vision</h2></main>`)), () => pageFrom("/x/", withBody(`<main><p>${TEXT}</p><h2>Print</h2><p>Paper and ink.</p><h2>your vision</h2><h2>Spades</h2><h2>Forks</h2></main>`))),
   "CNT-017": PAGE("CNT-017", () => pageFrom("/x/", { h1: "<h2>Slide one</h2><h2>Slide two</h2><h1>Garden tools</h1>" }), () => pageFrom("/x/", { h1: "<h2>Slide one</h2><h1>Garden tools</h1><h2>Care</h2>" })),
   "CNT-018": PAGE("CNT-018", () => pageFrom("/x/", withBody(`<main><p>${TEXT} ${"Buy cheap spades online today. ".repeat(20)}</p></main>`)), () => pageFrom("/x/", withBody(`<main><p>${TEXT} Buy cheap spades online today.</p></main>`))),
+  "CNT-022": PAGE(
+    "CNT-022",
+    () => pageFrom("/x/", withBody("<p><strong>How long does a spade last?</strong> Decades.</p><p><strong>Can I sharpen it?</strong> Yes.</p><p><b>Do you deliver?</b> No.</p>")),
+    () => pageFrom("/x/", withBody("<h3><strong>How long does a spade last?</strong></h3><p><strong>Can I sharpen it?</strong> Yes.</p><p><b>Do you deliver?</b> No.</p>")),
+  ),
   "CNT-019": SITE(
     "CNT-019",
     () => [cleanSite(pageFrom("/blog/old/", { head: '<meta property="article:published_time" content="2025-01-01T00:00:00Z">' })), crawlOf()],
@@ -670,7 +675,7 @@ describe("rule catalog", () => {
   it("every registered rule has a test case, and every case names a registered rule", () => {
     expect(Object.keys(CASES).sort()).toEqual(RULES.map((r) => r.id).sort());
     // Per family, then the 13 rendered rules (Phase 5).
-    expect(RULES.length).toBe(31 + 19 + 12 + 3 + 13 + 6 + 10 + 10 + 6 + 5 + 5 + 13 + 18); // the 18 expert rules
+    expect(RULES.length).toBe(31 + 19 + 12 + 3 + 13 + 6 + 10 + 10 + 6 + 5 + 5 + 13 + 19); // the 19 expert rules
     expect(Object.keys(DEFERRED_RULES)).toEqual(["CNT-013", "CNT-014", "PERF-002"]);
     // A deferred rule is never also registered.
     for (const id of Object.keys(DEFERRED_RULES)) expect(RULES_BY_ID.has(id), id).toBe(false);

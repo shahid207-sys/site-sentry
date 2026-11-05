@@ -295,6 +295,30 @@ const CNT021 = cnt({
   },
 });
 
+/** Bold questions that make an FAQ: this many. */
+export const FAQ_MIN_QUESTIONS = 3;
+
+const CNT022 = cnt({
+  id: "CNT-022",
+  version: 1,
+  confidence: "heuristic",
+  impact: 2,
+  needs: ["raw"],
+  groupByTemplate: true,
+  evaluate({ page: p }) {
+    const qs = p.facts?.boldQuestions;
+    if (!isHtml200(p) || !qs || p.robots?.noindex.meta || p.robots?.noindex.header) return [];
+    const distinct = [...new Set(qs.map((q) => q.trim()).filter((q) => wordsOf(q).length >= 2))];
+    if (distinct.length < FAQ_MIN_QUESTIONS) return [];
+    return [finding(CNT022, p.url, `${distinct.length} questions are written in bold text, not as headings.`, { questions: distinct.slice(0, 10), count: distinct.length })];
+  },
+  explain: {
+    why: "Questions in bold paragraphs look like headings but are not: the outline, screen readers and search engines do not see the page's questions as its sections, and the answers are harder to match to them.",
+    fix: "Mark each question as a heading (an <h2> or <h3> under the FAQ's heading), or use an accordion with <details> and <summary>. Add FAQPage schema only where it fits.",
+    acceptance: `Fewer than ${FAQ_MIN_QUESTIONS} bold questions outside headings.`,
+  },
+});
+
 // ---------- metadata ----------
 
 const mta = pageRule("metadata");
@@ -749,7 +773,7 @@ const SD011 = pageRule("structured_data")({
 export const EXPERT_RULES = {
   IDX: [IDX033, IDX034],
   META: [META020, META021, META022, META023],
-  CNT: [CNT016, CNT017, CNT018, CNT019, CNT020, CNT021],
+  CNT: [CNT016, CNT017, CNT018, CNT019, CNT020, CNT021, CNT022],
   LNK: [LNK015, LNK016, LNK017],
   I18N: [I18N007, I18N008],
   SD: [SD011],

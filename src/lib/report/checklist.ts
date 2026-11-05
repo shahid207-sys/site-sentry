@@ -33,7 +33,7 @@ export const CHECKLIST: { label: string; rules: string[] }[] = [
   { label: "Open Graph and Twitter cards", rules: r("META", 16, 17, 18, 22) },
   { label: "Favicon", rules: r("META", 19) },
   { label: "CMS version not exposed", rules: r("META", 23) },
-  { label: "Heading structure", rules: [...span("CNT", 1, 4), ...r("CNT", 16, 17)] },
+  { label: "Heading structure", rules: [...span("CNT", 1, 4), ...r("CNT", 16, 17, 22)] },
   { label: "Content depth and duplication", rules: span("CNT", 5, 8) },
   { label: "Content quality signals", rules: r("CNT", 9, 10, 11, 12, 18) },
   { label: "Freshness, brand and contact consistency", rules: r("CNT", 19, 20, 21) },

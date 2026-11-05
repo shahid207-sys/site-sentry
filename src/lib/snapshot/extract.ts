@@ -173,6 +173,12 @@ function factsOf($: Doc, html: string, base: string, headers: Record<string, str
     htmlBytes,
     domNodes: $("*").length,
     strong: $("body strong, body b").toArray().slice(0, EXPERT_CAPS.strong).map((el) => collapse($(el).text()).slice(0, 120)).filter(Boolean),
+    // Bold questions outside headings: an FAQ written as bold paragraphs (CNT-022).
+    boldQuestions: $("body strong, body b")
+      .toArray()
+      .filter((el) => !$(el).parents("h1, h2, h3, h4, h5, h6, nav, header, footer, summary, button, a, strong, b").length && /\?\s*$/.test($(el).text()))
+      .slice(0, EXPERT_CAPS.boldQuestions)
+      .map((el) => collapse($(el).text()).slice(0, 200)),
     ...navFacts($, base),
     cardTexts: cardTexts($, $("body").first()),
     bodyClass: ($("body").first().attr("class") ?? "").slice(0, SNAPSHOT_CAPS.attrChars),
@@ -184,7 +190,7 @@ function factsOf($: Doc, html: string, base: string, headers: Record<string, str
 }
 
 /** Caps for the expert rules' facts: enough to judge a page, never a page's worth of storage. */
-export const EXPERT_CAPS = { strong: 200, navBlocks: 20, contacts: 30 } as const;
+export const EXPERT_CAPS = { strong: 200, boldQuestions: 50, navBlocks: 20, contacts: 30 } as const;
 const NAV_SELECTOR = 'nav, [role="navigation"], [class*="mobile-menu"], [class*="mobile-nav"], [id*="mobile-menu"], [id*="mobile-nav"]';
 
 function navFacts($: Doc, base: string): Pick<PageFacts, "navBlocks" | "navLinks"> {

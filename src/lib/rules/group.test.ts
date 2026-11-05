@@ -75,6 +75,6 @@ describe("TemplateGroups", () => {
   });
 
   it("names the rules that report per template group", () => {
-    expect(RULES.filter((r) => r.groupByTemplate).map((r) => r.id).sort()).toEqual(["CNT-021", "LNK-015", "LNK-016", "META-022", "META-023", "SD-004", "SD-011"]);
+    expect(RULES.filter((r) => r.groupByTemplate).map((r) => r.id).sort()).toEqual(["CNT-021", "CNT-022", "LNK-015", "LNK-016", "META-022", "META-023", "SD-004", "SD-011"]);
   });
 });
