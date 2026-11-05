@@ -189,7 +189,8 @@ describe("claimDue", () => {
     await runNow(db, WS, paused.id, now);
     await setEnabled(db, WS, paused.id, false, now);
 
-    const [x, y] = await Promise.all([claimDue(db, new Date(now.getTime() + 1000), 50), claimDue(db, new Date(now.getTime() + 1000), 50)]);
+    // The test database keeps due schedules from earlier runs; a limit they cannot fill keeps this test's own in reach.
+    const [x, y] = await Promise.all([claimDue(db, new Date(now.getTime() + 1000), 100_000), claimDue(db, new Date(now.getTime() + 1000), 100_000)]);
     const mine = [...x, ...y].filter((d) => d.siteId === project).map((d) => d.id);
     expect(mine.sort()).toEqual([a.id, b.id].sort());
     for (const id of [a.id, b.id]) {
@@ -198,7 +199,7 @@ describe("claimDue", () => {
       expect(s.lastRunAt).not.toBeNull();
     }
     expect((await getSchedule(db, WS, later.id))!.lastRunAt).toBeNull();
-    expect((await claimDue(db, new Date(now.getTime() + 1000), 50)).filter((d) => d.siteId === project)).toEqual([]);
+    expect((await claimDue(db, new Date(now.getTime() + 1000), 100_000)).filter((d) => d.siteId === project)).toEqual([]);
   });
 
   it("rejects a webhook URL without its secret (check constraint)", async () => {
