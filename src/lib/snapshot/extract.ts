@@ -2,10 +2,11 @@
 // for outlinks, so each page is parsed once. Main-content text reuses the legacy content rule's extraction.
 import { createHash } from "node:crypto";
 import { detect } from "tinyld";
-import { blockText, BOILERPLATE, mainContentSource, mainContentText } from "../audit/rules/content";
+import { blockText, BOILERPLATE, mainContentSource } from "../audit/rules/content";
 import type { Doc } from "../audit/parse";
 import type { Outlink } from "../crawl/v2/discovery";
 import { cardTexts } from "./cards";
+import { mainText } from "./main-text";
 import { templateShape } from "./template";
 import { simhash, textHash, words } from "./text";
 import type { CanonicalTag, ExtractedHtml, HeadingEntry, HeadTag, JsonLdBlock, PageFacts, RobotsDirective, RobotsSnapshot, SnapshotImage } from "./types";
@@ -353,9 +354,10 @@ export function extractHtml({ $, html, pageUrl, headers, bytes, outlinks }: Extr
     outline.push({ level, text: blockText($(el).clone()).slice(0, 300), ...(adjacent.has(el) ? { adjacent: true as const } : {}) });
   });
 
-  const main = mainContentText($).text.slice(0, SNAPSHOT_CAPS.mainTextChars);
+  // Without page furniture: menus and link lists inside <main> (a sidebar mega menu) are not the page's content.
+  const main = mainText($).slice(0, SNAPSHOT_CAPS.mainTextChars);
 
-  // An image is in the main content when it sits inside the element mainContentText reads and outside boilerplate.
+  // An image is in the main content when it sits inside the element main text is read from and outside boilerplate.
   const source = mainContentSource($);
   const mainRoot = $(source === "main" ? "main, [role=main]" : source).first()[0];
   const fillsParent = (style: string | undefined) => {
