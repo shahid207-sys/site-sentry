@@ -26,7 +26,9 @@ export class TemplateGroups {
         passThrough.push(f);
         continue;
       }
-      const key = `${f.ruleId}\u0000${template ?? `url:${f.url}`}\u0000${String(f.evidence.groupKey ?? "")}`;
+      // A finding in the site's shared navigation or footer is one fix whatever template the page uses.
+      const scope = f.evidence.sitewide === true ? "sitewide" : (template ?? `url:${f.url}`);
+      const key = `${f.ruleId}\u0000${scope}\u0000${String(f.evidence.groupKey ?? "")}`;
       const g = this.groups.get(key) ?? { first: f, pages: 0, sample: [], missing: new Set<string>() };
       g.pages++;
       if (!g.sample.includes(f.url)) {
@@ -46,7 +48,12 @@ export class TemplateGroups {
     return [...this.groups.values()].map((g) => {
       const f = g.first;
       const ev = { ...f.evidence, ...(g.missing.size ? { missing: [...g.missing].sort() } : {}), pages: g.pages, sample: g.sample };
-      const message = g.pages > 1 ? `${f.message} The same holds on ${g.pages - 1} other page(s) built from this template.` : f.message;
+      const message =
+        g.pages <= 1
+          ? f.message
+          : f.evidence.sitewide === true
+            ? `${f.message} The same link is on ${g.pages - 1} other page(s): affects ${g.pages} pages, one template fix.`
+            : `${f.message} The same holds on ${g.pages - 1} other page(s) built from this template.`;
       return { ...f, url: g.sample[0], message, evidence: ev };
     });
   }

@@ -27,6 +27,22 @@ describe("TemplateGroups", () => {
     expect(out[0].message).toContain("6 other page(s)");
   });
 
+  it("groups a sitewide finding across templates, and says it is one fix", () => {
+    const g = new TemplateGroups();
+    const cta = (url: string): Finding => ({ ...f(url, "upload -> home", []), ruleId: "LNK-016", message: `"Upload" links to the homepage.`, evidence: { groupKey: "upload -> home", sitewide: true } });
+    g.add([cta("https://a.test/")], "tpl-home");
+    g.add([cta("https://a.test/p/1")], "tpl-product");
+    g.add([cta("https://a.test/blog/")], null);
+    const out = g.findings();
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence.pages).toBe(3);
+    expect(out[0].message).toContain("affects 3 pages, one template fix");
+    // Without the flag, the same key stays one group per template.
+    const h = new TemplateGroups();
+    for (const [u, t] of [["https://a.test/", "tpl-home"], ["https://a.test/p/1", "tpl-product"]]) h.add([{ ...cta(u), evidence: { groupKey: "k" } }], t);
+    expect(h.findings()).toHaveLength(2);
+  });
+
   it("keeps different schema types and different templates apart", () => {
     const g = new TemplateGroups();
     g.add([f("https://a.test/a", "Article", ["image"]), f("https://a.test/a", "Product", ["review"])], "tpl-1");

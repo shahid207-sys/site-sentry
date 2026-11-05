@@ -972,6 +972,24 @@ describe("CNT-016 and CNT-018 as calibrated on a real site", () => {
   });
 });
 
+describe("LNK-016 cards and shared regions", () => {
+  const cta = (body: string) => run("LNK-016", pageFrom("/x/", { body }), crawlOf(), { site: cleanSite() });
+  const card = (n: number) => `<div class="card post-${n}"><h3>Spade ${n}</h3><p>Steel.</p><a href="/">Request a quote</a></div>`;
+  it("ignores a button repeated on three or more cards of a listing", () => {
+    expect(cta(`<main><p>${TEXT}</p><div class="grid">${[1, 2, 3].map(card).join("")}</div></main>`)).toEqual([]);
+  });
+  it("still judges the same button when it is a one-off", () => {
+    expect(cta(`<main><p>${TEXT}</p><div class="grid">${[1, 2].map(card).join("")}</div></main>`)).toHaveLength(1);
+    expect(cta(`<main><p>${TEXT}</p><a href="/">Request a quote</a></main>`)).toHaveLength(1);
+  });
+  it("marks a footer or navigation call to action as sitewide, and a content one as not", () => {
+    const [footer] = cta(`<main><p>${TEXT}</p></main><footer><a href="/">Upload 3D files</a></footer>`);
+    expect(footer.evidence).toMatchObject({ location: "footer", sitewide: true });
+    const [content] = cta(`<main><p>${TEXT}</p><a href="/">Upload 3D files</a></main>`);
+    expect(content.evidence).toMatchObject({ location: "main", sitewide: false });
+  });
+});
+
 describe("details", () => {
   it("AIS-002 needs the AI crawler setting when it is not set", () => {
     expect(() => run("AIS-002", cleanSite(), crawlOf())).toThrow(NeedsConfig);

@@ -5,6 +5,7 @@ import { detect } from "tinyld";
 import { blockText, BOILERPLATE, mainContentSource, mainContentText } from "../audit/rules/content";
 import type { Doc } from "../audit/parse";
 import type { Outlink } from "../crawl/v2/discovery";
+import { cardTexts } from "./cards";
 import { templateShape } from "./template";
 import { simhash, textHash, words } from "./text";
 import type { CanonicalTag, ExtractedHtml, HeadingEntry, HeadTag, JsonLdBlock, PageFacts, RobotsDirective, RobotsSnapshot, SnapshotImage } from "./types";
@@ -172,6 +173,7 @@ function factsOf($: Doc, html: string, base: string, headers: Record<string, str
     domNodes: $("*").length,
     strong: $("body strong, body b").toArray().slice(0, EXPERT_CAPS.strong).map((el) => collapse($(el).text()).slice(0, 120)).filter(Boolean),
     ...navFacts($, base),
+    cardTexts: cardTexts($, $("body").first()),
     bodyClass: ($("body").first().attr("class") ?? "").slice(0, SNAPSHOT_CAPS.attrChars),
     logoAlt: logoAlt($),
     contacts: contactsIn(bodyText),

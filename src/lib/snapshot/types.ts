@@ -126,6 +126,8 @@ export interface PageFacts {
   strong?: string[];
   /** Each outermost navigation block: its link count and a signature of its link set (LNK-015). */
   navBlocks?: { links: number; sig: string }[];
+  /** Short texts repeated once per card of a listing, lower-cased, with the number of cards (LNK-016, CNT-018). */
+  cardTexts?: { text: string; n: number }[];
   /** Distinct link targets across the navigation blocks (LNK-015). */
   navLinks?: number;
   /** <body class>, capped (IDX-034: WooCommerce attribute archives). */

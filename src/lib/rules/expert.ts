@@ -442,7 +442,7 @@ export const CTA_MAX_WORDS = 5;
 
 const LNK016 = lnk({
   id: "LNK-016",
-  version: 1,
+  version: 2,
   confidence: "heuristic",
   impact: 3,
   needs: ["raw"],
@@ -452,23 +452,29 @@ const LNK016 = lnk({
     const out: Finding[] = [];
     const seen = new Set<string>();
     const home = homeUrl(crawl.origin);
+    // A button repeated on every card of a listing ("Request a quote" under each product) belongs to the card
+    // template: only one-off calls to action in the navigation, header, hero, footer and content are judged.
+    const onCards = new Set((p.facts?.cardTexts ?? []).map((c) => c.text));
     for (const l of p.links) {
       const anchor = l.anchor?.trim();
       if (!anchor || l.via !== "link" || wordsOf(anchor).length > CTA_MAX_WORDS) continue;
+      if (onCards.has(anchor.replace(/\s+/g, " ").toLowerCase())) continue;
       const cta = CTA_INTENT.find((c) => c.anchor.test(anchor));
       if (!cta) continue;
       const key = `${anchor.toLowerCase()} -> ${l.href}`;
       if (seen.has(key)) continue;
       seen.add(key);
       const t = site.byUrl.get(l.href);
+      // The footer and navigation are the same on every page: one finding for the site, with the pages it is on.
+      const sitewide = l.location === "footer" || l.location === "nav";
       if (l.href === home) {
-        out.push(finding(LNK016, p.url, `"${anchor}" links to the homepage.`, { groupKey: key, anchor, target: l.href, intent: cta.intent, reason: "homepage" }));
+        out.push(finding(LNK016, p.url, `"${anchor}" links to the homepage.`, { groupKey: key, anchor, target: l.href, intent: cta.intent, reason: "homepage", location: l.location, sitewide }));
         continue;
       }
       // Judged only when the target's title is known (an internal page the crawl answered).
       if (!t?.page?.title) continue;
       const about = `${t.page.title} ${t.page.h1 ?? ""} ${new URL(l.href).pathname}`;
-      if (!cta.target.test(about)) out.push(finding(LNK016, p.url, `"${anchor}" links to "${t.page.title}", which does not offer that.`, { groupKey: key, anchor, target: l.href, targetTitle: t.page.title, intent: cta.intent, reason: "title_mismatch" }));
+      if (!cta.target.test(about)) out.push(finding(LNK016, p.url, `"${anchor}" links to "${t.page.title}", which does not offer that.`, { groupKey: key, anchor, target: l.href, targetTitle: t.page.title, intent: cta.intent, reason: "title_mismatch", location: l.location, sitewide }));
     }
     return out;
   },
