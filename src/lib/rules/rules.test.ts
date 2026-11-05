@@ -970,6 +970,18 @@ describe("CNT-016 and CNT-018 as calibrated on a real site", () => {
     expect(stuffed("AED select options", 20, 300)).toEqual([]);
     expect(stuffed("view project", 20, 300)).toEqual([]);
   });
+  const bolded = (inner: string, brand: string | null = null) =>
+    run("CNT-018", pageFrom("/x/", { body: `<main><p>${TEXT}</p>${inner}</main>` }), { ...crawlOf(), brand });
+  const strongs = (phrase: string, n: number) => Array.from({ length: n }, (_, i) => `<p><strong>${phrase}</strong> ${word(i)}.</p>`).join("");
+  it("CNT-018 does not count the brand in bold", () => {
+    expect(bolded(strongs("Garden spade", 6))).toHaveLength(1);
+    expect(bolded(strongs("Arch Graphic", 6), "ARCH GRAPHIC")).toEqual([]);
+    expect(bolded(strongs("Arch Graphic", 6), null)).toHaveLength(1);
+  });
+  it("CNT-018 does not count a caption repeated on each card of a listing", () => {
+    const cards = Array.from({ length: 6 }, (_, i) => `<div class="card post-${i}"><h3>Model ${word(i)}</h3><strong>Garden spade</strong></div>`).join("");
+    expect(bolded(`<div class="grid">${cards}</div>`)).toEqual([]);
+  });
 });
 
 describe("META-021 keyword lists", () => {

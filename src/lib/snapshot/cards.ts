@@ -63,8 +63,9 @@ export function cardTexts($: Doc, root: Node): { text: string; n: number }[] {
       if (/^(script|style|br|hr|img|source)$/.test(tag(k))) continue;
       byShape.set(shapeOf(k), [...(byShape.get(shapeOf(k)) ?? []), k]);
     }
-    for (const cards of byShape.values()) {
-      if (cards.length < CARD_MIN_SIBLINGS) continue;
+    for (const [shape, cards] of byShape) {
+      // Paragraphs and plain <div>s side by side are prose, not cards: a card has a class, or is a list item or article.
+      if (cards.length < CARD_MIN_SIBLINGS || (shape.endsWith(".") && !/^(li|article)\.$/.test(shape))) continue;
       const counts = new Map<string, number>();
       for (const c of cards) {
         if ($(c).find("*").length > CARD_MAX_DESCENDANTS) continue;

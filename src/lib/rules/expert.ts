@@ -136,18 +136,31 @@ function phraseCounts(tokens: string[]): Map<string, number> {
   return counts;
 }
 
+/** Uses of each phrase that come from listing cards: the phrases of each card text, times the cards that carry it. */
+function cardPhraseCounts(cards: { text: string; n: number }[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const c of cards) for (const [phrase, k] of phraseCounts(phraseTokens(c.text))) out.set(phrase, (out.get(phrase) ?? 0) + k * c.n);
+  return out;
+}
+
 const CNT018 = cnt({
   id: "CNT-018",
-  version: 2,
+  version: 3,
   confidence: "heuristic",
   impact: 3,
   needs: ["raw"],
-  evaluate({ page: p }) {
+  evaluate({ page: p, crawl }) {
     if (!isHtml200(p)) return [];
     const tokens = phraseTokens(p.mainText);
     const out: { phrase: string; count: number; per1000?: number; inBold?: number }[] = [];
+    // A phrase in every card's caption repeats because of the template, not the copy.
+    const onCards = cardPhraseCounts(p.facts?.cardTexts ?? []);
+    // The brand in bold is a logo or a signature, not a keyword.
+    const brand = phraseTokens(crawl.brand ?? pageBrand(p) ?? "").join(" ");
+    const isBrand = (phrase: string) => brand.length > 0 && (phrase.includes(brand) || brand.includes(phrase));
     if (tokens.length >= STUFF_MIN_WORDS) {
       const hits = [...phraseCounts(tokens)]
+        .map(([phrase, c]) => [phrase, Math.max(0, c - (onCards.get(phrase) ?? 0))] as [string, number])
         .filter(([, c]) => c >= STUFF_MIN_COUNT && (c * 1000) / tokens.length >= STUFF_MIN_RATE)
         .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length);
       // "digital printing dubai" repeating also repeats "digital printing": keep the longest of equally frequent phrases.
@@ -158,9 +171,10 @@ const CNT018 = cnt({
     const bold = new Map<string, number>();
     for (const s of p.facts?.strong ?? []) {
       const t = phraseTokens(s);
-      if (t.length >= 2 && t.length <= 4 && usablePhrase(t)) bold.set(t.join(" "), (bold.get(t.join(" ")) ?? 0) + 1);
+      if (t.length >= 2 && t.length <= 4 && usablePhrase(t) && !isBrand(t.join(" "))) bold.set(t.join(" "), (bold.get(t.join(" ")) ?? 0) + 1);
     }
-    for (const [phrase, inBold] of bold) {
+    for (const [phrase, all] of bold) {
+      const inBold = all - (onCards.get(phrase) ?? 0);
       if (inBold < STUFF_MIN_BOLD) continue;
       const hit = out.find((o) => o.phrase === phrase);
       if (hit) hit.inBold = inBold;
