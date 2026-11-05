@@ -10,6 +10,9 @@ import type { GroundingContext } from "./ground";
 type Exec = Pick<Db, "execute">;
 
 export const TOP_GROUPS = 25;
+/** Groups the analyst judges for qualityIssues, sent even when they rank below TOP_GROUPS: keyword stuffing, FAQ
+ * questions in bold, and the dictionary's spelling candidates (names and brands among them, for the model to sort). */
+export const QUALITY_GROUPS = ["CNT-018", "CNT-022", "CNT-023"];
 export const TOP_TEMPLATES = 10;
 /** Starting length of a page's main text; fitToBudget shortens it further if the audit's token cap needs that. */
 export const MAIN_TEXT_CHARS = 6_000;
@@ -87,7 +90,7 @@ function navLabelsOf(links: SnapshotRow["links"]): string[] {
 export async function buildAiInput(db: Exec, crawlId: string): Promise<{ input: AiInput; grounding: GroundingContext }> {
   const o = await crawlOverview(db, crawlId);
   const groups = await issueGroups(db, crawlId);
-  const top = groups.slice(0, TOP_GROUPS);
+  const top = [...groups.slice(0, TOP_GROUPS), ...groups.slice(TOP_GROUPS).filter((g) => QUALITY_GROUPS.includes(g.ruleId))];
   const evidence = await groupEvidence(db, crawlId, top.map((g) => g.ruleId));
 
   // The homepage first, then each large template's sample, skipping a sample that is the homepage. Sample URLs without
