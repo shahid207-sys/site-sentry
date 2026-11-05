@@ -84,6 +84,7 @@ export const RULE_TITLES: Record<string, string> = {
   "CNT-020": "Brand name differs across og:site_name, title suffix, logo alt and schema",
   "CNT-021": "Same phone or email written in different formats across the page and schema",
   "CNT-022": "FAQ questions in bold text instead of headings",
+  "CNT-023": "Spelling mistakes in navigation labels and headings",
   "LNK-001": "Internal link to 4xx/5xx",
   "LNK-002": "Internal link to redirect",
   "LNK-003": "Orphan candidate (in sitemap, zero inbound in crawl)",

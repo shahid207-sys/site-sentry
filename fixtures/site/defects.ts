@@ -293,6 +293,8 @@ const CONTENT: Defect[] = [
   { name: "one phone in two formats", expect: ["CNT-021"], apply: (p) => void (p.body += "<p>Call +44 20 7946 0000 or 020 7946 0000.</p>") },
   { name: "one phone in one format (negative)", expect: [], apply: (p) => void (p.body += "<p>Call +44 20 7946 0000 today.</p>") },
   { name: "FAQ in bold paragraphs", expect: ["CNT-022"], apply: (p) => void (p.body += "<p><strong>How long does a spade last?</strong> Decades.</p><p><strong>Can I sharpen it?</strong> Yes.</p><p><b>Do you deliver abroad?</b> No.</p>") },
+  { name: "typo in a heading", expect: ["CNT-023"], apply: (p) => void (p.body += "<h2>Garden Tabels</h2>") },
+  { name: "heading spelled right (negative)", expect: [], apply: (p) => void (p.body += "<h2>Garden tables</h2>") },
   { name: "FAQ with question headings (negative)", expect: [], apply: (p) => void (p.body += "<h2>How long does a spade last?</h2><p>Decades.</p><h2>Can I sharpen it?</h2><p>Yes.</p><h2>Do you deliver abroad?</h2><p>No.</p>") },
 ];
 

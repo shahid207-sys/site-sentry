@@ -265,6 +265,7 @@ Type: D = verified defect, H = heuristic, A = advisory.
 | CNT-020 | Brand name differs across og:site_name, title suffix, logo alt and schema | H | 2 |
 | CNT-021 | Same phone or email written in different formats across the page and schema | H | 1 |
 | CNT-022 | FAQ questions in bold text instead of headings | H | 2 |
+| CNT-023 | Spelling mistakes in navigation labels and headings | A | 1 |
 
 **Links and architecture (LNK)**
 

@@ -35,7 +35,7 @@ export const CHECKLIST: { label: string; rules: string[] }[] = [
   { label: "CMS version not exposed", rules: r("META", 23) },
   { label: "Heading structure", rules: [...span("CNT", 1, 4), ...r("CNT", 16, 17, 22)] },
   { label: "Content depth and duplication", rules: span("CNT", 5, 8) },
-  { label: "Content quality signals", rules: r("CNT", 9, 10, 11, 12, 18) },
+  { label: "Content quality signals", rules: r("CNT", 9, 10, 11, 12, 18, 23) },
   { label: "Freshness, brand and contact consistency", rules: r("CNT", 19, 20, 21) },
   { label: "Internal links and orphan pages", rules: [...span("LNK", 1, 7), "LNK-011"] },
   { label: "Navigation, calls to action and link consistency", rules: r("LNK", 8, 9, 15, 16, 17) },

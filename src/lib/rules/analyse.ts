@@ -57,7 +57,7 @@ export interface CrawlRow {
   site_origin: string;
   status: string;
   kind?: CrawlKind;
-  config: { aiCrawlers?: "allow" | "block"; keyPages?: string[]; verify?: VerifyConfig; render?: RenderMode; brand?: string };
+  config: { aiCrawlers?: "allow" | "block"; keyPages?: string[]; verify?: VerifyConfig; render?: RenderMode; brand?: string; spellingAllow?: string[] };
   robots: RobotsRecord | null;
   sitemaps: (SitemapDocRecord | { started: string })[];
   probes: ProbeRecord[];
@@ -98,6 +98,7 @@ export function crawlView(row: CrawlRow, extra: Partial<Pick<CrawlView, "complet
     sitemaps: (row.sitemaps ?? []).filter((d): d is SitemapDocRecord => "url" in d),
     probes: row.probes ?? [],
     brand: row.config?.brand?.trim() || null,
+    spellingAllow: new Set((row.config?.spellingAllow ?? []).map((w) => w.trim().toLowerCase()).filter(Boolean)),
     keyPages: row.config?.keyPages?.length ? row.config.keyPages.map(normalised) : null,
     complete: extra.complete ?? row.status === "completed",
     resources: extra.resources ?? { links: new Map(), images: new Map() },

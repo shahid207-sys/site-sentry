@@ -56,6 +56,8 @@ export interface CrawlView {
   probes: ProbeRecord[];
   /** The brand name from the project's settings; null when unset (rules then read the page's own signals). */
   brand: string | null;
+  /** Words the project's spell check accepts (crawl setting spellingAllow, lower-cased); empty when unset (CNT-023). */
+  spellingAllow: ReadonlySet<string>;
   /** Pages the user marked as high-value (crawl setting keyPages, normalised); null when unset. */
   keyPages: string[] | null;
   /** True when no URL of the crawled host was left unfetched (budget, depth, failure, cancellation). */

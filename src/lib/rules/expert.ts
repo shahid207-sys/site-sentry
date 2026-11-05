@@ -4,6 +4,7 @@
 import { finding, isIndexable, type Finding, type PageCtx, type PageRule, type PageView, type SiteRule, type UrlFacts } from "./contract";
 import { entities } from "./jsonld";
 import { LANGUAGE_MIN_ACCURACY } from "./meta";
+import { joinedWords, matchCase, misspelling } from "./spelling";
 import { homeUrl, isHtml200 } from "./util";
 
 const pageRule = (category: PageRule["category"]) => (r: Omit<PageRule, "scope" | "category">): PageRule => ({ scope: "page", category, ...r });
@@ -316,6 +317,53 @@ const CNT022 = cnt({
     why: "Questions in bold paragraphs look like headings but are not: the outline, screen readers and search engines do not see the page's questions as its sections, and the answers are harder to match to them.",
     fix: "Mark each question as a heading (an <h2> or <h3> under the FAQ's heading), or use an accordion with <details> and <summary>. Add FAQPage schema only where it fits.",
     acceptance: `Fewer than ${FAQ_MIN_QUESTIONS} bold questions outside headings.`,
+  },
+});
+
+/** Words reported per page, at most. */
+const SPELLING_MAX_PER_PAGE = 10;
+
+const CNT023 = cnt({
+  id: "CNT-023",
+  version: 1,
+  confidence: "advisory",
+  impact: 1,
+  needs: ["raw"],
+  groupByTemplate: true,
+  evaluate({ page: p, crawl }) {
+    // The dictionary is English: a page in another language is not judged.
+    if (!isHtml200(p) || !p.language?.detected?.toLowerCase().startsWith("en")) return [];
+    // The brand and the site's own name are spelled as the business spells them.
+    const allow = new Set(crawl.spellingAllow);
+    for (const s of [crawl.brand, pageBrand(p), new URL(p.url).hostname.replace(/^www\./, "").split(".")[0]]) for (const w of (s ?? "").toLowerCase().match(/\p{L}+/gu) ?? []) allow.add(w);
+    const texts: { where: "nav" | "heading"; text: string }[] = [
+      ...p.links.filter((l) => l.location === "nav" && l.anchor?.trim()).map((l) => ({ where: "nav" as const, text: l.anchor!.trim() })),
+      ...p.outline.map((h) => ({ where: "heading" as const, text: h.text })),
+    ];
+    const out: Finding[] = [];
+    const seen = new Set<string>();
+    for (const { where, text } of texts) {
+      for (const token of text.split(/\s+/)) {
+        // URLs, emails, file names, codes: not words.
+        if (/[\d./@_\:]/.test(token)) continue;
+        const bare = token.replace(/^[^\p{L}]+|[^\p{L}]+$/gu, "");
+        if (!bare || seen.has(bare.toLowerCase())) continue;
+        const joined = joinedWords(bare);
+        const fix = joined ? null : bare.split(/[^\p{L}]+/u).map((w) => [w, misspelling(w, allow)] as const).find(([, s]) => s);
+        if (!joined && !fix) continue;
+        seen.add(bare.toLowerCase());
+        const place = where === "nav" ? "the navigation" : "a heading";
+        const message = joined ? `"${bare}" in ${place} runs two words together ("${text}").` : `"${fix![0]}" in ${place} looks misspelled: "${matchCase(fix![0], fix![1]!)}"? ("${text}")`;
+        out.push(finding(CNT023, p.url, message, { groupKey: `${where}:${bare.toLowerCase()}`, word: joined ? bare : fix![0], suggestion: joined ? null : matchCase(fix![0], fix![1]!), kind: joined ? "joined" : "misspelled", where, text: text.slice(0, 200), sitewide: where === "nav" }));
+        if (out.length >= SPELLING_MAX_PER_PAGE) return out;
+      }
+    }
+    return out;
+  },
+  explain: {
+    why: "A typo in the menu or a heading is seen on every visit and in search snippets. It looks careless, and the misspelled word is not the one people search for.",
+    fix: "Correct the spelling in the menu label or heading. Add brand names and trade terms the dictionary does not know to the project's spelling allowlist.",
+    acceptance: "No navigation label or heading has a word one edit away from an English word, or two words run together.",
   },
 });
 
@@ -773,7 +821,7 @@ const SD011 = pageRule("structured_data")({
 export const EXPERT_RULES = {
   IDX: [IDX033, IDX034],
   META: [META020, META021, META022, META023],
-  CNT: [CNT016, CNT017, CNT018, CNT019, CNT020, CNT021, CNT022],
+  CNT: [CNT016, CNT017, CNT018, CNT019, CNT020, CNT021, CNT022, CNT023],
   LNK: [LNK015, LNK016, LNK017],
   I18N: [I18N007, I18N008],
   SD: [SD011],
