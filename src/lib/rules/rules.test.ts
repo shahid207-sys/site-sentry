@@ -1047,14 +1047,14 @@ describe("I18N-007 language threshold", () => {
     expect(fires(10, 1)).toBe(false);
   });
   it("counts a page whose text is mostly in a language, not only one the detector is sure of", () => {
-    const at = (lang: string, accuracy: number, i: number) => ({ statusCode: 200, page: { language: { declared: "en-US", detected: lang, accuracy } } }) as unknown as UrlFacts;
+    const at = (lang: string, accuracy: number) => ({ statusCode: 200, page: { language: { declared: "en-US", detected: lang, accuracy } } }) as unknown as UrlFacts;
     const urls = [
-      ...Array.from({ length: 300 }, (_, i) => at("en", 0.95, i)),
+      ...Array.from({ length: 300 }, () => at("en", 0.95)),
       // Arabic posts under an English menu: 0.72 to 0.96 Arabic.
-      ...[0.72, 0.76, 0.79, 0.82, 0.89, 0.91, 0.94, 0.96, 1].map((a, i) => at("ar", a, i)),
+      ...[0.72, 0.76, 0.79, 0.82, 0.89, 0.91, 0.94, 0.96, 1].map((a) => at("ar", a)),
       // Three short pages the detector calls Vietnamese, and a page under the bar: noise.
-      ...[1, 1, 1].map((a, i) => at("vi", a, i)),
-      ...Array.from({ length: 6 }, (_, i) => at("fr", 0.6, i)),
+      ...[1, 1, 1].map((a) => at("vi", a)),
+      ...Array.from({ length: 6 }, () => at("fr", 0.6)),
     ];
     expect(siteLanguages(urls).map(([l, us]) => [l, us.length])).toEqual([["en", 300], ["ar", 9]]);
     expect(SITE_LANGUAGE_MIN_ACCURACY).toBeLessThan(0.9);
