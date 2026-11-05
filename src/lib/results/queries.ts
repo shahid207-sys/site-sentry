@@ -67,9 +67,9 @@ export interface CrawlOverview {
 }
 
 export async function crawlOverview(db: Exec, crawlId: string): Promise<CrawlOverview> {
-  const r = await db.execute(sql`select id, kind, workspace, ${projectKey("c")} as project, site_origin, profile, status, created_at, analysis->>'status' as analysis, budget, max_depth, robots, health
+  const r = await db.execute(sql`select id, kind, workspace, ${projectKey("c")} as project, site_origin, profile, status, created_at, analysis->>'status' as analysis, analysis->'apiEndpoints' as api_endpoints, budget, max_depth, robots, health
     from crawls c where id = ${crawlId}::uuid`);
-  const c = r.rows[0] as { id: string; kind: string; workspace: string; project: string; site_origin: string; profile: string; status: string; created_at: Date | string; analysis: string | null; budget: number | null; max_depth: number | null; robots: { outcome?: string; reason?: string } | null; health: Health | null } | undefined;
+  const c = r.rows[0] as { id: string; kind: string; workspace: string; project: string; site_origin: string; profile: string; status: string; created_at: Date | string; analysis: string | null; budget: number | null; max_depth: number | null; robots: { outcome?: string; reason?: string } | null; health: Health | null; api_endpoints: { found: number; fetched: number } | null } | undefined;
   if (!c) throw new ResultsError("NOT_FOUND", "Crawl not found.");
   if (c.kind !== "audit") throw new ResultsError("INVALID", "This crawl is a fix verification, not an audit.");
   // Independent reads: run them together (the pool has room; this is the first request of the Overview screen).
@@ -88,7 +88,7 @@ export async function crawlOverview(db: Exec, crawlId: string): Promise<CrawlOve
   }
   const priorities: Record<Priority, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
   for (const x of g.rows as { priority: Priority; n: number }[]) priorities[x.priority] = x.n;
-  const verdict = coverageVerdict(coverage.states, { status: c.status, budget: c.budget, maxDepth: c.max_depth, robots: c.robots });
+  const verdict = coverageVerdict(coverage.states, { status: c.status, budget: c.budget, maxDepth: c.max_depth, robots: c.robots, apiEndpoints: c.api_endpoints });
   return {
     crawlId: c.id,
     workspace: c.workspace,

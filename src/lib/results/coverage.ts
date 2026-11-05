@@ -75,7 +75,7 @@ const urlCount = (n: number) => `${n.toLocaleString("en-GB")} URL${n === 1 ? "" 
  */
 export function coverageVerdict(
   states: Record<string, number>,
-  crawl: { status: string; budget: number | null; maxDepth: number | null; robots: { outcome?: string; reason?: string } | null },
+  crawl: { status: string; budget: number | null; maxDepth: number | null; robots: { outcome?: string; reason?: string } | null; apiEndpoints?: { found: number; fetched: number } | null },
 ): CoverageVerdict {
   if (["queued", "running", "paused", "cancelling"].includes(crawl.status)) return { verdict: "running", reasons: [], notes: [] };
   const n = (s: string) => states[s] ?? 0;
@@ -99,5 +99,7 @@ export function coverageVerdict(
   if (active) reasons.push({ code: "not_reached", urls: active, message: `Not reached: ${urlCount(active)} still waiting when the crawl ended.` });
   if (n("excluded_by_rule")) notes.push(`This audit's scope rules excluded ${urlCount(n("excluded_by_rule"))}.`);
   if (n("out_of_scope")) notes.push(`${urlCount(n("out_of_scope"))} outside the audit's scope (another host or subfolder) not fetched.`);
+  const api = crawl.apiEndpoints;
+  if (api?.found) notes.push(`API/feed endpoints: ${api.found.toLocaleString("en-GB")} (${api.fetched.toLocaleString("en-GB")} fetched). These are URLs for machines (wp-json, oEmbed, feeds, XML-RPC), where noindex is correct, so the indexability checks skip them.`);
   return { verdict: reasons.length ? "partial" : "complete", reasons, notes };
 }

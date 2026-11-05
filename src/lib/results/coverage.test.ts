@@ -8,6 +8,13 @@ describe("coverageVerdict", () => {
     expect(coverageVerdict({ analysed: 40, redirected: 3, non_html: 2 }, crawl)).toEqual({ verdict: "complete", reasons: [], notes: [] });
   });
 
+  it("counts API and feed endpoints in a note, not as a gap", () => {
+    const v = coverageVerdict({ analysed: 40 }, { ...crawl, apiEndpoints: { found: 801, fetched: 83 } });
+    expect(v.verdict).toBe("complete");
+    expect(v.notes).toEqual([expect.stringMatching(/^API\/feed endpoints: 801 \(83 fetched\)/)]);
+    expect(coverageVerdict({ analysed: 40 }, { ...crawl, apiEndpoints: { found: 0, fetched: 0 } }).notes).toEqual([]);
+  });
+
   it("names the budget, the depth limit and the failures with their counts", () => {
     const v = coverageVerdict({ analysed: 1000, budget_exhausted: 12, depth_exceeded: 1, failed_timeout: 2, failed_dns: 1 }, crawl);
     expect(v.verdict).toBe("partial");
