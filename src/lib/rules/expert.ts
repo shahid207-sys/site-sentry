@@ -593,20 +593,26 @@ const IDX034 = idx({
 
 const i18n = siteRule("international");
 const primary = (l: string | null | undefined) => (l ?? "").trim().toLowerCase().split(/[-_]/)[0];
-const MIN_LANGUAGE_PAGES = 2;
-const MIN_LANGUAGE_SHARE = 0.02;
+/** A language counts once this many pages are in it, or MIN_LANGUAGE_SHARE of the judged pages (and at least 2). */
+export const MIN_LANGUAGE_PAGES = 5;
+export const MIN_LANGUAGE_SHARE = 0.02;
+
+/** The site's languages: pages whose detected language is reliable, by primary subtag, each with enough pages. */
+export function siteLanguages(urls: readonly UrlFacts[]): [string, UrlFacts[]][] {
+  const judged = urls.filter((u) => u.statusCode === 200 && u.page?.language?.detected && (u.page.language.accuracy ?? 0) >= LANGUAGE_MIN_ACCURACY);
+  const byLang = new Map<string, UrlFacts[]>();
+  for (const u of judged) byLang.set(primary(u.page!.language!.detected), [...(byLang.get(primary(u.page!.language!.detected)) ?? []), u]);
+  return [...byLang].filter(([, us]) => us.length >= MIN_LANGUAGE_PAGES || (us.length >= 2 && us.length >= judged.length * MIN_LANGUAGE_SHARE));
+}
 
 const I18N007 = i18n({
   id: "I18N-007",
-  version: 1,
+  version: 2,
   confidence: "heuristic",
   impact: 3,
   needs: ["raw"],
   evaluate({ site, crawl }) {
-    const judged = site.urls.filter((u) => u.statusCode === 200 && u.page?.language?.detected && (u.page.language.accuracy ?? 0) >= LANGUAGE_MIN_ACCURACY);
-    const byLang = new Map<string, UrlFacts[]>();
-    for (const u of judged) byLang.set(primary(u.page!.language!.detected), [...(byLang.get(primary(u.page!.language!.detected)) ?? []), u]);
-    const languages = [...byLang].filter(([, us]) => us.length >= Math.max(MIN_LANGUAGE_PAGES, judged.length * MIN_LANGUAGE_SHARE));
+    const languages = siteLanguages(site.urls);
     if (languages.length < 2) return [];
     const inLanguages = languages.flatMap(([, us]) => us);
     const shared = (read: (u: UrlFacts) => string) => {

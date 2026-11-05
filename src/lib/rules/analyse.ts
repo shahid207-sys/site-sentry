@@ -26,6 +26,7 @@ import { TemplateGroups } from "./group";
 import { RULES } from "./registry";
 import { keepSmallest } from "./site";
 import { isMachineEndpoint } from "./util";
+import { siteLanguages } from "./expert";
 
 export const ANALYSIS_BATCH = 500;
 
@@ -474,6 +475,11 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
       const endpoints = site.urls.filter((u) => isMachineEndpoint(u.url));
       const apiEndpoints = { found: endpoints.length, fetched: endpoints.filter((u) => u.statusCode !== null).length };
       const readerSite: SiteView = { urls: site.urls.filter((u) => !isMachineEndpoint(u.url)), byUrl: site.byUrl };
+      // For the report's hreflang row: Pass needs hreflang to exist, and a one-language site has nothing to annotate.
+      const languages = {
+        detected: siteLanguages(readerSite.urls).map(([language, us]) => ({ language, pages: us.length })),
+        hreflangPages: readerSite.urls.filter((u) => (u.page?.hreflang.length ?? 0) > 0).length,
+      };
       const pageRules = rules.filter((r): r is PageRule => r.scope === "page");
       const siteRules = rules.filter((r): r is SiteRule => r.scope === "site");
       const resourceRules = rules.filter((r): r is ResourceRule => r.scope === "resource");
@@ -554,7 +560,7 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
       // fetched → analysed: every snapshot was read by the page rules above.
       await tx.execute(sql`update crawl_urls set state = 'analysed', updated_at = now() where crawl_id = ${crawlId}::uuid and state = 'fetched'`);
       const msPerPage = pages ? Math.round((list.reduce((n, s) => n + s.totalMs, 0) / pages) * 1000) / 1000 : 0;
-      await tx.execute(sql`update crawls set analysis = ${JSON.stringify({ status: "completed", startedAt, finishedAt: new Date().toISOString(), pages, findings: total, msPerPage, issueGroups, indexablePages: basis.indexable, apiEndpoints, duplicateFingerprints: duplicates, states, health: health?.score ?? null, partialCoverage: health?.partialCoverage ?? null })}::jsonb where id = ${crawlId}::uuid`);
+      await tx.execute(sql`update crawls set analysis = ${JSON.stringify({ status: "completed", startedAt, finishedAt: new Date().toISOString(), pages, findings: total, msPerPage, issueGroups, indexablePages: basis.indexable, apiEndpoints, languages, duplicateFingerprints: duplicates, states, health: health?.score ?? null, partialCoverage: health?.partialCoverage ?? null })}::jsonb where id = ${crawlId}::uuid`);
       // Later audits of the project read this one's states: recompute them, oldest first.
       for (const later of await laterAudits(tx, crawlId)) {
         if (later.kind === "verify" && later.config.verify) await writeVerifyStates(tx, later.id, later.config.verify);

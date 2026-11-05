@@ -972,6 +972,21 @@ describe("CNT-016 and CNT-018 as calibrated on a real site", () => {
   });
 });
 
+describe("I18N-007 language threshold", () => {
+  const english = pageFrom("/en/");
+  const spanishPage = pageFrom("/es/", spanish());
+  const many = (p: PageView, prefix: string, n: number) => Array.from({ length: n }, (_, i) => ({ ...p, url: U(`/${prefix}${i}/`) }));
+  const fires = (en: number, es: number) => run("I18N-007", cleanSite(...many(english, "en", en), ...many(spanishPage, "es", es))).length > 0;
+  it("fires at 5 pages in another language, however large the site", () => {
+    expect(fires(300, 5)).toBe(true);
+    expect(fires(300, 4)).toBe(false); // 4 of 306 pages is 1.3%
+  });
+  it("fires at 2% of the pages, with at least 2", () => {
+    expect(fires(60, 2)).toBe(true); // 3.1%
+    expect(fires(10, 1)).toBe(false);
+  });
+});
+
 describe("LNK-016 cards and shared regions", () => {
   const cta = (body: string) => run("LNK-016", pageFrom("/x/", { body }), crawlOf(), { site: cleanSite() });
   const card = (n: number) => `<div class="card post-${n}"><h3>Spade ${n}</h3><p>Steel.</p><a href="/">Request a quote</a></div>`;

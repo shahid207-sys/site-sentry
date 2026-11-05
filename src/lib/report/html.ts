@@ -164,10 +164,10 @@ function rewrites(d: ReportData) {
 }
 
 function technicalChecklist(d: ReportData) {
-  const rows = checklistRows(d.groups, d.ruleRuns);
+  const rows = checklistRows(d.groups, d.ruleRuns, d.crawl.languages);
   return `<section class="page">
   <h2>Technical checklist</h2>
-  <p class="note">Each row comes from the rules that ran in this audit. Not checked means a rule behind the row did not run or had nothing to evaluate: it says nothing either way.</p>
+  <p class="note">Each row comes from the rules that ran in this audit. Not checked means a rule behind the row did not run or had nothing to evaluate: it says nothing either way. Not applicable means the check has nothing to judge on this site, such as hreflang on a one-language site.</p>
   <table class="checklist"><thead><tr><th>Check</th><th>Result</th><th>Basis</th></tr></thead><tbody>
     ${rows.map((r) => `<tr><td>${esc(r.label)}</td><td class="st st-${esc(r.status.toLowerCase().replace(/ /g, "-"))}">${esc(r.status)}</td><td class="note">${esc(r.detail)}</td></tr>`).join("\n")}
   </tbody></table>
@@ -414,6 +414,7 @@ export function renderReport(d: ReportData, o: RenderOptions): string {
   .st-fail { color: #b3261e; font-weight: 600; }
   .st-warning { color: var(--warn); font-weight: 600; }
   .st-not-checked { color: var(--muted); }
+  .st-not-applicable { color: var(--muted); }
   header.brand { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--line); padding: 8px 0; }
   @media print {
     @page { size: A4; margin: 16mm 14mm; }

@@ -1,9 +1,18 @@
 // The report's technical checklist. Each row is a set of rules, and its status comes only from how those rules ran
 // in this crawl. Pass needs every rule to have run on something with nothing found: a rule that did not run, or that
-// had nothing to evaluate, makes the row "Not checked", never Pass.
+// had nothing to evaluate, makes the row "Not checked", never Pass. The hreflang row also reads the site's languages:
+// it passes only when hreflang exists, fails when several languages have none, and does not apply to a one-language site.
 import type { IssueGroupRow, RuleRunRow } from "../results/queries";
 
-export type ChecklistStatus = "Pass" | "Fail" | "Warning" | "Not checked";
+export type ChecklistStatus = "Pass" | "Fail" | "Warning" | "Not checked" | "Not applicable";
+
+/** The languages the analysis detected (each with enough pages), and the pages that carry hreflang. */
+export interface SiteLanguages {
+  detected: { language: string; pages: number }[];
+  hreflangPages: number;
+}
+
+const HREFLANG = "hreflang";
 
 const r = (prefix: string, ...ns: number[]) => ns.map((n) => `${prefix}-${String(n).padStart(3, "0")}`);
 const span = (prefix: string, from: number, to: number) => r(prefix, ...Array.from({ length: to - from + 1 }, (_, i) => from + i));
@@ -31,7 +40,7 @@ export const CHECKLIST: { label: string; rules: string[] }[] = [
   { label: "Internal links and orphan pages", rules: [...span("LNK", 1, 7), "LNK-011"] },
   { label: "Navigation, calls to action and link consistency", rules: r("LNK", 8, 9, 15, 16, 17) },
   { label: "External links", rules: r("LNK", 10) },
-  { label: "hreflang", rules: span("I18N", 1, 6) },
+  { label: HREFLANG, rules: span("I18N", 1, 6) },
   { label: "Language handling and URL scripts", rules: r("I18N", 7, 8) },
   { label: "Images", rules: span("IMG", 1, 11) },
   { label: "Structured data", rules: span("SD", 1, 11) },
@@ -49,7 +58,7 @@ export interface ChecklistRow {
   detail: string;
 }
 
-export function checklistRows(groups: Pick<IssueGroupRow, "ruleId" | "priority" | "affectedUrls" | "inconclusiveUrls">[], runs: Pick<RuleRunRow, "ruleId" | "status" | "evaluated">[]): ChecklistRow[] {
+export function checklistRows(groups: Pick<IssueGroupRow, "ruleId" | "priority" | "affectedUrls" | "inconclusiveUrls">[], runs: Pick<RuleRunRow, "ruleId" | "status" | "evaluated">[], languages: SiteLanguages | null = null): ChecklistRow[] {
   const byGroup = new Map(groups.map((g) => [g.ruleId, g]));
   const byRun = new Map(runs.map((x) => [x.ruleId, x]));
   return CHECKLIST.map(({ label, rules }) => {
@@ -57,6 +66,16 @@ export function checklistRows(groups: Pick<IssueGroupRow, "ruleId" | "priority" 
       const g = byGroup.get(id);
       return g && (g.affectedUrls > 0 || g.inconclusiveUrls > 0) ? [g] : [];
     });
+    if (label === HREFLANG) {
+      // Pass by absence would say a site with no hreflang has it right.
+      if (!languages) return { label, status: "Not checked" as const, detail: "The site's languages were not recorded for this audit" };
+      if (languages.hreflangPages === 0) {
+        const names = languages.detected.map((l) => `${l.language} (${l.pages} pages)`).join(", ");
+        if (languages.detected.length > 1) return { label, status: "Fail" as const, detail: `Several languages detected without hreflang: ${names}` };
+        if (languages.detected.length === 1) return { label, status: "Not applicable" as const, detail: `One language detected: ${names}; no hreflang needed` };
+        return { label, status: "Not checked" as const, detail: "No page's language was detected reliably, and no page has hreflang" };
+      }
+    }
     const failing = found.filter((g) => g.affectedUrls > 0 && ["critical", "high", "medium"].includes(g.priority));
     if (failing.length) return { label, status: "Fail" as const, detail: failing.map((g) => g.ruleId).join(", ") };
     if (found.length) return { label, status: "Warning" as const, detail: found.map((g) => g.ruleId).join(", ") };
