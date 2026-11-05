@@ -109,6 +109,7 @@ export async function buildAiInput(db: Exec, crawlId: string): Promise<{ input: 
   const seen = new Set<string>();
   const pages: AiPage[] = [];
   const pageText = new Map<string, string>();
+  const pageLanguage = new Map<string, string | null>();
   const rows = r.rows as unknown as SnapshotRow[];
   const siteNav: string[] = [];
   for (const row of rows) {
@@ -134,6 +135,7 @@ export async function buildAiInput(db: Exec, crawlId: string): Promise<{ input: 
       navLinkCount: row.facts?.navLinks ?? null,
       ogTags: og,
     });
+    pageLanguage.set(row.final_url, pages[pages.length - 1].language);
     // Nav labels are page text too: a quality issue about a menu typo quotes the label.
     pageText.set(row.final_url, [row.title, row.description, ...headings.map((h) => h.text), ...allNav, row.main_text, ...Object.values(og)].filter(Boolean).join("\n"));
   }
@@ -156,7 +158,7 @@ export async function buildAiInput(db: Exec, crawlId: string): Promise<{ input: 
     pages,
   };
   // A finding ID is valid only if this crawl has the group: every group, not only those sent.
-  return { input, grounding: { findingIds: new Set(groups.map((g) => g.ruleId)), pageText } };
+  return { input, grounding: { findingIds: new Set(groups.map((g) => g.ruleId)), pageText, pageLanguage } };
 }
 
 /**

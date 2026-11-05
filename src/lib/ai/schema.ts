@@ -37,6 +37,8 @@ export interface DroppedCounts {
   bannedClaims: number;
   /** Items removed for quoting, in their own text, words that are not in the stored text (also counted in `items`). */
   unsupportedQuotes: number;
+  /** Rewrites removed for not being in their page's detected language (also counted in `items`). */
+  wrongLanguage: number;
 }
 
 export const AI_STATUSES = ["queued", "done", "failed", "not_configured", "over_budget"] as const;

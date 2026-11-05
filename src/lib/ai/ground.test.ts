@@ -97,3 +97,30 @@ describe("AiOutputSchema", () => {
     expect(AiOutputSchema.safeParse(output()).success).toBe(true);
   });
 });
+
+describe("groundAnalysis rewrite language", () => {
+  const AR = "https://a.test/ar/";
+  const langCtx = { ...ctx, pageLanguage: new Map<string, string | null>([[AR, "ar"], ["https://a.test/", "en"]]) };
+  const rewrite = (url: string, title: string, description: string, h1: string) => ({ url, title, description, h1, citations: [finding] });
+
+  it("drops a rewrite that is not in its page's detected language, and keeps one that is", () => {
+    const { analysis, dropped } = groundAnalysis(
+      output({
+        rewrites: [
+          rewrite(AR, "3D Printing in Sharjah | Acme", "Custom 3D printed models for your projects.", "3D Printing in Sharjah"),
+          rewrite(AR, "طباعة ثلاثية الأبعاد في الشارقة | Acme", "نماذج مطبوعة حسب الطلب لمشاريعك.", "طباعة ثلاثية الأبعاد"),
+          rewrite("https://a.test/", "Acme Print | Same-day printing", "Same-day printing for your business, with a quote today.", "Same-day printing"),
+        ],
+      }),
+      langCtx,
+    );
+    expect(analysis.rewrites.map((r) => r.title)).toEqual(["طباعة ثلاثية الأبعاد في الشارقة | Acme", "Acme Print | Same-day printing"]);
+    expect(dropped).toMatchObject({ items: 1, wrongLanguage: 1 });
+  });
+
+  it("keeps a rewrite for a page whose language is unknown", () => {
+    const { analysis, dropped } = groundAnalysis(output({ rewrites: [rewrite("https://a.test/other", "Acme | Print", "Print with us.", "Print")] }), langCtx);
+    expect(analysis.rewrites).toHaveLength(1);
+    expect(dropped.wrongLanguage).toBe(0);
+  });
+});

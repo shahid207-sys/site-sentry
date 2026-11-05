@@ -1,6 +1,8 @@
 // The grounding validator (docs/SPEC.md "AI analysis"). Nothing from the model reaches a stored analysis without it:
 // a citation must name a finding of this crawl, or a URL plus a quote that really is in that URL's stored text. An item
 // with no valid citation left is dropped, and so is one that claims anything about rankings, traffic or penalties.
+// A rewrite is also dropped when it is not in its page's detected language.
+import { languageMismatch } from "./language";
 import type { AiOutput, Citation, DroppedCounts, GroundedAnalysis } from "./schema";
 
 export const MAX_QUOTE_WORDS = 25;
@@ -10,6 +12,8 @@ export interface GroundingContext {
   findingIds: ReadonlySet<string>;
   /** Stored text per URL: the full title, description, headings, main text and OG tags, not the trimmed copy sent. */
   pageText: ReadonlyMap<string, string>;
+  /** Detected language per URL (null when unknown). A rewrite for a URL must be in that language. */
+  pageLanguage?: ReadonlyMap<string, string | null>;
 }
 
 /** Claims this layer has no data for. Checked on the model's prose, never on quotes or on rewrite copy. */
@@ -47,8 +51,16 @@ function inlineQuotes(text: string): string[] {
 }
 
 export function groundAnalysis(raw: AiOutput, ctx: GroundingContext): { analysis: GroundedAnalysis; dropped: DroppedCounts } {
-  const dropped: DroppedCounts = { items: 0, citations: 0, bannedClaims: 0, unsupportedQuotes: 0 };
+  const dropped: DroppedCounts = { items: 0, citations: 0, bannedClaims: 0, unsupportedQuotes: 0, wrongLanguage: 0 };
   const pages = new Map([...ctx.pageText].map(([u, t]) => [urlKey(u), normaliseText(t)]));
+  const languages = new Map([...(ctx.pageLanguage ?? [])].map(([u, l]) => [urlKey(u), l]));
+  /** An English title for an Arabic page is no rewrite of it: the whole rewrite goes. */
+  const inPageLanguage = (r: AiOutput["rewrites"][number]) => {
+    if (!languageMismatch([r.title, r.description, r.h1].join(". "), languages.get(urlKey(r.url)))) return true;
+    dropped.items++;
+    dropped.wrongLanguage++;
+    return false;
+  };
   const everything = [...pages.values()];
 
   const validCitation = (c: Citation): boolean => {
@@ -87,7 +99,7 @@ export function groundAnalysis(raw: AiOutput, ctx: GroundingContext): { analysis
     executiveSummary: { strengths: points(raw.executiveSummary.strengths), weaknesses: points(raw.executiveSummary.weaknesses) },
     qualityIssues: filter(raw.qualityIssues, (x) => [x.issue, x.fix]),
     // Rewrite copy is a proposal, not a claim: a printer may sell "traffic signs". Only the citations are checked.
-    rewrites: filter(raw.rewrites, () => []).map((r) => ({ ...r, titleChars: [...r.title].length, descriptionChars: [...r.description].length })),
+    rewrites: filter(raw.rewrites.filter(inPageLanguage), () => []).map((r) => ({ ...r, titleChars: [...r.title].length, descriptionChars: [...r.description].length })),
     strategy: filter(raw.strategy, (x) => [x.text]),
     actionPlan: { thisWeek: points(raw.actionPlan.thisWeek), thisQuarter: points(raw.actionPlan.thisQuarter) },
   };
