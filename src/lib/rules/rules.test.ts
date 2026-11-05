@@ -972,6 +972,22 @@ describe("CNT-016 and CNT-018 as calibrated on a real site", () => {
   });
 });
 
+describe("META-021 keyword lists", () => {
+  const kind = (content: string) => run("META-021", pageFrom("/x/", { description: `<meta name="description" content="${content}">` }))[0]?.evidence.kind;
+  it("finds pipe lists even when a part has a verb-like noun", () => {
+    expect(kind("3D PRINT COMPANY | 3D print in Dubai | 3D print in Abu Dhabi | Trusted 3d printing companies | Best 3d printing services | 3D printing services in dubai.")).toBe("keyword_list");
+    expect(kind("Garden spades | Garden forks | Pruning shears")).toBe("keyword_list");
+  });
+  it("finds comma lists of nouns", () => {
+    expect(kind("Garden spades, steel forks, pruning shears, watering cans, hand trowels")).toBe("keyword_list");
+  });
+  it("does not take a sentence or a title with one pipe for a list", () => {
+    expect(kind("Compare our spades, forks, trowels and shears, then order the ones that suit your soil. Delivery is free.")).not.toBe("keyword_list");
+    expect(kind("We print models, we paint them, we ship them, and we keep you posted")).not.toBe("keyword_list");
+    expect(kind("Garden tools that last | Fixture Site")).not.toBe("keyword_list");
+  });
+});
+
 describe("I18N-007 language threshold", () => {
   const english = pageFrom("/en/");
   const spanishPage = pageFrom("/es/", spanish());

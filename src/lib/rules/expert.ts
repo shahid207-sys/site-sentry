@@ -314,23 +314,45 @@ const META020 = mta({
 const VERBS = /\b(is|are|was|were|be|has|have|had|do|does|can|will|helps?|makes?|gets?|offers?|provides?|delivers?|creates?|designs?|builds?|prints?|sells?|supplies|supply|brings?|gives?|uses?|works?|turns?|includes?|covers?|explains?|shows?|lets?|choose|compare|find|learn|discover|explore|see|try|start|read|buy|shop|order|book|call|contact|request|get|visit|view|browse|download|ask|hire|join|save|upload|schedule)\b/i;
 /** Words that ask the reader to act. "Read" and friends count: a description only has to invite the click. */
 const CALL_TO_ACTION = /\b(call|contact|book|buy|shop|order|request|get|learn|discover|explore|see|find|try|start|read|download|browse|compare|view|visit|sign up|join|ask|enquire|inquire|upload|save|choose|hire|schedule|claim|speak|talk|order)\b/i;
+/** Comma-separated: this many commas. Pipes are a list sooner: "A | B | C" is never a sentence. */
 export const LIST_MIN_SEPARATORS = 3;
+export const PIPE_LIST_MIN_SEPARATORS = 2;
+/** Parts of a list are short: at most this many words on average. */
+const LIST_PART_WORDS = 5;
+
+/**
+ * A keyword list: parts split on pipes (or the vertical bars ¦ and │), or on commas. Pipe parts count whatever their
+ * words: "3D print in Dubai | 3D print in Abu Dhabi" has the noun "print", not a verb. Comma parts are a list when no
+ * part is a sentence and fewer than half of them are clauses (in English).
+ */
+export function keywordList(d: string, english: boolean): { separator: "|" | ","; parts: number } | null {
+  const split = (re: RegExp) => d.replace(/[.!]\s*$/, "").split(re).map((s) => s.trim()).filter(Boolean);
+  const short = (parts: string[]) => parts.reduce((n, s) => n + wordsOf(s).length, 0) / parts.length <= LIST_PART_WORDS;
+  const pipes = split(/[|¦│]/);
+  if (pipes.length - 1 >= PIPE_LIST_MIN_SEPARATORS && short(pipes)) return { separator: "|", parts: pipes.length };
+  const commas = split(/[,،]/);
+  if (commas.length - 1 < LIST_MIN_SEPARATORS || !short(commas) || commas.some((s) => /[.!?]\s/.test(s))) return null;
+  // A clause has a verb, or opens with its subject: "we paint them".
+  const clause = (s: string) => VERBS.test(s) || /^(and |but |then )?(we|you|they|it|i|he|she|our team)\b/i.test(s);
+  if (english && commas.filter(clause).length * 2 >= commas.length) return null;
+  return { separator: ",", parts: commas.length };
+}
 
 const META021 = mta({
   id: "META-021",
-  version: 1,
+  version: 2,
   confidence: "advisory",
   impact: 1,
   needs: ["raw"],
   evaluate({ page: p }) {
     const d = p.descriptions[0]?.trim();
     if (!isHtml200(p) || !d || p.robots?.noindex.meta || p.robots?.noindex.header) return [];
-    const parts = d.split(/[|,،]/).map((s) => s.trim()).filter(Boolean);
-    const separators = parts.length - 1;
     const english = isEnglish(p);
-    const short = parts.length > 0 && parts.reduce((n, s) => n + wordsOf(s).length, 0) / parts.length <= 4;
-    const list = separators >= LIST_MIN_SEPARATORS && short && (!english || !VERBS.test(d));
-    if (list) return [finding(META021, p.url, `The description is a keyword list (${separators} separators, no verb).`, { description: d, kind: "keyword_list" })];
+    const list = keywordList(d, english);
+    if (list) {
+      const sep = list.separator === "|" ? "pipes" : "commas";
+      return [finding(META021, p.url, `The description is a keyword list: ${list.parts} short phrases separated by ${sep}.`, { description: d, kind: "keyword_list", separator: list.separator, parts: list.parts })];
+    }
     // Calls to action are judged in English only: the list of words does not carry to other languages.
     if (english && !CALL_TO_ACTION.test(d)) return [finding(META021, p.url, "The description has no call to action.", { description: d, kind: "no_cta" })];
     return [];
