@@ -405,7 +405,7 @@ function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose: () => 
         </Field>
         <label className="flex items-start gap-2 text-[13px] text-fg-2">
           <input type="checkbox" className="mt-0.5" checked={aiAnalysis} onChange={(e) => setAiAnalysis(e.target.checked)} />
-          <span><strong className="font-medium text-fg-1">AI analysis</strong>: after each audit, send stored page text and findings for this site to the Claude API. Uses your API key and costs money. Off by default.</span>
+          <span><strong className="font-medium text-fg-1">AI analysis</strong>: after each audit, send stored page text and findings for this site to the AI provider set on the server. Uses the API key set for it, and may cost money. Off by default.</span>
         </label>
         {err ? <p className="text-[13px] text-sev-high" role="alert">{err}</p> : null}
         <button type="submit" className="hidden" />

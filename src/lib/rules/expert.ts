@@ -40,11 +40,20 @@ const pageBrand = (p: PageView) => meta(p, "og:site_name") ?? schemaName(p, isHo
 const cnt = pageRule("content");
 /** A fragment ending in one of these is unfinished, or one starting with one of these continues the last. */
 const CONNECTORS = new Set(["of", "and", "or", "the", "a", "an", "for", "to", "in", "on", "with", "by", "at", "from", "your", "our", "my", "their", "&", "+", "و", "في", "من"]);
-const FRAGMENT_MAX_WORDS = 3;
+// Calibrated on arch-graphic.com (2026-11): most of the site's 28 adjacent short heading pairs were one phrase split in two,
+// and the connector test alone caught 2. A short lead-in before a longer line ("ARCH GRAPHIC" / "3D PRINTING SERVICE COMPANY
+// IN UAE") is the usual shape. Two equally short headings ("Rapid" / "Prototyping") read the same as labels ("Spades" /
+// "Forks"), so they are left alone; a run of three or more was a list of labels every time.
+export const FRAGMENT_FIRST_MAX_WORDS = 4;
+export const FRAGMENT_SECOND_MAX_WORDS = 7;
+/** A first part this short, before a longer second part, is a lead-in to it. */
+export const FRAGMENT_STUB_WORDS = 2;
+const CASE_CHANGE_MAX_WORDS = 3;
+const isUpper = (s: string) => /\p{L}/u.test(s) && s === s.toUpperCase();
 
 const CNT016 = cnt({
   id: "CNT-016",
-  version: 1,
+  version: 2,
   confidence: "heuristic",
   impact: 2,
   needs: ["raw"],
@@ -56,12 +65,17 @@ const CNT016 = cnt({
       // `adjacent`: no text, image, link or control between the two headings in the document.
       if (!b.adjacent || a.level !== b.level) continue;
       const [wa, wb] = [wordsOf(a.text), wordsOf(b.text)];
-      if (!wa.length || !wb.length || wa.length > FRAGMENT_MAX_WORDS || wb.length > FRAGMENT_MAX_WORDS) continue;
-      // A run of many short headings is a list of labels, not one phrase.
-      if (p.outline[i - 2]?.level === a.level && a.adjacent && wordsOf(p.outline[i - 2].text).length <= FRAGMENT_MAX_WORDS && p.outline[i + 1]?.adjacent && p.outline[i + 1]?.level === b.level) continue;
+      if (!wa.length || !wb.length || wa.length > FRAGMENT_FIRST_MAX_WORDS || wb.length > FRAGMENT_SECOND_MAX_WORDS) continue;
+      // Three or more in a row are a list of labels, not one phrase.
+      if ((a.adjacent && p.outline[i - 2]?.level === a.level) || (p.outline[i + 1]?.adjacent && p.outline[i + 1]?.level === b.level)) continue;
       const end = wa[wa.length - 1].toLowerCase();
       const start = wb[0].toLowerCase();
-      const continues = CONNECTORS.has(end) || CONNECTORS.has(start) || /^\p{Ll}/u.test(wb[0]);
+      const continues =
+        CONNECTORS.has(end) ||
+        CONNECTORS.has(start) ||
+        /^\p{Ll}/u.test(wb[0]) ||
+        (wa.length <= FRAGMENT_STUB_WORDS && wb.length > wa.length) ||
+        (wa.length <= CASE_CHANGE_MAX_WORDS && isUpper(a.text) !== isUpper(b.text));
       if (continues && !/[.!?:]$/.test(a.text.trim())) pairs.push([a.text, b.text]);
     }
     return pairs.length ? [finding(CNT016, p.url, `${pairs.length} phrase(s) split across heading tags, such as "${pairs[0].join(" / ")}".`, { pairs: pairs.slice(0, 10) })] : [];
@@ -95,18 +109,22 @@ const CNT017 = cnt({
 });
 
 const STUFF_MIN_WORDS = 100;
-/** A phrase must repeat at least this often, at this rate per 1,000 words, and this many times the page's normal phrase. */
-export const STUFF_MIN_COUNT = 6;
-export const STUFF_MIN_RATE = 12;
-export const STUFF_OVER_NORMAL = 3;
-export const STUFF_MIN_BOLD = 3;
+// Calibrated on arch-graphic.com (2026-11). At 6 uses and 12 per 1,000 words the rule fired on 372 of 486 pages, half of
+// them a product's own name ("burj khalifa", 7 in 496 words) or a term in the menu. At 15 and 30 it keeps the pages whose
+// copy repeats one term throughout (home 72 at 39.4, FAQs 52 at 45.7, project pages about 23 at 32).
+/** A phrase must repeat at least this often, and at this rate per 1,000 words. */
+export const STUFF_MIN_COUNT = 15;
+export const STUFF_MIN_RATE = 30;
+export const STUFF_MIN_BOLD = 5;
 const PHRASE_STOP = new Set(["the", "a", "an", "of", "and", "or", "to", "in", "on", "for", "with", "by", "at", "from", "is", "are", "be", "it", "this", "that", "as", "we", "you", "your", "our", "و", "في", "من", "على", "إلى"]);
 const UI_PHRASES = /^(add to (cart|basket|wishlist)|read more|learn more|view (details|more|all)|select options|quick view|shop now|sold out|out of stock|in stock|contact us|load more|show more)$/;
+/** Words of a product card or button, which repeat once per card: "31.50 AED Select Options", "View project". */
+const CARD_PHRASES = /\b(aed|usd|eur|gbp|sar|vat|select options|view options|view project|add to (cart|basket)|request a quote)\b/;
 const phraseTokens = (s: string) => (s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []);
 /** Real words only: a list of "/meta/p-12" link labels is not a phrase. */
-const usablePhrase = (t: string[]) => !PHRASE_STOP.has(t[0]) && !PHRASE_STOP.has(t[t.length - 1]) && t.every((w) => w.length > 1 && !/^\p{L}*\p{N}+$/u.test(w)) && t.some((w) => w.length > 2) && !UI_PHRASES.test(t.join(" "));
+const usablePhrase = (t: string[]) => !PHRASE_STOP.has(t[0]) && !PHRASE_STOP.has(t[t.length - 1]) && t.every((w) => w.length > 1 && !/^\p{L}*\p{N}+$/u.test(w)) && t.some((w) => w.length > 2) && !UI_PHRASES.test(t.join(" ")) && !CARD_PHRASES.test(t.join(" "));
 
-/** Count of each 2–4 word phrase in the text, including those seen once: they are what "normal" for the page means. */
+/** Count of each 2–4 word phrase in the text. */
 function phraseCounts(tokens: string[]): Map<string, number> {
   const counts = new Map<string, number>();
   for (let n = 2; n <= 4; n++) {
@@ -120,7 +138,7 @@ function phraseCounts(tokens: string[]): Map<string, number> {
 
 const CNT018 = cnt({
   id: "CNT-018",
-  version: 1,
+  version: 2,
   confidence: "heuristic",
   impact: 3,
   needs: ["raw"],
@@ -129,11 +147,8 @@ const CNT018 = cnt({
     const tokens = phraseTokens(p.mainText);
     const out: { phrase: string; count: number; per1000?: number; inBold?: number }[] = [];
     if (tokens.length >= STUFF_MIN_WORDS) {
-      const counts = phraseCounts(tokens);
-      const sorted = [...counts.values()].sort((a, b) => a - b);
-      const normal = sorted[Math.floor(sorted.length / 2)] ?? 1;
-      const hits = [...counts]
-        .filter(([, c]) => c >= STUFF_MIN_COUNT && (c * 1000) / tokens.length >= STUFF_MIN_RATE && c >= normal * STUFF_OVER_NORMAL)
+      const hits = [...phraseCounts(tokens)]
+        .filter(([, c]) => c >= STUFF_MIN_COUNT && (c * 1000) / tokens.length >= STUFF_MIN_RATE)
         .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length);
       // "digital printing dubai" repeating also repeats "digital printing": keep the longest of equally frequent phrases.
       const kept: [string, number][] = [];
@@ -158,7 +173,7 @@ const CNT018 = cnt({
   explain: {
     why: "A phrase repeated far beyond natural use reads as written for a machine. It weakens trust in the text and is the pattern search engines' spam policies describe.",
     fix: "Use the phrase where it helps the reader and vary the rest. Keep bold for emphasis, not keywords.",
-    acceptance: "No 2–4 word phrase repeats far above the page's normal rate, or three or more times in bold.",
+    acceptance: `No 2–4 word phrase appears ${STUFF_MIN_COUNT}+ times at ${STUFF_MIN_RATE}+ per 1,000 words, or ${STUFF_MIN_BOLD}+ times in bold.`,
   },
 });
 

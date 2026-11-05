@@ -471,7 +471,7 @@ const CASES: Record<string, Case> = {
   // ---------- expert rules (expert.ts) ----------
   "CNT-016": PAGE("CNT-016", () => pageFrom("/x/", withBody(`<main><p>${TEXT}</p><h2>Print</h2><h2>your vision</h2></main>`)), () => pageFrom("/x/", withBody(`<main><p>${TEXT}</p><h2>Print</h2><p>Paper and ink.</p><h2>your vision</h2><h2>Spades</h2><h2>Forks</h2></main>`))),
   "CNT-017": PAGE("CNT-017", () => pageFrom("/x/", { h1: "<h2>Slide one</h2><h2>Slide two</h2><h1>Garden tools</h1>" }), () => pageFrom("/x/", { h1: "<h2>Slide one</h2><h1>Garden tools</h1><h2>Care</h2>" })),
-  "CNT-018": PAGE("CNT-018", () => pageFrom("/x/", withBody(`<main><p>${TEXT} ${"Buy cheap spades online today. ".repeat(8)}</p></main>`)), () => pageFrom("/x/", withBody(`<main><p>${TEXT} Buy cheap spades online today.</p></main>`))),
+  "CNT-018": PAGE("CNT-018", () => pageFrom("/x/", withBody(`<main><p>${TEXT} ${"Buy cheap spades online today. ".repeat(20)}</p></main>`)), () => pageFrom("/x/", withBody(`<main><p>${TEXT} Buy cheap spades online today.</p></main>`))),
   "CNT-019": SITE(
     "CNT-019",
     () => [cleanSite(pageFrom("/blog/old/", { head: '<meta property="article:published_time" content="2025-01-01T00:00:00Z">' })), crawlOf()],
@@ -932,6 +932,43 @@ describe("Phase 2b details", () => {
     expect(forward).toEqual(urls.slice(0, 5));
     expect(order([...urls].reverse())).toEqual(forward);
     expect(order([urls[7], urls[3], urls[11], urls[0], urls[3], urls[9], urls[1], urls[2], urls[4], urls[5]])).toEqual([urls[0], urls[1], urls[2], urls[3], urls[4]]);
+  });
+});
+
+describe("CNT-016 and CNT-018 as calibrated on a real site", () => {
+  const headings = (...h: string[]) => run("CNT-016", pageFrom("/x/", withBody(h.map((t) => `<h2>${t}</h2>`).join(""))));
+  it.each([
+    ["OUR", "3D PRINTING Service"],
+    ["ARCH GRAPHIC", "3D PRINTING SERVICE COMPANY IN UAE"],
+    ["3D Printing", "Architecture and Interior Projects"],
+    ["How Easy To", "UPLOAD 3D PRINTING FILES IN UAE?"],
+    ["Best 3D Printing", "MATERIAL IN UAE!"],
+  ])("CNT-016 reports %s / %s", (a, b) => {
+    expect(headings(a, b)).toHaveLength(1);
+  });
+  it.each([
+    [["Ask a question", "Get in touch with us!"]],
+    [["Spades", "Forks"]],
+    [["Slide one", "Slide two"]],
+    [["We are here!", "Find us on the map"]],
+    [["3D PRINTING IN UAE", "Better 3D Printing Architecture Projects Quality"]],
+    [["CAR PLATE KEYCHAIN", "3D PRINTING UAE", "UAE KEYCHAIN", "3D PRINTING GIFTS"]],
+  ])("CNT-016 leaves %j alone", (h) => {
+    expect(headings(...h)).toEqual([]);
+  });
+
+  const word = (i: number) => `w${"abcdefghij"[i % 10]}${"abcdefghij"[Math.floor(i / 10) % 10]}${"abcdefghij"[Math.floor(i / 100) % 10]}`;
+  const words = (n: number, from = 0) => Array.from({ length: n }, (_, i) => word(from + i)).join(" ");
+  // A different word after each use, so that only the phrase itself repeats.
+  const stuffed = (phrase: string, times: number, filler: number) => run("CNT-018", pageFrom("/x/", { body: `<main><p>${Array.from({ length: times }, (_, i) => `${phrase} ${word(900 - i)}`).join(" ")} ${words(filler)}</p></main>` }));
+  it("CNT-018 needs both the count and the rate", () => {
+    expect(stuffed("garden spade", 20, 300)).toHaveLength(1);
+    expect(stuffed("garden spade", 14, 100)).toEqual([]); // the rate is high, the count is not
+    expect(stuffed("garden spade", 20, 900)).toEqual([]); // the count is high, the rate is not
+  });
+  it("CNT-018 does not count the words of a product card", () => {
+    expect(stuffed("AED select options", 20, 300)).toEqual([]);
+    expect(stuffed("view project", 20, 300)).toEqual([]);
   });
 });
 

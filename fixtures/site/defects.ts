@@ -288,8 +288,8 @@ const CONTENT: Defect[] = [
   { name: "short headings that are labels, not a phrase (negative)", expect: [], apply: (p) => void (p.body += "<h2>Spades</h2><h2>Forks</h2>") },
   { name: "H2 slider titles before the H1", expect: ["CNT-017"], apply: (p) => void (p.h1 = `<h2>Slide one</h2><h2>Slide two</h2>${p.h1}`) },
   { name: "one H2 before the H1 (negative)", expect: [], apply: (p) => void (p.h1 = `<h2>Slide one</h2>${p.h1}`) },
-  { name: "keyword stuffing", expect: ["CNT-018"], apply: (p) => void (p.text += `<p>${"Buy cheap spades online today. ".repeat(20)}</p>`) },
-  { name: "keyword repeated in bold", expect: ["CNT-018"], apply: (p) => void (p.text += "<p><strong>garden spade sale</strong> and <b>garden spade sale</b> and <strong>garden spade sale</strong></p>") },
+  { name: "keyword stuffing", expect: ["CNT-018"], apply: (p) => void (p.text += `<p>${"Buy cheap spades online today. ".repeat(30)}</p>`) },
+  { name: "keyword repeated in bold", expect: ["CNT-018"], apply: (p) => void (p.text += "<p><strong>garden spade sale</strong> and <b>garden spade sale</b> and <strong>garden spade sale</strong> and <b>garden spade sale</b> and <strong>garden spade sale</strong></p>") },
   { name: "one phone in two formats", expect: ["CNT-021"], apply: (p) => void (p.body += "<p>Call +44 20 7946 0000 or 020 7946 0000.</p>") },
   { name: "one phone in one format (negative)", expect: [], apply: (p) => void (p.body += "<p>Call +44 20 7946 0000 today.</p>") },
 ];
