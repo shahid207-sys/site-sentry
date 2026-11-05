@@ -19,12 +19,13 @@ const db = testDb();
 const redis = testRedis();
 let srv: LocalServer;
 const FILLER = Array.from({ length: 260 }, (_, i) => `word${i % 97}`).join(" ");
+const BUSINESS = { "@context": "https://schema.org", "@type": "LocalBusiness", name: "Acme Signs", address: { "@type": "PostalAddress", addressLocality: "Dubai", addressCountry: "AE" } };
 const page = (title: string, body: string, head = "") => `<!doctype html><html lang="en"><head><title>${title}</title>${head}</head><body><nav><a href="/d1">One</a><a href="/d2">Two</a><a href="/">Home</a><a href="/d1">Again</a></nav><main><h1>${title} heading</h1><p>${body}</p></main></body></html>`;
 
 beforeAll(async () => {
   srv = await startLocalServer();
   srv.routes.set("/robots.txt", send("User-agent: *\nAllow: /\n", "text/plain"));
-  srv.routes.set("/", send(page("Acme", `We print signs in Dubai. ${FILLER}`, '<meta property="og:title" content="Acme signs">'), "text/html"));
+  srv.routes.set("/", send(page("Acme", `We print signs in Dubai. ${FILLER}`, `<meta property="og:title" content="Acme signs"><script type="application/ld+json">${JSON.stringify(BUSINESS)}</script>`), "text/html"));
   for (const p of ["/d1", "/d2"]) srv.routes.set(p, send(page("Same title", `${FILLER} ${p}`), "text/html"));
 });
 afterAll(async () => {
@@ -64,14 +65,20 @@ function fake(answer: Partial<AiCompletion> = {}, tokens = 1_000) {
 
 describe("runAiAnalysis", () => {
   it("sends stored data only, drops uncited and banned items, caches by audit, and reports it labelled and in order", { timeout: 120_000 }, async () => {
-    const { crawlId, auditId } = await analysed();
+    const { crawlId, auditId } = await analysed({ brand: "Acme" });
     const f = fake();
     const events: [string, Record<string, unknown> | undefined][] = [];
     expect(await runAiAnalysis(db, crawlId, { client: f.client, env: {}, log: (e, d) => events.push([e, d]) })).toEqual({ status: "done", cached: false });
 
     const sent = JSON.parse(f.calls[0]);
     expect(sent.issueGroups.map((g: { findingId: string }) => g.findingId)).toContain("META-004");
-    expect(sent.pages[0]).toMatchObject({ role: "homepage", title: "Acme", navLinkCount: 3, ogTags: { "og:title": "Acme signs" } });
+    expect(sent.pages[0]).toMatchObject({ role: "homepage", title: "Acme", navLinkCount: 3, ogTags: { "og:title": "Acme signs" }, navLabels: [] });
+    expect(sent.navLabels).toEqual(["One", "Two", "Home", "Again"]);
+    // The model is told where the business is, what it is called, and each page's language.
+    expect(sent.brand).toBe("Acme");
+    expect(sent.business).toMatchObject({ name: "Acme Signs", locality: "Dubai", country: "AE", sourceUrl: `${srv.origin}/` });
+    expect(sent.pages[0]).toHaveProperty("language");
+    expect(sent.pages[0].headings).toEqual([{ level: 1, text: "Acme heading" }]);
 
     const row = await readAiAnalysis(db, auditId);
     expect(row?.model).toBe("gemini-flash-latest");
