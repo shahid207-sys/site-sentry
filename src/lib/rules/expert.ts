@@ -3,7 +3,6 @@
 // from before these rules lacks is an absent optional field, and the rule then does not judge that page.
 import { finding, isIndexable, type Finding, type PageCtx, type PageRule, type PageView, type SiteRule, type UrlFacts } from "./contract";
 import { entities } from "./jsonld";
-import { LANGUAGE_MIN_ACCURACY } from "./meta";
 import { joinedWords, matchCase, misspelling } from "./spelling";
 import { homeUrl, isHtml200 } from "./util";
 
@@ -704,10 +703,14 @@ const primary = (l: string | null | undefined) => (l ?? "").trim().toLowerCase()
 /** A language counts once this many pages are in it, or MIN_LANGUAGE_SHARE of the judged pages (and at least 2). */
 export const MIN_LANGUAGE_PAGES = 5;
 export const MIN_LANGUAGE_SHARE = 0.02;
+/** A page counts as in its detected language when that language holds this share of its main text. Lower than
+ * META-012's bar (accusing one page of a wrong lang attribute): an Arabic post under an English menu, captions and
+ * product names reads 0.72 to 0.96 Arabic, and is still an Arabic page of the site. */
+export const SITE_LANGUAGE_MIN_ACCURACY = 0.7;
 
 /** The site's languages: pages whose detected language is reliable, by primary subtag, each with enough pages. */
 export function siteLanguages(urls: readonly UrlFacts[]): [string, UrlFacts[]][] {
-  const judged = urls.filter((u) => u.statusCode === 200 && u.page?.language?.detected && (u.page.language.accuracy ?? 0) >= LANGUAGE_MIN_ACCURACY);
+  const judged = urls.filter((u) => u.statusCode === 200 && u.page?.language?.detected && (u.page.language.accuracy ?? 0) >= SITE_LANGUAGE_MIN_ACCURACY);
   const byLang = new Map<string, UrlFacts[]>();
   for (const u of judged) byLang.set(primary(u.page!.language!.detected), [...(byLang.get(primary(u.page!.language!.detected)) ?? []), u]);
   return [...byLang].filter(([, us]) => us.length >= MIN_LANGUAGE_PAGES || (us.length >= 2 && us.length >= judged.length * MIN_LANGUAGE_SHARE));
