@@ -27,7 +27,6 @@ export const LIMITS = {
   ...LEGACY_ENGINE_LIMITS,
   concurrency: 4,
   linkChecks: 60,
-  sitemapChildren: 5,
   storedSitemapUrls: 2000,
   stepBudgetMs: 8_000,
   leaseMs: 45_000,
@@ -66,6 +65,9 @@ function expectationsFor(intents: Record<string, PageExpectations>, ...urls: str
 }
 
 export function isStale(audit: AuditRun, now: Date): boolean {
+  // A v2 audit runs in the crawl workers, which recover their own leases: its store heartbeat is only the last sync,
+  // so an old one means nobody looked, not that the crawl stopped.
+  if (audit.crawler) return false;
   return audit.status === "running" && now.getTime() - Date.parse(audit.heartbeatAt) > LIMITS.staleMs;
 }
 

@@ -53,7 +53,9 @@ export const HERO_RATE_LIMIT = { audits: 5, windowMs: 60 * 60 * 1000 } as const;
  * The in-request engine used while CRAWLER_V2=false keeps every page in the JSON store, so it cannot run the larger
  * profiles. Budgets above this are clamped there, and the audit says so. Crawler v2 has no such ceiling.
  */
-export const LEGACY_ENGINE_LIMITS = { maxPages: 100, maxDepth: 3, maxListUrls: 100, linkChecks: 60 } as const;
+export const LEGACY_ENGINE_LIMITS = { maxPages: 100, maxDepth: 3, maxListUrls: 100, linkChecks: 60, sitemapChildren: 5 } as const;
+/** Crawler v2 sitemap discovery: indexes are followed this deep, and at most this many sitemap documents are read. */
+export const SITEMAP_DISCOVERY = { maxIndexDepth: 3, maxDocs: 1000 } as const;
 
 export interface ScopeRules {
   /** A URL must match at least one, when any are given (regex source, tested against the normalised URL). */

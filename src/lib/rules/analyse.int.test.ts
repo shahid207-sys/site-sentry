@@ -61,7 +61,7 @@ describe("analyseCrawl", () => {
     const o = srv.origin;
     const res = await analyseCrawl(db, c);
     expect(res.outcome).toBe("analysed");
-    expect(res.pages).toBe(5); // /, /a, /b, /new, /missing (the redirect has no snapshot of its own)
+    expect(res.pages).toBe(4); // /, /a, /b, /new: HTML pages (the empty 404 and the redirect are not)
 
     const f = await findingRows(c);
     const has = (rule: string, url: string) => f.some((x) => x.rule_id === rule && x.url === url);
@@ -98,7 +98,7 @@ describe("analyseCrawl", () => {
     expect(states.find((s) => s.state === "analysed")?.n).toBe(5);
 
     const crawl = (await db.execute(sql`select analysis from crawls where id = ${c}::uuid`)).rows[0] as { analysis: Record<string, unknown> };
-    expect(crawl.analysis).toMatchObject({ status: "completed", pages: 5, findings: f.length });
+    expect(crawl.analysis).toMatchObject({ status: "completed", pages: 4, findings: f.length });
     expect(typeof crawl.analysis.msPerPage).toBe("number");
     expect(crawl.analysis).toMatchObject({ duplicateFingerprints: 0 });
 

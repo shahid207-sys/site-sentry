@@ -4,7 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Globe, Play, ScanSearch, Trash2 } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { RULE_CATEGORIES, type RuleCategory } from "@/lib/audit/types";
-import { describeLimits, LEGACY_ENGINE_LIMITS, MAX_BUDGET, MAX_DEPTH, PROFILE_IDS, PROFILES, RENDER_MODE_LABELS, RESOURCE_BUDGET_DEFAULTS, type ProfileId, type RenderMode } from "@/lib/crawl/profiles";
+import { describeLimits, LEGACY_ENGINE_LIMITS, MAX_BUDGET, MAX_DEPTH, PROFILE_IDS, PROFILES, RENDER_MODE_LABELS, RESOURCE_BUDGET_DEFAULTS, SITEMAP_DISCOVERY, type ProfileId, type RenderMode } from "@/lib/crawl/profiles";
 import type { AuditMode } from "@/lib/model";
 import type { AuditSummary, SettingsData } from "@/lib/views";
 import { SeverityCountsInline } from "../domain";
@@ -433,7 +433,7 @@ function NewAuditForm({ requestedSite }: { requestedSite: string }) {
                   <Textarea id="na-urls" value={many} onChange={(e) => setMany(e.target.value)} className="min-h-36 font-mono text-[13px]" placeholder={"/\n/services/\n/contact"} />
                 </Field>
               ) : (
-                <Field label="Sitemap URL" htmlFor="na-sm" hint="Optional. Leave empty to use the robots.txt declaration, then /sitemap.xml. Sitemap indexes are followed (first 5 child sitemaps).">
+                <Field label="Sitemap URL" htmlFor="na-sm" hint={`Optional. Leave empty to use the robots.txt declaration, then /sitemap.xml. ${v2 ? `Sitemap indexes are followed up to ${SITEMAP_DISCOVERY.maxIndexDepth} levels deep, reading at most ${SITEMAP_DISCOVERY.maxDocs.toLocaleString("en-GB")} sitemap files.` : `Sitemap indexes are followed (first ${LIMITS.sitemapChildren} child sitemaps).`}`}>
                   <Input id="na-sm" value={sitemapUrl} onChange={(e) => setSitemapUrl(e.target.value)} className="font-mono" placeholder={site?.site.sitemapUrl ?? "/sitemap.xml"} />
                 </Field>
               )}

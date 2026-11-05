@@ -121,7 +121,8 @@ export async function writeIssueGroups(db: Exec, crawlId: string, rules: Rule[],
     from finding_occurrences where crawl_id = ${crawlId}::uuid ${only} group by rule_id order by rule_id`);
   const rows = (r.rows as { rule_id: string; affected_urls: number; inconclusive_urls: number; site_wide: boolean; pages: number }[]).flatMap((x) => {
     const rule = byId.get(x.rule_id);
-    if (!rule) return [];
+    // A group with no affected URL is empty: only inconclusive findings, which the rule run still counts.
+    if (!rule || x.affected_urls === 0) return [];
     const p = groupPriority(rule, { ruleId: x.rule_id, affectedUrls: x.affected_urls, inconclusiveUrls: x.inconclusive_urls, affectedPages: x.site_wide ? null : x.pages }, indexable);
     return [
       {

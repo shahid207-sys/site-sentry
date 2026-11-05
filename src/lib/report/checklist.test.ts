@@ -23,6 +23,10 @@ describe("checklistRows", () => {
     expect(row(FAVICON, [], [{ ruleId: "META-019", status: "error", evaluated: 0 }]).status).toBe("Not checked");
   });
 
+  it("warns, not passes, when a rule's findings were all inconclusive (no issue group is stored for them)", () => {
+    expect(row(FAVICON, [], [{ ...ran("META-019"), findings: 3 }])).toMatchObject({ status: "Warning", detail: "Inconclusive: META-019" });
+  });
+
   it("does not pass rules that ran with nothing to evaluate", () => {
     expect(row(FAVICON, [], [ran("META-019", 0)]).status).toBe("Not checked");
   });

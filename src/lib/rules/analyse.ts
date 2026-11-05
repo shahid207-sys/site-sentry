@@ -500,7 +500,8 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
         const occurrences: Occurrence[] = [];
         for (const x of r.rows as Record<string, unknown>[]) {
           const page = pageView(x);
-          pages++;
+          // Pages are HTML documents: feeds, JSON and files are snapshots, not pages.
+          if (page.html) pages++;
           for (const rule of pageRules) {
             if (renderedRule(rule) && page.render?.status !== "rendered") continue;
             if (machineOnly(rule) && isMachineEndpoint(page.url)) continue;

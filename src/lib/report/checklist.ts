@@ -58,7 +58,7 @@ export interface ChecklistRow {
   detail: string;
 }
 
-export function checklistRows(groups: Pick<IssueGroupRow, "ruleId" | "priority" | "affectedUrls" | "inconclusiveUrls">[], runs: Pick<RuleRunRow, "ruleId" | "status" | "evaluated">[], languages: SiteLanguages | null = null): ChecklistRow[] {
+export function checklistRows(groups: Pick<IssueGroupRow, "ruleId" | "priority" | "affectedUrls" | "inconclusiveUrls">[], runs: (Pick<RuleRunRow, "ruleId" | "status" | "evaluated"> & { findings?: number })[], languages: SiteLanguages | null = null): ChecklistRow[] {
   const byGroup = new Map(groups.map((g) => [g.ruleId, g]));
   const byRun = new Map(runs.map((x) => [x.ruleId, x]));
   return CHECKLIST.map(({ label, rules }) => {
@@ -79,6 +79,9 @@ export function checklistRows(groups: Pick<IssueGroupRow, "ruleId" | "priority" 
     const failing = found.filter((g) => g.affectedUrls > 0 && ["critical", "high", "medium"].includes(g.priority));
     if (failing.length) return { label, status: "Fail" as const, detail: failing.map((g) => g.ruleId).join(", ") };
     if (found.length) return { label, status: "Warning" as const, detail: found.map((g) => g.ruleId).join(", ") };
+    // Findings without an issue group are inconclusive ones (no affected URL): not a pass.
+    const unsure = rules.filter((id) => !byGroup.has(id) && (byRun.get(id)?.findings ?? 0) > 0);
+    if (unsure.length) return { label, status: "Warning" as const, detail: `Inconclusive: ${unsure.join(", ")}` };
     const notRun = rules.filter((id) => byRun.get(id)?.status !== "ran");
     if (notRun.length) return { label, status: "Not checked" as const, detail: `Did not run: ${notRun.join(", ")}` };
     // One such rule is enough: the Images row's size rules see only what the resource phase checked, whatever the alt-text rules read.
