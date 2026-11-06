@@ -256,7 +256,12 @@ form and the methodology page.
   header named in `TRUSTED_PROXY_HEADER`, which the reverse proxy in front of the app must set or overwrite. For a list
   header such as `X-Forwarded-For`, the rightmost entry is used: the one the proxy appended. The value must parse as an
   IP. With the setting unset, every forwarding header is ignored:
-  - production: the homepage endpoint refuses with 503 `PROXY_NOT_CONFIGURED` ("proxy header not configured");
+  - a local request (Host is localhost, 127.x.x.x or [::1], and any X-Forwarded-For / X-Forwarded-Host, which
+    `next start` fills from the socket, is loopback too; no `Forwarded`, `X-Real-IP` or CDN header): one shared
+    `local` bucket, with a one-time warning in the log;
+  - otherwise in production: 503 `PROXY_NOT_CONFIGURED` with the visitor message "Free audits are temporarily
+    unavailable. Please try again later, or open the sample audit." The reason is logged on each refusal and shown in
+    the admin view of `/api/health` (`Authorization: Bearer $ADMIN_TOKEN`);
   - other environments: all clients share one bucket.
   The other in-process limits (`rateLimit`, already per workspace) use the same IP, or one shared bucket per key when
   there is none. That is stricter, never looser.

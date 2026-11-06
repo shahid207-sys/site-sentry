@@ -24,6 +24,29 @@ export function groupBy<T>(xs: T[], key: (x: T) => string | null): Map<string, T
 /** Up to `n` other URLs from a group, for evidence. */
 export const others = (group: UrlFacts[], self: UrlFacts, n = 10) => group.filter((g) => g !== self).slice(0, n).map((g) => g.url);
 
+/**
+ * A URL for machines, not readers: WordPress's REST API (/wp-json/, ?rest_route=), XML-RPC, admin-ajax, oEmbed and
+ * RSS/Atom feeds. A noindex there is correct, so the indexability rules do not judge them.
+ */
+export function isMachineEndpoint(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  const path = u.pathname.toLowerCase();
+  return (
+    /(^|\/)wp-json(\/|$)/.test(path) ||
+    /\/(xmlrpc|wp-admin\/admin-ajax)\.php$/.test(path) ||
+    /(^|\/)oembed(\/|$)/.test(path) ||
+    /(^|\/)(feed|rss|atom)(\/(rss2?|atom|rdf))?\/?$/.test(path) ||
+    /\.(rss|atom)$/.test(path) ||
+    u.searchParams.has("rest_route") ||
+    /^(rss2?|atom|rdf)$/.test(u.searchParams.get("feed") ?? "")
+  );
+}
+
 export const robotsUrl = (origin: string) => new URL("/robots.txt", origin).toString();
 export const homeUrl = (origin: string) => new URL("/", origin).toString();
 

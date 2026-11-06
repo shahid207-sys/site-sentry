@@ -18,6 +18,7 @@ import { paragraph } from "../../../fixtures/site/text";
 import { ENGLISH_PROSE, MIXED_PROSE } from "../../../fixtures/site/defects";
 import { LANGUAGE_MIN_ACCURACY } from "./meta";
 import { meaningfulTerms } from "./util";
+import { siteLanguages, SITE_LANGUAGE_MIN_ACCURACY } from "./expert";
 
 const ORIGIN = "https://a.test";
 const U = (path: string) => new URL(path, ORIGIN).toString();
@@ -132,6 +133,10 @@ function facts(p: PageView, id: number, g: Partial<Graph> = {}): UrlFacts {
           ogImage: p.facts?.og.image ?? null,
           icons: p.facts?.icons ?? [],
           hreflang: p.links.filter((l) => l.via === "hreflang" && l.hreflang).map((l) => ({ lang: l.hreflang!, href: l.href })),
+          language: p.language,
+          ogLocale: p.facts?.ogLocale ?? null,
+          published: p.facts?.published ?? null,
+          bodyClass: p.facts?.bodyClass ?? null,
         }
       : null,
   };
@@ -305,6 +310,8 @@ const res = (kind: ResourceFacts["kind"], url: string, over: Partial<ResourceFac
 });
 /** A page body with main text plus extra markup. */
 const withBody = (extra: string) => ({ body: `<main><p>${TEXT}</p>${extra}</main>` });
+const navOf = (n: number) => `<nav>${Array.from({ length: n }, (_, i) => `<a href="/n${i}/">Section ${i}</a>`).join("")}</nav>`;
+const spanish = () => ({ body: "<main><p>" + "La pala de jardin dura muchos anos cuando se limpia la hoja despues de cada uso y el mango se engrasa antes del invierno, porque el acero y la madera se conservan mejor si no quedan humedos durante los meses de frio. ".repeat(4) + "</p></main>" });
 const IMGTAG = (attrs: string) => withBody(`<img ${attrs}>`);
 const ld = (...blocks: unknown[]) => ({ head: blocks.map((b) => `<script type="application/ld+json">${typeof b === "string" ? b : JSON.stringify(b)}</script>`).join("") });
 const crawlWithImage = (r: Partial<ResourceFacts>) => () => crawlOf({ resources: [res("image", U("/big.png"), r)] });
@@ -312,7 +319,10 @@ const tls = (daysLeft: number) => probe("tls_cert", U("/"), { status: null, cert
 const exposed = (kind: "env_file" | "git_head", secret: ProbeRecord["secret"]) => probe(kind, U(kind === "env_file" ? "/.env" : "/.git/HEAD"), { contentType: "text/plain", secret });
 /** pageIssues as analyse.ts tallies them: rule → template → pages. */
 const issues = (ruleId: string, template: string, count: number) => new Map([[ruleId, new Map([[template, { count, sample: [U("/p/1/")] }]])]]);
-const templated = (n: number, template: string) => Array.from({ length: n }, (_, i) => ({ ...facts(pageFrom(`/p/${i}/`), 100 + i), page: { ...facts(pageFrom(`/p/${i}/`), 100 + i).page!, template } }));
+const templated = (n: number, template: string) => Array.from({ length: n }, (_, i) => {
+    const f = facts(pageFrom(`/p/${i}/`), 100 + i);
+    return { ...f, page: { ...f.page!, template } };
+  });
 const HISTORY = (id: string, pos: () => Partial<HistoryCtx>, neg: () => Partial<HistoryCtx>): Case => ({
   pos: () => runHistory(id, pos()),
   neg: () => runHistory(id, neg()),
@@ -459,6 +469,76 @@ const CASES: Record<string, Case> = {
   "AIS-003": SITE("AIS-003", () => [cleanSite(), crawlOf({ probes: [probe("llms_txt", U("/llms.txt"), { status: 404 })] })]),
 
   // ---------- LNK ----------
+  // ---------- expert rules (expert.ts) ----------
+  "CNT-016": PAGE("CNT-016", () => pageFrom("/x/", withBody(`<main><p>${TEXT}</p><h2>Print</h2><h2>your vision</h2></main>`)), () => pageFrom("/x/", withBody(`<main><p>${TEXT}</p><h2>Print</h2><p>Paper and ink.</p><h2>your vision</h2><h2>Spades</h2><h2>Forks</h2></main>`))),
+  "CNT-017": PAGE("CNT-017", () => pageFrom("/x/", { h1: "<h2>Slide one</h2><h2>Slide two</h2><h1>Garden tools</h1>" }), () => pageFrom("/x/", { h1: "<h2>Slide one</h2><h1>Garden tools</h1><h2>Care</h2>" })),
+  "CNT-018": PAGE("CNT-018", () => pageFrom("/x/", withBody(`<main><p>${TEXT} ${"Buy cheap spades online today. ".repeat(20)}</p></main>`)), () => pageFrom("/x/", withBody(`<main><p>${TEXT} Buy cheap spades online today.</p></main>`))),
+  "CNT-022": PAGE(
+    "CNT-022",
+    () => pageFrom("/x/", withBody("<p><strong>How long does a spade last?</strong> Decades.</p><p><strong>Can I sharpen it?</strong> Yes.</p><p><b>Do you deliver?</b> No.</p>")),
+    () => pageFrom("/x/", withBody("<h3><strong>How long does a spade last?</strong></h3><p><strong>Can I sharpen it?</strong> Yes.</p><p><b>Do you deliver?</b> No.</p>")),
+  ),
+  "CNT-023": PAGE("CNT-023", () => pageFrom("/x/", withBody("<h2>Garden Tabels</h2>")), () => pageFrom("/x/", withBody("<h2>Garden tables</h2>"))),
+  "CNT-019": SITE(
+    "CNT-019",
+    () => [cleanSite(pageFrom("/blog/old/", { head: '<meta property="article:published_time" content="2025-01-01T00:00:00Z">' })), crawlOf()],
+    () => [cleanSite(pageFrom("/blog/new/", { head: '<meta property="article:published_time" content="2026-05-01T00:00:00Z">' })), crawlOf()],
+  ),
+  "CNT-020": PAGE(
+    "CNT-020",
+    () => pageFrom("/", { head: '<meta property="og:site_name" content="Acme Print">' + ld({ "@context": "https://schema.org", "@type": "Organization", name: "Zenith Graphics" }).head }),
+    () => pageFrom("/", { title: "<title>Sign printing | Acme Print</title>", head: '<meta property="og:site_name" content="Acme Print">' + ld({ "@context": "https://schema.org", "@type": "Organization", name: "Acme Print LLC" }).head }),
+  ),
+  "CNT-021": PAGE("CNT-021", () => pageFrom("/x/", withBody(`<main><p>${TEXT} Call +44 20 7946 0000 or 020 7946 0000.</p></main>`)), () => pageFrom("/x/", withBody(`<main><p>${TEXT} Call +44 20 7946 0000 today.</p></main>`))),
+  "META-020": PAGE(
+    "META-020",
+    () => pageFrom("/x/", { title: "<title>CHOOSING GARDEN TOOLS THAT LAST</title>" }),
+    () => pageFrom("/x/", { head: '<meta property="og:site_name" content="Fixture Site">' }),
+  ),
+  "META-021": PAGE(
+    "META-021",
+    () => pageFrom("/x/", { description: '<meta name="description" content="spades | forks | trowels | shears | watering cans for sale">' }),
+    () => pageFrom("/x/", { description: '<meta name="description" content="How to choose spades, forks, trowels and shears that last for decades. Compare them here.">' }),
+  ),
+  "META-022": PAGE(
+    "META-022",
+    () => pageFrom("/x/", { head: '<meta property="og:image:width" content="800"><meta property="og:image:height" content="800">' }),
+    () => pageFrom("/x/", { head: '<meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">' }),
+  ),
+  "META-023": PAGE("META-023", () => pageFrom("/x/", { head: '<meta name="generator" content="WordPress 6.4.2">' }), () => pageFrom("/x/", { head: '<meta name="generator" content="Hugo">' })),
+  "LNK-015": PAGE("LNK-015", () => pageFrom("/x/", withBody(`${navOf(6)}<main><p>${TEXT}</p></main>${navOf(6)}`)), () => pageFrom("/x/", withBody(`${navOf(6)}<main><p>${TEXT}</p></main>`))),
+  "LNK-016": PS(
+    "LNK-016",
+    () => [pageFrom("/x/", withBody(`<main><p>${TEXT}</p><a href="/">Get a quote</a></main>`)), cleanSite()],
+    () => [pageFrom("/x/", withBody(`<main><p>${TEXT}</p><a href="/a/">Compare shears</a></main>`)), cleanSite()],
+  ),
+  "LNK-017": SITE(
+    "LNK-017",
+    () => [cleanSite({ ...redirect("/faq/", 301, "/a/", 10), directLinks: 3 }, { ...redirect("/faqs/", 301, "/a/", 11), directLinks: 1 })],
+    // One redirected URL, even beside the real one, is LNK-002's.
+    () => [cleanSite({ ...redirect("/faq/", 301, "/a/", 10), directLinks: 3 })],
+  ),
+  "IDX-033": SITE("IDX-033", () => [cleanSite(pageFrom("/cart/"))], () => [cleanSite(pageFrom("/cart/", { head: '<meta name="robots" content="noindex">' }))]),
+  "IDX-034": SITE(
+    "IDX-034",
+    () => [cleanSite(pageFrom("/shop/?filter_colour=red"))],
+    () => [cleanSite(pageFrom("/shop/?filter_colour=red", { canonical: `<link rel="canonical" href="${U("/shop/")}">` }))],
+  ),
+  "I18N-007": SITE(
+    "I18N-007",
+    () => [cleanSite(pageFrom("/a1/"), pageFrom("/a2/"), pageFrom("/es1/", spanish()), pageFrom("/es2/", spanish()))],
+    () => [cleanSite(pageFrom("/a1/"), pageFrom("/a2/"))],
+  ),
+  "I18N-008": SITE(
+    "I18N-008",
+    () => [cleanSite(pageFrom("/shop/%D8%B7%D8%A8%D8%A7%D8%B9%D8%A9/"), pageFrom("/shop/printing/"))],
+    () => [cleanSite(pageFrom("/shop/%D8%B7%D8%A8%D8%A7%D8%B9%D8%A9/"), pageFrom("/other/printing/"))],
+  ),
+  "SD-011": PAGE(
+    "SD-011",
+    () => pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "LocalBusiness", name: "Acme", aggregateRating: { "@type": "AggregateRating", ratingValue: 5, reviewCount: 9 } })),
+    () => pageFrom("/x/", ld({ "@context": "https://schema.org", "@type": "LocalBusiness", name: "Acme" })),
+  ),
   "LNK-001": PS(
     "LNK-001",
     () => [pageFrom("/x/", withBody('<a href="/gone">Old guide to spades</a>')), cleanSite(bare("/gone", 404))],
@@ -597,7 +677,7 @@ describe("rule catalog", () => {
   it("every registered rule has a test case, and every case names a registered rule", () => {
     expect(Object.keys(CASES).sort()).toEqual(RULES.map((r) => r.id).sort());
     // Per family, then the 13 rendered rules (Phase 5).
-    expect(RULES.length).toBe(31 + 19 + 12 + 3 + 13 + 6 + 10 + 10 + 6 + 5 + 5 + 13);
+    expect(RULES.length).toBe(31 + 19 + 12 + 3 + 13 + 6 + 10 + 10 + 6 + 5 + 5 + 13 + 20); // the 20 expert rules
     expect(Object.keys(DEFERRED_RULES)).toEqual(["CNT-013", "CNT-014", "PERF-002"]);
     // A deferred rule is never also registered.
     for (const id of Object.keys(DEFERRED_RULES)) expect(RULES_BY_ID.has(id), id).toBe(false);
@@ -859,6 +939,143 @@ describe("Phase 2b details", () => {
     expect(forward).toEqual(urls.slice(0, 5));
     expect(order([...urls].reverse())).toEqual(forward);
     expect(order([urls[7], urls[3], urls[11], urls[0], urls[3], urls[9], urls[1], urls[2], urls[4], urls[5]])).toEqual([urls[0], urls[1], urls[2], urls[3], urls[4]]);
+  });
+});
+
+describe("CNT-016 and CNT-018 as calibrated on a real site", () => {
+  const headings = (...h: string[]) => run("CNT-016", pageFrom("/x/", withBody(h.map((t) => `<h2>${t}</h2>`).join(""))));
+  it.each([
+    ["OUR", "3D PRINTING Service"],
+    ["ARCH GRAPHIC", "3D PRINTING SERVICE COMPANY IN UAE"],
+    ["3D Printing", "Architecture and Interior Projects"],
+    ["How Easy To", "UPLOAD 3D PRINTING FILES IN UAE?"],
+    ["Best 3D Printing", "MATERIAL IN UAE!"],
+  ])("CNT-016 reports %s / %s", (a, b) => {
+    expect(headings(a, b)).toHaveLength(1);
+  });
+  it.each([
+    [["Ask a question", "Get in touch with us!"]],
+    [["Spades", "Forks"]],
+    [["Slide one", "Slide two"]],
+    [["We are here!", "Find us on the map"]],
+    [["3D PRINTING IN UAE", "Better 3D Printing Architecture Projects Quality"]],
+    [["CAR PLATE KEYCHAIN", "3D PRINTING UAE", "UAE KEYCHAIN", "3D PRINTING GIFTS"]],
+  ])("CNT-016 leaves %j alone", (h) => {
+    expect(headings(...h)).toEqual([]);
+  });
+
+  const word = (i: number) => `w${"abcdefghij"[i % 10]}${"abcdefghij"[Math.floor(i / 10) % 10]}${"abcdefghij"[Math.floor(i / 100) % 10]}`;
+  const words = (n: number, from = 0) => Array.from({ length: n }, (_, i) => word(from + i)).join(" ");
+  // A different word after each use, so that only the phrase itself repeats.
+  const stuffed = (phrase: string, times: number, filler: number) => run("CNT-018", pageFrom("/x/", { body: `<main><p>${Array.from({ length: times }, (_, i) => `${phrase} ${word(900 - i)}`).join(" ")} ${words(filler)}</p></main>` }));
+  it("CNT-018 needs both the count and the rate", () => {
+    expect(stuffed("garden spade", 20, 300)).toHaveLength(1);
+    expect(stuffed("garden spade", 14, 100)).toEqual([]); // the rate is high, the count is not
+    expect(stuffed("garden spade", 20, 900)).toEqual([]); // the count is high, the rate is not
+  });
+  it("CNT-018 does not count the words of a product card", () => {
+    expect(stuffed("AED select options", 20, 300)).toEqual([]);
+    expect(stuffed("view project", 20, 300)).toEqual([]);
+  });
+  const bolded = (inner: string, brand: string | null = null) =>
+    run("CNT-018", pageFrom("/x/", { body: `<main><p>${TEXT}</p>${inner}</main>` }), { ...crawlOf(), brand });
+  const strongs = (phrase: string, n: number) => Array.from({ length: n }, (_, i) => `<p><strong>${phrase}</strong> ${word(i)}.</p>`).join("");
+  it("CNT-018 does not count the brand in bold", () => {
+    expect(bolded(strongs("Garden spade", 6))).toHaveLength(1);
+    expect(bolded(strongs("Arch Graphic", 6), "ARCH GRAPHIC")).toEqual([]);
+    expect(bolded(strongs("Arch Graphic", 6), null)).toHaveLength(1);
+  });
+  it("CNT-018 does not count a caption repeated on each card of a listing", () => {
+    const cards = Array.from({ length: 6 }, (_, i) => `<div class="card post-${i}"><h3>Model ${word(i)}</h3><strong>Garden spade</strong></div>`).join("");
+    expect(bolded(`<div class="grid">${cards}</div>`)).toEqual([]);
+  });
+});
+
+describe("CNT-023 spelling", () => {
+  const spell = (body: string, o: { brand?: string; allow?: string[] } = {}) =>
+    run("CNT-023", pageFrom("/x/", { body: `${body}<main><p>${TEXT}</p></main>` }), { ...crawlOf(), brand: o.brand ?? null, spellingAllow: new Set(o.allow ?? []) });
+  it("catches the arch-graphic.com typos in the menu, sitewide, with the fix", () => {
+    const f = spell(`<nav><a href="/t/">Tabels</a><a href="/h/">Humve</a><a href="/s/">Sofa</a></nav>`);
+    expect(f.map((x) => [x.evidence.word, x.evidence.suggestion, x.evidence.where, x.evidence.sitewide])).toEqual([
+      ["Tabels", "Tables", "nav", true],
+      ["Humve", "Humvee", "nav", true],
+    ]);
+  });
+  it("finds two words run together in a heading", () => {
+    const [f] = spell("<h3>Upload 3D Printing FilesPLOAD 3D PRINTING FILES!</h3>");
+    expect(f.evidence).toMatchObject({ kind: "joined", word: "FilesPLOAD", where: "heading", sitewide: false });
+  });
+  it("skips the brand, the allowlist, names far from any word, URLs and acronyms", () => {
+    expect(spell("<h2>Zorblax Gardens</h2>", { brand: "Zorblax" })).toEqual([]);
+    expect(spell("<h2>Himars and Jobaria models</h2>")).toEqual([]);
+    expect(spell("<h2>Our Humve model</h2>", { allow: ["humve"] })).toEqual([]);
+    expect(spell("<h2>Visit www.tabels.com or CNC and UAE</h2>")).toEqual([]);
+  });
+  it("does not judge a page in another language", () => {
+    const es = pageFrom("/es/", { body: `<h2>Tabels</h2>${spanish().body}` });
+    expect(run("CNT-023", es)).toEqual([]);
+  });
+});
+
+describe("META-021 keyword lists", () => {
+  const kind = (content: string) => run("META-021", pageFrom("/x/", { description: `<meta name="description" content="${content}">` }))[0]?.evidence.kind;
+  it("finds pipe lists even when a part has a verb-like noun", () => {
+    expect(kind("3D PRINT COMPANY | 3D print in Dubai | 3D print in Abu Dhabi | Trusted 3d printing companies | Best 3d printing services | 3D printing services in dubai.")).toBe("keyword_list");
+    expect(kind("Garden spades | Garden forks | Pruning shears")).toBe("keyword_list");
+  });
+  it("finds comma lists of nouns", () => {
+    expect(kind("Garden spades, steel forks, pruning shears, watering cans, hand trowels")).toBe("keyword_list");
+  });
+  it("does not take a sentence or a title with one pipe for a list", () => {
+    expect(kind("Compare our spades, forks, trowels and shears, then order the ones that suit your soil. Delivery is free.")).not.toBe("keyword_list");
+    expect(kind("We print models, we paint them, we ship them, and we keep you posted")).not.toBe("keyword_list");
+    expect(kind("Garden tools that last | Fixture Site")).not.toBe("keyword_list");
+  });
+});
+
+describe("I18N-007 language threshold", () => {
+  const english = pageFrom("/en/");
+  const spanishPage = pageFrom("/es/", spanish());
+  const many = (p: PageView, prefix: string, n: number) => Array.from({ length: n }, (_, i) => ({ ...p, url: U(`/${prefix}${i}/`) }));
+  const fires = (en: number, es: number) => run("I18N-007", cleanSite(...many(english, "en", en), ...many(spanishPage, "es", es))).length > 0;
+  it("fires at 5 pages in another language, however large the site", () => {
+    expect(fires(300, 5)).toBe(true);
+    expect(fires(300, 4)).toBe(false); // 4 of 306 pages is 1.3%
+  });
+  it("fires at 2% of the pages, with at least 2", () => {
+    expect(fires(60, 2)).toBe(true); // 3.1%
+    expect(fires(10, 1)).toBe(false);
+  });
+  it("counts a page whose text is mostly in a language, not only one the detector is sure of", () => {
+    const at = (lang: string, accuracy: number) => ({ statusCode: 200, page: { language: { declared: "en-US", detected: lang, accuracy } } }) as unknown as UrlFacts;
+    const urls = [
+      ...Array.from({ length: 300 }, () => at("en", 0.95)),
+      // Arabic posts under an English menu: 0.72 to 0.96 Arabic.
+      ...[0.72, 0.76, 0.79, 0.82, 0.89, 0.91, 0.94, 0.96, 1].map((a) => at("ar", a)),
+      // Three short pages the detector calls Vietnamese, and a page under the bar: noise.
+      ...[1, 1, 1].map((a) => at("vi", a)),
+      ...Array.from({ length: 6 }, () => at("fr", 0.6)),
+    ];
+    expect(siteLanguages(urls).map(([l, us]) => [l, us.length])).toEqual([["en", 300], ["ar", 9]]);
+    expect(SITE_LANGUAGE_MIN_ACCURACY).toBeLessThan(0.9);
+  });
+});
+
+describe("LNK-016 cards and shared regions", () => {
+  const cta = (body: string) => run("LNK-016", pageFrom("/x/", { body }), crawlOf(), { site: cleanSite() });
+  const card = (n: number) => `<div class="card post-${n}"><h3>Spade ${n}</h3><p>Steel.</p><a href="/">Request a quote</a></div>`;
+  it("ignores a button repeated on three or more cards of a listing", () => {
+    expect(cta(`<main><p>${TEXT}</p><div class="grid">${[1, 2, 3].map(card).join("")}</div></main>`)).toEqual([]);
+  });
+  it("still judges the same button when it is a one-off", () => {
+    expect(cta(`<main><p>${TEXT}</p><div class="grid">${[1, 2].map(card).join("")}</div></main>`)).toHaveLength(1);
+    expect(cta(`<main><p>${TEXT}</p><a href="/">Request a quote</a></main>`)).toHaveLength(1);
+  });
+  it("marks a footer or navigation call to action as sitewide, and a content one as not", () => {
+    const [footer] = cta(`<main><p>${TEXT}</p></main><footer><a href="/">Upload 3D files</a></footer>`);
+    expect(footer.evidence).toMatchObject({ location: "footer", sitewide: true });
+    const [content] = cta(`<main><p>${TEXT}</p><a href="/">Upload 3D files</a></main>`);
+    expect(content.evidence).toMatchObject({ location: "main", sitewide: false });
   });
 });
 

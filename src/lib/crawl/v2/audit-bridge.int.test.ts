@@ -53,10 +53,10 @@ const crawlIdOf = async () => (await store.read()).audits[auditId].crawler!.craw
 const run = async () => runCrawl({ db, redis, politeness: { keyPrefix: throttlePrefix }, fetch: srv.fetch, owner: "bridge-test" }, await crawlIdOf());
 
 describe("crawler v2 audit bridge", () => {
-  it("only applies to the live workspace, and only with CRAWLER_V2=true", () => {
+  it("applies to the live workspace by default; only an explicit CRAWLER_V2=false selects the legacy engine", () => {
     expect(crawlerV2Enabled("live", { CRAWLER_V2: "true" })).toBe(true);
     expect(crawlerV2Enabled("live", { CRAWLER_V2: "false" })).toBe(false);
-    expect(crawlerV2Enabled("live", {})).toBe(false);
+    expect(crawlerV2Enabled("live", {})).toBe(true);
     expect(crawlerV2Enabled("sample", { CRAWLER_V2: "true" })).toBe(false);
   });
 

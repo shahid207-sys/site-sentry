@@ -36,7 +36,8 @@ export const OG_IMAGE = "/assets/og.png";
 export const SITE_NAME = "Fixture Site";
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 
-export const pageLabel = (path: string) => (path === "/" ? "home" : path);
+// The home page's title names the site, as its schema does (CNT-020 and META-020 negative).
+export const pageLabel = (path: string) => (path === "/" ? SITE_NAME : path);
 export const pageTitle = (path: string) => `${topic(path)} | ${pageLabel(path)}`;
 export const pageH1 = (path: string) => topic(path);
 export function pageDescription(path: string): string {
@@ -46,7 +47,8 @@ export function pageDescription(path: string): string {
     if (d.length + w.length + 1 > 115) break;
     d += ` ${w.toLowerCase()}`;
   }
-  return `${d}.`;
+  // A call to action (META-021 negative).
+  return `${d}. Learn more.`;
 }
 
 /** An Organization block with every property Google recommends (SD-004 silent). */

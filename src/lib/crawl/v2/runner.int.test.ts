@@ -105,14 +105,17 @@ describe("runCrawl", () => {
     expect(srv.hits.has("/private/secret")).toBe(false);
     expect(srv.hits.has("/a/b/c/d")).toBe(false);
 
-    const crawl = (await db.execute(sql`select status, robots, discovery_done, fetches_committed from crawls where id = ${c}::uuid`)).rows[0] as {
+    const crawl = (await db.execute(sql`select status, robots, discovery_done, fetches_committed, non_html_fetches from crawls where id = ${c}::uuid`)).rows[0] as {
       status: string;
       robots: { outcome: string; sitemaps: string[] };
       discovery_done: boolean;
       fetches_committed: number;
+      non_html_fetches: number;
     };
     expect(crawl).toMatchObject({ status: "completed", discovery_done: true, robots: { outcome: "parsed", sitemaps: [`${srv.origin}/sitemap.xml`] } });
-    expect(crawl.fetches_committed).toBe(pageHits().length);
+    // /file.pdf answered as non-HTML, so its fetch moved off the page budget.
+    expect(crawl.non_html_fetches).toBe(1);
+    expect(crawl.fetches_committed + crawl.non_html_fetches).toBe(pageHits().length);
     const edges = await db.execute(sql`select count(*)::int as n from url_edges where crawl_id = ${c}::uuid and via = 'redirect'`);
     expect((edges.rows[0] as { n: number }).n).toBe(1);
   });
@@ -197,7 +200,8 @@ describe("runCrawl", () => {
     const c = await newCrawl(db, { siteOrigin: srv.origin, status: "queued", budget: 3, maxDepth: 10 });
     expect(await runCrawl(opts(), c)).toBe("completed");
     const counts = await stateCounts(db, c);
-    expect(pageHits()).toHaveLength(3);
+    // Three page fetches; a non-HTML answer along the way does not use one up.
+    expect(pageHits().filter(([p]) => p !== "/file.pdf")).toHaveLength(3);
     expect(counts.budget_exhausted).toBeGreaterThan(0);
     expect(await activeCount(db, c)).toEqual({ discovered: 0, queued: 0, fetching: 0 });
     expectNoDuplicateFetches();

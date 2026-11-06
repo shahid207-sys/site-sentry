@@ -176,6 +176,53 @@ describe("at-most-once fetch accounting", () => {
     await releaseReservations(db, "cap2");
   });
 
+  describe("the non-HTML budget", () => {
+    const counters = async (c: string) => (await db.execute(sql`select fetches_committed::int as pages, non_html_fetches::int as other from crawls where id = ${c}::uuid`)).rows[0];
+    /** Fetches everything the frontier hands out; `kind` says how each URL answers. */
+    async function drain(c: string, kind: (url: string) => "fetched" | "non_html") {
+      const sent: string[] = [];
+      for (let rounds = 0; rounds < 100; rounds++) {
+        const batch = await reserve(db, c, "w", 4, null);
+        if (!batch.length) break;
+        for (const r of batch) {
+          const commit = await commitToSend(db, c, r.id, "w");
+          if (!commit.ok) continue;
+          sent.push(r.url);
+          const state = kind(r.url);
+          await recordResult(db, c, r.id, commit.token, { state, reason: state === "fetched" ? "HTTP 200" : "Content-Type is not HTML.", statusCode: 200 });
+        }
+      }
+      return sent;
+    }
+    const reasonOf = async (c: string, path: string) => String((await db.execute(sql`select reason from crawl_urls where crawl_id = ${c}::uuid and url like ${`%${path}`}`)).rows[0]?.reason);
+
+    it("does not let non-HTML answers use the page budget", async () => {
+      const c = await newCrawl(db, { budget: 3 });
+      await upsertUrls(db, c, [...Array.from({ length: 6 }, (_, i) => u(`/feed${i}/`, "link", 1)), ...Array.from({ length: 5 }, (_, i) => u(`/p${i}`, "link", 2))]);
+      const sent = await drain(c, (url) => (url.includes("/feed") ? "non_html" : "fetched"));
+      expect(sent.filter((x) => x.includes("/feed"))).toHaveLength(6);
+      expect(sent.filter((x) => x.includes("/p"))).toHaveLength(3);
+      expect(await counters(c)).toEqual({ pages: 3, other: 6 });
+    });
+
+    it("stops at its own budget: a file by extension is skipped and says why, an unknown URL is charged as a page", async () => {
+      const c = await newCrawl(db, { budget: 2, config: { nonHtmlBudget: 2 } });
+      await upsertUrls(db, c, [...["/a.webp", "/b.webp", "/c.webp", "/d.pdf"].map((p) => u(p, "link", 1)), u("/feed/", "link", 2), u("/page", "link", 3), u("/page2", "link", 3)]);
+      const sent = await drain(c, (url) => (url.includes("/page") ? "fetched" : "non_html"));
+      expect(sent.map((x) => new URL(x).pathname)).toEqual(["/a.webp", "/b.webp", "/feed/", "/page"]);
+      expect(await counters(c)).toEqual({ pages: 2, other: 2 });
+      await finalizeUrls(db, c, "completed", null, 2);
+      expect(await reasonOf(c, "/c.webp")).toContain("non-HTML budget of 2");
+      expect(await reasonOf(c, "/page2")).toContain("URL budget of 2");
+    });
+
+    it("leaves a crawl without a page budget unlimited", async () => {
+      const c = await newCrawl(db, { budget: null, config: { nonHtmlBudget: 1 } });
+      await upsertUrls(db, c, ["/a.webp", "/b.webp", "/c.webp"].map((p) => u(p, "link", 1)));
+      expect(await drain(c, () => "non_html")).toHaveLength(3);
+    });
+  });
+
   it("stops handing out URLs once the budget is spent, so a reserve/commit loop terminates", async () => {
     const c = await newCrawl(db, { budget: 5 });
     await upsertUrls(db, c, Array.from({ length: 12 }, (_, i) => u(`/l${i}`, "link", 1)));

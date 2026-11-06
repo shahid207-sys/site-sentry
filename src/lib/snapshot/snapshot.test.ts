@@ -57,7 +57,7 @@ describe("extractHtml", () => {
   it("reads titles (not SVG titles), descriptions and outline", () => {
     expect(x.titles).toEqual(["Hello world"]);
     expect(x.descriptions).toEqual(["A page"]);
-    expect(x.outline).toEqual([{ level: 1, text: "Hello" }, { level: 3, text: "Sub" }]);
+    expect(x.outline).toEqual([{ level: 1, text: "Hello" }, { level: 3, text: "Sub", adjacent: true }]);
   });
 
   it("records every canonical with where it was found and whether it is absolute", () => {
@@ -114,7 +114,7 @@ describe("extractHtml", () => {
     const x = extract(`<html><body><h1>When Customers Ask AI<br class="x"/>Who to Choose</h1><h2><div>A</div>B</h2></body></html>`);
     expect(x.outline).toEqual([
       { level: 1, text: "When Customers Ask AI Who to Choose" },
-      { level: 2, text: "A B" },
+      { level: 2, text: "A B", adjacent: true },
     ]);
   });
 

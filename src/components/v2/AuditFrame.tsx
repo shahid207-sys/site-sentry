@@ -6,6 +6,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { FileText, RefreshCw } from "lucide-react";
 import { createContext, useContext, useEffect, type ReactNode } from "react";
+import { describeLimits, PROFILES, type ProfileId } from "@/lib/crawl/profiles";
 import type { CrawlOverview } from "@/lib/results/queries";
 import { prefetchApi, useApi, type Resource } from "../lib/api";
 import { fmtDateTime, hostOf } from "../lib/format";
@@ -87,7 +88,8 @@ export function AuditFrame({ auditId, title, children, actions }: { auditId: str
         title={title ?? name}
         meta={
           <>
-            <Tag>{o.profile}</Tag>
+            <Tag>{PROFILES[o.profile as ProfileId]?.label ?? o.profile}</Tag>
+            {o.budget !== null ? <span className="text-[13px] text-fg-2">Budget: {describeLimits(o.budget, o.maxDepth)}</span> : null}
             <span className="text-[13px] text-fg-3">
               Audit of {hostOf(o.siteOrigin)} · {fmtDateTime(o.createdAt)}
             </span>

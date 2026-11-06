@@ -38,3 +38,6 @@ be set by hand. `src/lib/results/triage.int.test.ts` checks all of this.
 The sample workspace's audits are deterministic in-memory runs of the legacy engine, with no crawler v2 crawl.
 They keep the legacy screens. The v2 screens (sub-routes of `/live/audits/<id>/…`) apply to live audits run with
 `CRAWLER_V2=true`.
+
+The public `/sample-audit` page and the homepage card are different: they show a crawler v2 snapshot
+(`src/lib/sample/v2-sample.json`, regenerated with `npm run sample:v2`), so they use v2 priorities and catalog titles.

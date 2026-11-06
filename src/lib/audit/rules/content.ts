@@ -8,7 +8,7 @@ export type ContentFacts = {
   contentSource: string;
 };
 
-const BLOCKS = "address, article, aside, blockquote, br, dd, div, dl, dt, figcaption, figure, footer, h1, h2, h3, h4, h5, h6, header, hr, li, main, nav, ol, p, pre, section, table, td, th, tr, ul";
+const BLOCKS = "address, article, aside, blockquote, br, button, caption, dd, div, dl, dt, figcaption, figure, footer, h1, h2, h3, h4, h5, h6, header, hr, li, main, nav, ol, p, pre, section, summary, table, td, th, tr, ul";
 
 /** Text of a (cloned, disposable) element with block boundaries kept as spaces, so "<h1>A</h1><p>B</p>" reads "A B". */
 export function blockText(root: ReturnType<Doc>): string {

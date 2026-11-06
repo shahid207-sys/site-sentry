@@ -4,15 +4,16 @@ import type { Doc } from "../../audit/parse";
 import type { Fetcher } from "../../fetch/safe-fetch";
 import { SafeFetchError } from "../../fetch/safe-fetch";
 import { normaliseUrl, type NormaliseFailure, type NormaliseOptions } from "../normalise";
+import { SITEMAP_DISCOVERY } from "../profiles";
 import { parseSitemap, SITEMAP_PROTOCOL_MAX_URLS } from "../sitemap";
 import type { DiscoverySource, LinkLocation } from "./types";
 
 // ---------- sitemaps ----------
 
 /** Spec: recurse sitemap indexes to depth 3. Depth 0 = a sitemap named by robots.txt or a default location. */
-export const MAX_SITEMAP_INDEX_DEPTH = 3;
+export const MAX_SITEMAP_INDEX_DEPTH = SITEMAP_DISCOVERY.maxIndexDepth;
 /** Upper bound on sitemap documents read per crawl, so a hostile index cannot fan out without limit. */
-export const MAX_SITEMAP_DOCS = 1000;
+export const MAX_SITEMAP_DOCS = SITEMAP_DISCOVERY.maxDocs;
 export const DEFAULT_SITEMAP_PATHS = ["/sitemap.xml", "/sitemap_index.xml"];
 
 export interface SitemapDocRecord {

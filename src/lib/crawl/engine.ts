@@ -27,7 +27,6 @@ export const LIMITS = {
   ...LEGACY_ENGINE_LIMITS,
   concurrency: 4,
   linkChecks: 60,
-  sitemapChildren: 5,
   storedSitemapUrls: 2000,
   stepBudgetMs: 8_000,
   leaseMs: 45_000,
@@ -66,6 +65,9 @@ function expectationsFor(intents: Record<string, PageExpectations>, ...urls: str
 }
 
 export function isStale(audit: AuditRun, now: Date): boolean {
+  // A v2 audit runs in the crawl workers, which recover their own leases: its store heartbeat is only the last sync,
+  // so an old one means nobody looked, not that the crawl stopped.
+  if (audit.crawler) return false;
   return audit.status === "running" && now.getTime() - Date.parse(audit.heartbeatAt) > LIMITS.staleMs;
 }
 
@@ -627,6 +629,10 @@ export function describeConfig(config: AuditConfig): string[] {
   if (config.profile) lines.push(`${PROFILES[config.profile].label} profile: ${describeLimits(config.maxPages, config.maxDepth)}`);
   lines.push(config.maxDepth === null ? "Follow internal links with no depth limit" : config.maxDepth > 0 ? `Follow internal links up to ${config.maxDepth} click(s) deep` : "Do not follow links");
   lines.push(`At most ${config.maxPages} pages`);
+  const rb = config.resourceBudgets;
+  if (rb?.nonHtml !== undefined) lines.push(`At most ${rb.nonHtml} non-HTML URLs`);
+  if (rb?.images !== undefined) lines.push(`At most ${rb.images} images checked`);
+  if (rb?.externalLinks !== undefined) lines.push(`At most ${rb.externalLinks} external links checked`);
   if (config.checkLinks) lines.push(`Status-check up to ${LIMITS.linkChecks} uncrawled internal link and image targets`);
   lines.push("Read robots.txt first and skip URLs it disallows for this crawler");
   return lines;

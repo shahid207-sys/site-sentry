@@ -42,6 +42,13 @@ docker compose up -d --build
 
 Configuration, upgrades and backups: [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md).
 
+### Before deploying publicly
+
+Set `TRUSTED_PROXY_HEADER` to the header your host writes the visitor's IP to: **`x-forwarded-for` on Vercel**,
+**`cf-connecting-ip` behind Cloudflare**. Without it the homepage free audit works on `localhost` only; on a public
+host visitors see "Free audits are temporarily unavailable". Set `ADMIN_TOKEN` too, to check configuration at
+`/api/health`. The full list is the [deployment checklist](docs/SELF-HOSTING.md#deployment-checklist).
+
 For development (Node 20.19+, developed on Node 24):
 
 ```bash

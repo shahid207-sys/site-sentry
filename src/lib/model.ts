@@ -31,6 +31,10 @@ export interface Site {
   notes?: string;
   /** White-label for this site's reports. */
   branding?: Branding;
+  /** The brand name rules compare with (META-020). Unset: inferred from og:site_name or schema. */
+  brandName?: string;
+  /** AI analysis after each audit (opt-in, docs/SPEC.md "AI analysis"). Unset is off. */
+  aiAnalysis?: boolean;
 }
 
 /** Report white-label: shown on the cover and in the header of every report of the site. */
@@ -61,6 +65,12 @@ export interface PageIntent {
 
 export type AuditMode = "single" | "list" | "sitemap";
 
+export interface ResourceBudgets {
+  nonHtml?: number;
+  images?: number;
+  externalLinks?: number;
+}
+
 export interface AuditConfig {
   mode: AuditMode;
   /** Seed URLs (single/list), normalised. */
@@ -79,6 +89,8 @@ export interface AuditConfig {
   authUser?: string;
   /** Whether AI crawlers should be allowed (AIS-002, crawler v2). Unset: the rule reports that it needs this setting. */
   aiCrawlers?: "allow" | "block";
+  /** Custom profile: limits apart from the URL budget (crawler v2). Each absent one uses the engine's default. */
+  resourceBudgets?: ResourceBudgets;
   /** Headless-browser rendering after the crawl (crawler v2, Phase 5); absent = off. */
   render?: RenderMode;
   categories: RuleCategory[];

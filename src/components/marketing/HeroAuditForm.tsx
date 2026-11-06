@@ -22,7 +22,7 @@ export function HeroAuditForm({ compact }: { compact?: boolean }) {
   const errorId = useId();
   const [value, setValue] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
-  const [error, setError] = useState<{ message: string; offerSample?: boolean } | null>(null);
+  const [error, setError] = useState<{ message: string; offerSample?: "workspace" | "audit" } | null>(null);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -47,7 +47,9 @@ export function HeroAuditForm({ compact }: { compact?: boolean }) {
     } catch (err) {
       setPhase("idle");
       if (err instanceof ApiError) {
-        setError({ message: err.message, offerSample: err.code === "LIVE_DISABLED" || err.status === 0 });
+        // PROXY_NOT_CONFIGURED: the server's message already points to the sample audit; link it.
+        const offerSample = err.code === "PROXY_NOT_CONFIGURED" ? "audit" : err.code === "LIVE_DISABLED" || err.status === 0 ? "workspace" : undefined;
+        setError({ message: err.message, offerSample });
       } else {
         setError({ message: "Something went wrong starting the audit. Nothing was saved; try again." });
       }
@@ -90,7 +92,14 @@ export function HeroAuditForm({ compact }: { compact?: boolean }) {
         {error ? (
           <div id={errorId} role="alert" className="mt-3 rounded-lg border border-sev-high/25 bg-sev-high-soft px-3.5 py-2.5 text-sm text-sev-high">
             {error.message}
-            {error.offerSample ? (
+            {error.offerSample === "audit" ? (
+              <>
+                {" "}
+                <Link href="/sample-audit" className="font-medium underline underline-offset-4">
+                  Open the sample audit
+                </Link>
+              </>
+            ) : error.offerSample ? (
               <>
                 {" "}
                 <Link href="/sample" className="font-medium underline underline-offset-4">

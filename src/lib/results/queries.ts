@@ -4,7 +4,7 @@ import { sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import type { IssueState } from "../db/schema";
 import type { Priority } from "./priority";
-import { ANSWERED, crawlComplete, crawlCoverage, type Coverage } from "./coverage";
+import { ANSWERED, crawlComplete, crawlCoverage, type Coverage, coverageVerdict, type CoverageVerdict } from "./coverage";
 import type { Health } from "./health";
 import { OPEN_STATES, projectKey, rechecked, wideAudits, type StateCounts } from "./states";
 
@@ -45,10 +45,15 @@ export interface CrawlOverview {
   project: string;
   siteOrigin: string;
   profile: string;
+  /** URL budget and click depth the crawl ran with; null = unlimited. */
+  budget: number | null;
+  maxDepth: number | null;
   status: string;
   createdAt: string;
   analysed: boolean;
   coverage: Coverage;
+  /** Complete or partial, and exactly why, from the crawl's URL states. */
+  verdict: CoverageVerdict;
   health: Health | null;
   /** Issue states per state, verified fixes included (effectiveStates). */
   states: StateCounts;
@@ -62,9 +67,9 @@ export interface CrawlOverview {
 }
 
 export async function crawlOverview(db: Exec, crawlId: string): Promise<CrawlOverview> {
-  const r = await db.execute(sql`select id, kind, workspace, ${projectKey("c")} as project, site_origin, profile, status, created_at, analysis->>'status' as analysis, health
+  const r = await db.execute(sql`select id, kind, workspace, ${projectKey("c")} as project, site_origin, profile, status, created_at, analysis->>'status' as analysis, analysis->'apiEndpoints' as api_endpoints, budget, max_depth, robots, health
     from crawls c where id = ${crawlId}::uuid`);
-  const c = r.rows[0] as { id: string; kind: string; workspace: string; project: string; site_origin: string; profile: string; status: string; created_at: Date | string; analysis: string | null; health: Health | null } | undefined;
+  const c = r.rows[0] as { id: string; kind: string; workspace: string; project: string; site_origin: string; profile: string; status: string; created_at: Date | string; analysis: string | null; budget: number | null; max_depth: number | null; robots: { outcome?: string; reason?: string } | null; health: Health | null; api_endpoints: { found: number; fetched: number } | null } | undefined;
   if (!c) throw new ResultsError("NOT_FOUND", "Crawl not found.");
   if (c.kind !== "audit") throw new ResultsError("INVALID", "This crawl is a fix verification, not an audit.");
   // Independent reads: run them together (the pool has room; this is the first request of the Overview screen).
@@ -83,17 +88,22 @@ export async function crawlOverview(db: Exec, crawlId: string): Promise<CrawlOve
   }
   const priorities: Record<Priority, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
   for (const x of g.rows as { priority: Priority; n: number }[]) priorities[x.priority] = x.n;
+  const verdict = coverageVerdict(coverage.states, { status: c.status, budget: c.budget, maxDepth: c.max_depth, robots: c.robots, apiEndpoints: c.api_endpoints });
   return {
     crawlId: c.id,
     workspace: c.workspace,
     project: c.project,
     siteOrigin: c.site_origin,
     profile: c.profile,
+    budget: c.budget,
+    maxDepth: c.max_depth,
     status: c.status,
     createdAt: new Date(c.created_at).toISOString(),
     analysed: c.analysis === "completed",
     coverage,
-    health: c.health,
+    verdict,
+    // The stored flag counts out-of-scope URLs as uncrawled. A complete audit must not also say it covered too little.
+    health: c.health && verdict.verdict === "complete" ? { ...c.health, partialCoverage: false } : c.health,
     states,
     verifiedResolved,
     priorities,

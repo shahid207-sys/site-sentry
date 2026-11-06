@@ -9,6 +9,9 @@ import { EXT_HOSTS, manifestPaths, ROBOTS_BLOCKED_PREFIX, SECTIONS, sectionPaths
 import { links, organization, png, SITE_NAME, type Parts } from "./pages";
 import { paragraph, topic } from "./text";
 
+/** The site's one dated article stays recent whenever the fixture runs: CNT-019 would otherwise start firing as it ages. */
+const daysAgo = (n: number) => new Date((Math.floor(Date.now() / 86_400_000) - n) * 86_400_000).toISOString(); // whole days: one page, one body
+
 const ld = (...blocks: unknown[]) => blocks.map((b) => `<script type="application/ld+json">${typeof b === "string" ? b : JSON.stringify(b)}</script>`).join("");
 const SCHEMA_ORG = "https://schema.org";
 /** Another fixture host's origin, same port and scheme as `origin`. */
@@ -26,6 +29,8 @@ export const FACET_PATH = "/links/filter";
 
 /** 305 distinct internal targets, all 200 pages: /clean/ (100), /links/ (120), /meta/ (60), /index/ (25). */
 const manyTargets = () => [...sectionPaths(section("/clean/")), ...sectionPaths(section("/links/")), ...sectionPaths(section("/meta/")), ...sectionPaths(section("/index/")).slice(0, 25)];
+
+const NAV_COPY = range(5, 10).map((i) => `<a href="/clean/p-${i}">Clean page ${i}</a>`).join("");
 
 const LINKS: Defect[] = [
   ...range(1, 10).map(
@@ -77,6 +82,11 @@ const LINKS: Defect[] = [
     expect: [],
     apply: (p, c) => void (p.body += `<p><a href="/clean/p-4">Clean page four</a> and <a href="${hostOrigin(c.origin, EXT_HOSTS.ext2)}/ok" rel="nofollow">a partner site</a>.</p>`),
   },
+  // Expert link rules (expert.ts).
+  { name: "the same navigation twice in the DOM", expect: ["LNK-015"], apply: (p) => void (p.body += `<nav>${NAV_COPY}</nav><nav>${NAV_COPY}</nav>`) },
+  { name: "one copy of the navigation (negative)", expect: [], apply: (p) => void (p.body += `<nav>${NAV_COPY}</nav>`) },
+  { name: "call to action links to the homepage", expect: ["LNK-016"], apply: (p) => void (p.body += '<p><a href="/">Get a quote</a></p>') },
+  { name: "call to action on a matching page (negative)", expect: [], apply: (p) => void (p.body += '<p><a href="/clean/p-4">Learn about spades</a></p>') },
 ];
 
 /** CDN-injected paths linked from one /links/ page (crawl state cdn_managed, never requested). */
@@ -208,10 +218,19 @@ const SCHEMA: Defect[] = [
         "@type": "Article",
         headline: "Sharpening a spade",
         image: `${c.origin}/img/plain.png`,
-        datePublished: "2026-03-01T09:00:00Z",
-        dateModified: "2026-03-02T09:00:00Z",
+        datePublished: daysAgo(31),
+        dateModified: daysAgo(30),
         author: { "@type": "Person", name: "A. Gardener", url: `${c.origin}/clean/` },
       })),
+  },
+  // Expert structured data rule (expert.ts).
+  {
+    name: "Organization rates itself",
+    expect: ["SD-011", "SD-004"],
+    apply: (p, c) => {
+      p.head += ld({ ...organization(c.origin, SITE_NAME), aggregateRating: { "@type": "AggregateRating", ratingValue: 4.8, reviewCount: 212 } });
+      p.body += `<p>${RATING_TEXT.aggregate}</p>`;
+    },
   },
 ];
 function offer() {
@@ -272,7 +291,7 @@ const INTL: Defect[] = [
   { name: "no self reference", expect: ["I18N-004"], apply: hreflang([["de", "/intl/p-9"], ["x-default", "/intl/p-9"]]) },
   { name: "self-referencing partner", expect: [], apply: hreflang([["de", "/intl/p-9"], ["en", "/intl/p-8"], ["x-default", "/intl/p-9"]]) },
   { name: "no x-default", expect: ["I18N-005"], apply: hreflang([["en", "/intl/p-10"]]) },
-  { name: "target canonicalised elsewhere (source)", expect: ["I18N-006"], apply: hreflang([["en", "/intl/p-11"], ["de", "/intl/p-12"], ["x-default", "/intl/p-11"]]) },
+  { name: "target canonicalised elsewhere (source)", expect: ["I18N-006", "LNK-017"], apply: hreflang([["en", "/intl/p-11"], ["de", "/intl/p-12"], ["x-default", "/intl/p-11"]]) },
   {
     name: "target canonicalised elsewhere (target)",
     expect: ["IDX-029", "I18N-006"], // a sitemap URL that canonicalises elsewhere, and its own hreflang names itself

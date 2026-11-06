@@ -28,7 +28,7 @@ const router = createRouter(8080, 8081);
 const ORIGIN = router.origins.main;
 const MAIN_HOST = new URL(ORIGIN).host;
 /** Site rules this test can judge without probes, sitemaps or crawl states (SITE-001 is checked on its own below). */
-const SITE_RULES = new Set(["META-004", "META-009", "CNT-006", "CNT-007", "IDX-022", "IDX-023", "LNK-003", "LNK-004", "LNK-005", "LNK-012", "LNK-014", "I18N-001", "I18N-002", "I18N-006"]);
+const SITE_RULES = new Set(["IDX-033", "IDX-034", "LNK-017", "META-004", "META-009", "CNT-006", "CNT-007", "IDX-022", "IDX-023", "LNK-003", "LNK-004", "LNK-005", "LNK-012", "LNK-014", "I18N-001", "I18N-002", "I18N-006"]);
 const inSitemap = new Set(fixtureSitemaps().flatMap((s) => s.paths));
 const excluded = MAIN_EXCLUDE.map((r) => new RegExp(r.replace(String.raw`\d+`, "8080")));
 
@@ -110,6 +110,10 @@ function factsOf(url: string): UrlFacts {
           ogImage: p.facts?.og.image ?? null,
           icons: p.facts?.icons ?? [],
           hreflang: p.links.filter((l) => l.via === "hreflang" && l.hreflang).map((l) => ({ lang: l.hreflang!, href: l.href })),
+          language: p.language,
+          ogLocale: p.facts?.ogLocale ?? null,
+          published: p.facts?.published ?? null,
+          bodyClass: p.facts?.bodyClass ?? null,
         }
       : null,
     inbound: 0,
@@ -151,12 +155,19 @@ for (const [a, b] of linkEdges) {
   if (!inbound.has(t)) inbound.set(t, new Set());
   inbound.get(t)!.add(a);
 }
+// Pages linking to this exact URL, with no credit to a redirect target (analyse.ts direct_links).
+const direct = new Map<number, Set<number>>();
+for (const [a, b] of linkEdges) {
+  if (a === b) continue;
+  if (!direct.has(b)) direct.set(b, new Set());
+  direct.get(b)!.add(a);
+}
 const adjacency: number[][] = urls.map(() => []);
 for (const [a, b] of linkEdges) adjacency[a].push(b);
 for (const u of urls) if (u.redirectTarget) adjacency[u.id - 1].push(byUrl.get(u.redirectTarget)!.id - 1);
 const depth = bfsDepth(urls.length, adjacency, byUrl.get(`${ORIGIN}/`)!.id - 1);
 const rank = pageRank(urls.length, linkEdges).score;
-for (const u of urls) Object.assign(u, { inbound: inbound.get(u.id - 1)?.size ?? 0, linkDepth: depth[u.id - 1] < 0 ? null : depth[u.id - 1], pagerank: rank[u.id - 1] });
+for (const u of urls) Object.assign(u, { directLinks: direct.get(u.id - 1)?.size ?? 0, inbound: inbound.get(u.id - 1)?.size ?? 0, linkDepth: depth[u.id - 1] < 0 ? null : depth[u.id - 1], pagerank: rank[u.id - 1] });
 const site = { urls, byUrl };
 
 // ---------- the resource phase: one answer per image and external link ----------

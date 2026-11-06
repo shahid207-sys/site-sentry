@@ -16,6 +16,7 @@ import { renderBrowsers } from "../lib/render/pool";
 import { createRenderQueue, enqueueRender, startRenderWorker } from "../lib/render/queue";
 import { renderModeOf, unrenderedCrawls } from "../lib/render/run";
 import { blobStoreFromEnv } from "../lib/snapshot/blob-store";
+import { createAiQueue, enqueueAiIfEnabled, startAiWorker } from "../lib/ai/queue";
 import { afterAnalysed } from "../lib/schedule/deliver";
 
 const numEnv = (name: string, fallback: number) => {
@@ -49,12 +50,18 @@ async function main() {
   const shutdown = new AbortController();
   const analysisQueue = createAnalysisQueue(connection);
   // Analysis runs in this process by default; ANALYSIS_WORKER=off leaves it to `npm run worker:analysis`.
-  const analysisWorker = process.env.ANALYSIS_WORKER === "off" ? null : startAnalysisWorker({
+  const inProcessAnalysis = process.env.ANALYSIS_WORKER !== "off";
+  const aiQueue = inProcessAnalysis ? createAiQueue(connection) : null;
+  const aiWorker = inProcessAnalysis ? startAiWorker({ db, connection, log }) : null;
+  const analysisWorker = !inProcessAnalysis ? null : startAnalysisWorker({
           db,
           connection,
           concurrency: numEnv("ANALYSIS_CONCURRENCY", 1),
           log,
-          afterAnalysed: (crawlId) => afterAnalysed(db, crawlId, { policy: workerFetchPolicy(), log, appUrl: process.env.APP_URL }),
+          afterAnalysed: async (crawlId) => {
+            await enqueueAiIfEnabled(db, aiQueue!, crawlId);
+            await afterAnalysed(db, crawlId, { policy: workerFetchPolicy(), log, appUrl: process.env.APP_URL });
+          },
         });
   // Rendering (Phase 5) runs in this process too unless RENDER_WORKER=off (then `npm run worker:render`). Its browsers
   // (RENDER_BROWSERS, default 1) start on the first page to render, not at boot.
@@ -137,6 +144,8 @@ async function main() {
     shutdown.abort();
     await worker.close();
     await analysisWorker?.close();
+    await aiWorker?.close();
+    await aiQueue?.close();
     await render?.worker.close();
     await render?.pool.close();
     await queue.close();

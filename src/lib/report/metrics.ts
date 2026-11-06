@@ -48,6 +48,7 @@ export async function databaseMetric(db: Exec, crawlId: string, key: string): Pr
   if (key === "health.score") return one(db, sql`select (health->>'score')::float8 as v from crawls where id = ${c}`);
   if ((x = key.match(/^health\.category\.(\w+)$/))) return one(db, sql`select (health->'categories'->${x[1]}->>'score')::float8 as v from crawls where id = ${c}`);
   if (key === "crawl.fetchesCommitted") return one(db, sql`select fetches_committed as v from crawls where id = ${c}`);
+  if (key === "crawl.nonHtmlFetches") return one(db, sql`select non_html_fetches as v from crawls where id = ${c}`);
   if ((x = key.match(/^resources\.(external|images)\.(found|planned)$/))) return one(db, sql`select (resources->${x[1]}->>${x[2]})::int as v from crawls where id = ${c}`);
   if ((x = key.match(/^depth\.(\d+|sitemap)$/)))
     return one(db, x[1] === "sitemap" ? sql`select count(*)::int as v from crawl_urls where crawl_id = ${c} and depth is null` : sql`select count(*)::int as v from crawl_urls where crawl_id = ${c} and depth = ${Number(x[1])}`);

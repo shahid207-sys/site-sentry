@@ -75,8 +75,8 @@ const ADD_METHODS: { value: AddMethod; label: string }[] = [
   { value: "sitemap", label: "XML sitemap" },
   { value: "list", label: "URL list" },
 ];
-/** First audits run the Quick profile so they finish quickly; New audit offers every profile. */
-const FIRST_AUDIT = PROFILES.quick;
+/** Workspace audits default to Standard, first audits included; New audit offers every profile. */
+const FIRST_AUDIT = PROFILES.standard;
 const FIRST_AUDIT_LIMITS = describeLimits(FIRST_AUDIT.budget, FIRST_AUDIT.maxDepth);
 
 /**
@@ -144,7 +144,7 @@ export function AddSiteForm({ onCreated, autoFocus }: { onCreated?: (s: Site) =>
           sitemapUrl: method === "sitemap" && sitemapUrl.trim() ? abs(sitemapUrl) : undefined,
           profile: FIRST_AUDIT.id,
           categories: RULE_CATEGORIES.map((c) => c.id),
-          checkLinks: false,
+          checkLinks: true,
           includeImportant: false,
         },
       });

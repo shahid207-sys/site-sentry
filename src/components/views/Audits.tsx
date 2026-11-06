@@ -4,7 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Globe, Play, ScanSearch, Trash2 } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { RULE_CATEGORIES, type RuleCategory } from "@/lib/audit/types";
-import { describeLimits, LEGACY_ENGINE_LIMITS, MAX_BUDGET, MAX_DEPTH, PROFILE_IDS, PROFILES, RENDER_MODE_LABELS, type ProfileId, type RenderMode } from "@/lib/crawl/profiles";
+import { describeLimits, LEGACY_ENGINE_LIMITS, MAX_BUDGET, MAX_DEPTH, PROFILE_IDS, PROFILES, RENDER_MODE_LABELS, RESOURCE_BUDGET_DEFAULTS, SITEMAP_DISCOVERY, type ProfileId, type RenderMode } from "@/lib/crawl/profiles";
 import type { AuditMode } from "@/lib/model";
 import type { AuditSummary, SettingsData } from "@/lib/views";
 import { SeverityCountsInline } from "../domain";
@@ -297,6 +297,9 @@ function NewAuditForm({ requestedSite }: { requestedSite: string }) {
   const [chosenProfile, setProfile] = useState<ProfileId | null>(null);
   const [budget, setBudget] = useState<number>(PROFILES.full.budget);
   const [depth, setDepth] = useState<number | null>(PROFILES.custom.maxDepth);
+  const [nonHtmlBudget, setNonHtmlBudget] = useState("");
+  const [imageBudget, setImageBudget] = useState("");
+  const [externalBudget, setExternalBudget] = useState("");
   const [include, setInclude] = useState("");
   const [exclude, setExclude] = useState("");
   const [subfolder, setSubfolder] = useState("");
@@ -305,8 +308,8 @@ function NewAuditForm({ requestedSite }: { requestedSite: string }) {
   const settings = useApi<SettingsData>(`${apiBase}/settings`);
   const v2 = settings.data?.crawler.v2 ?? false;
   const canAuth = settings.data?.crawler.basicAuth ?? false;
-  // Standard is the usual audit; the in-request engine (v2 off) cannot run it in full, so start from Quick there.
-  const profile: ProfileId = chosenProfile ?? (v2 ? "standard" : "quick");
+  // Workspace audits default to Standard; Quick stays the default of the public hero form only.
+  const profile: ProfileId = chosenProfile ?? "standard";
   const [categories, setCategories] = useState<RuleCategory[]>(RULE_CATEGORIES.map((c) => c.id));
   const [checkLinks, setCheckLinks] = useState(true);
   const [includeImportant, setIncludeImportant] = useState(true);
@@ -367,6 +370,9 @@ function NewAuditForm({ requestedSite }: { requestedSite: string }) {
           ...(p.budgetEditable ? { budget } : {}),
           ...(p.depthEditable ? { maxDepth: depth } : {}),
           ...(custom && (subfolder.trim() || includes.length || excludes.length) ? { scope: { include: includes, exclude: excludes, subfolder: subfolder.trim() || undefined } } : {}),
+          ...(custom && (nonHtmlBudget || imageBudget || externalBudget)
+            ? { resourceBudgets: { ...(nonHtmlBudget ? { nonHtml: Number(nonHtmlBudget) } : {}), ...(imageBudget ? { images: Number(imageBudget) } : {}), ...(externalBudget ? { externalLinks: Number(externalBudget) } : {}) } }
+            : {}),
           ...(custom && canAuth && authUser.trim() ? { auth: { username: authUser.trim(), password: authPass } } : {}),
           categories,
           checkLinks,
@@ -427,7 +433,7 @@ function NewAuditForm({ requestedSite }: { requestedSite: string }) {
                   <Textarea id="na-urls" value={many} onChange={(e) => setMany(e.target.value)} className="min-h-36 font-mono text-[13px]" placeholder={"/\n/services/\n/contact"} />
                 </Field>
               ) : (
-                <Field label="Sitemap URL" htmlFor="na-sm" hint="Optional. Leave empty to use the robots.txt declaration, then /sitemap.xml. Sitemap indexes are followed (first 5 child sitemaps).">
+                <Field label="Sitemap URL" htmlFor="na-sm" hint={`Optional. Leave empty to use the robots.txt declaration, then /sitemap.xml. ${v2 ? `Sitemap indexes are followed up to ${SITEMAP_DISCOVERY.maxIndexDepth} levels deep, reading at most ${SITEMAP_DISCOVERY.maxDocs.toLocaleString("en-GB")} sitemap files.` : `Sitemap indexes are followed (first ${LIMITS.sitemapChildren} child sitemaps).`}`}>
                   <Input id="na-sm" value={sitemapUrl} onChange={(e) => setSitemapUrl(e.target.value)} className="font-mono" placeholder={site?.site.sitemapUrl ?? "/sitemap.xml"} />
                 </Field>
               )}
@@ -462,6 +468,16 @@ function NewAuditForm({ requestedSite }: { requestedSite: string }) {
               ) : null}
               {custom ? (
                 <>
+                  <Field label="Non-HTML URL budget" htmlFor="na-nonhtml" hint={`Optional. Feeds, JSON and files linked as pages. Default ${RESOURCE_BUDGET_DEFAULTS.nonHtml.toLocaleString("en")}.`}>
+                    <Input id="na-nonhtml" type="number" min={0} max={MAX_BUDGET} value={nonHtmlBudget} onChange={(e) => setNonHtmlBudget(e.target.value)} />
+                  </Field>
+                  <Field label="Image budget" htmlFor="na-images" hint={`Optional. Image URLs to check. Default ${RESOURCE_BUDGET_DEFAULTS.images.toLocaleString("en")}.`}>
+                    <Input id="na-images" type="number" min={0} max={MAX_BUDGET} value={imageBudget} onChange={(e) => setImageBudget(e.target.value)} />
+                  </Field>
+                  <Field label="External link budget" htmlFor="na-external" hint={`Optional. External links to check. Default ${RESOURCE_BUDGET_DEFAULTS.externalLinks.toLocaleString("en")}.`}>
+                    <Input id="na-external" type="number" min={0} max={MAX_BUDGET} value={externalBudget} onChange={(e) => setExternalBudget(e.target.value)} />
+                  </Field>
+                  <div className="hidden sm:block" />
                   <Field label="Subfolder" htmlFor="na-sub" hint="Optional. Only URLs under this path, e.g. /blog/.">
                     <Input id="na-sub" value={subfolder} onChange={(e) => setSubfolder(e.target.value)} className="font-mono" placeholder="/blog/" />
                   </Field>

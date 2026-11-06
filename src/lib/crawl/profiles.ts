@@ -35,6 +35,9 @@ export const PROFILES: Record<ProfileId, CrawlProfile> = {
   custom: { id: "custom", label: "Custom", budget: 1_000, maxDepth: 10, budgetEditable: true, depthEditable: true, scopeRules: true, render: ["off", "sampled", "full"], use: "Include/exclude regex, subfolder-only, staging with auth" },
 };
 
+/** What a crawl checks apart from its URL budget, unless the Custom profile sets otherwise. */
+export const RESOURCE_BUDGET_DEFAULTS = { nonHtml: 1_000, images: 2_000, externalLinks: 500 } as const;
+
 /** Validation bounds for user-set values (not profile caps): keep a typo from queueing a crawl of a billion URLs. */
 export const MAX_BUDGET = 1_000_000;
 export const MAX_DEPTH = 100;
@@ -50,7 +53,9 @@ export const HERO_RATE_LIMIT = { audits: 5, windowMs: 60 * 60 * 1000 } as const;
  * The in-request engine used while CRAWLER_V2=false keeps every page in the JSON store, so it cannot run the larger
  * profiles. Budgets above this are clamped there, and the audit says so. Crawler v2 has no such ceiling.
  */
-export const LEGACY_ENGINE_LIMITS = { maxPages: 100, maxDepth: 3, maxListUrls: 100, linkChecks: 60 } as const;
+export const LEGACY_ENGINE_LIMITS = { maxPages: 100, maxDepth: 3, maxListUrls: 100, linkChecks: 60, sitemapChildren: 5 } as const;
+/** Crawler v2 sitemap discovery: indexes are followed this deep, and at most this many sitemap documents are read. */
+export const SITEMAP_DISCOVERY = { maxIndexDepth: 3, maxDocs: 1000 } as const;
 
 export interface ScopeRules {
   /** A URL must match at least one, when any are given (regex source, tested against the normalised URL). */

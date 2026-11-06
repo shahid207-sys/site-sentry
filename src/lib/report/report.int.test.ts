@@ -73,7 +73,7 @@ describe("audit report", () => {
     const vsApi = checkAgainstApi(html, api);
     expect(vsApi.mismatches).toEqual([]);
     expect(vsApi.apiBacked).toBeGreaterThan(50);
-    expect(vsApi.notInApi, JSON.stringify(vsApi.notInApi)).toEqual(["crawl.fetchesCommitted", "depth.N", "duplicates.clusters", "priorityPages", "resources.external.found", "resources.external.planned", "resources.images.found", "resources.images.planned", "rulesNotRan"]);
+    expect(vsApi.notInApi, JSON.stringify(vsApi.notInApi)).toEqual(["crawl.fetchesCommitted", "crawl.nonHtmlFetches", "depth.N", "duplicates.clusters", "priorityPages", "resources.external.found", "resources.external.planned", "resources.images.found", "resources.images.planned", "rulesNotRan"]);
     const keys = new Set(reportMetrics(html).map((x) => x.key));
     for (const k of ["health.score", "coverage.answered", "coverage.eligible", "group.CNT-005.affected", "group.CNT-005.state.resolved", "compare.persistent", "states.resolved", "depth.1", "duplicates.clusters"]) expect(keys, k).toContain(k);
     expect(reportMetrics(html).find((x) => x.key === "group.CNT-005.state.resolved")?.value).toBe("3");

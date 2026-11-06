@@ -1,9 +1,12 @@
 // HTML → snapshot fields. Pure: no network, no clock. Runs in the crawl worker on the document it already parsed
 // for outlinks, so each page is parsed once. Main-content text reuses the legacy content rule's extraction.
+import { createHash } from "node:crypto";
 import { detect } from "tinyld";
-import { blockText, BOILERPLATE, mainContentSource, mainContentText } from "../audit/rules/content";
+import { blockText, BOILERPLATE, mainContentSource } from "../audit/rules/content";
 import type { Doc } from "../audit/parse";
 import type { Outlink } from "../crawl/v2/discovery";
+import { cardTexts } from "./cards";
+import { mainText } from "./main-text";
 import { templateShape } from "./template";
 import { simhash, textHash, words } from "./text";
 import type { CanonicalTag, ExtractedHtml, HeadingEntry, HeadTag, JsonLdBlock, PageFacts, RobotsDirective, RobotsSnapshot, SnapshotImage } from "./types";
@@ -152,6 +155,7 @@ function factsOf($: Doc, html: string, base: string, headers: Record<string, str
 
   const body = $("body").first().clone();
   body.find("script, style, noscript, template, svg").remove();
+  const bodyText = blockText(body);
 
   return {
     metaCharset,
@@ -164,11 +168,121 @@ function factsOf($: Doc, html: string, base: string, headers: Record<string, str
     jsRedirect,
     renderResources: [...new Set(renderResources)],
     videos: videos.slice(0, 100),
-    bodyTextChars: blockText(body).length,
+    bodyTextChars: bodyText.length,
     mainTextChars,
     htmlBytes,
     domNodes: $("*").length,
+    strong: $("body strong, body b").toArray().slice(0, EXPERT_CAPS.strong).map((el) => collapse($(el).text()).slice(0, 120)).filter(Boolean),
+    // Bold questions outside headings: an FAQ written as bold paragraphs (CNT-022).
+    boldQuestions: $("body strong, body b")
+      .toArray()
+      .filter((el) => !$(el).parents("h1, h2, h3, h4, h5, h6, nav, header, footer, summary, button, a, strong, b").length && /\?\s*$/.test($(el).text()))
+      .slice(0, EXPERT_CAPS.boldQuestions)
+      .map((el) => collapse($(el).text()).slice(0, 200)),
+    ...navFacts($, base),
+    cardTexts: cardTexts($, $("body").first()),
+    bodyClass: ($("body").first().attr("class") ?? "").slice(0, SNAPSHOT_CAPS.attrChars),
+    logoAlt: logoAlt($),
+    contacts: contactsIn(bodyText),
+    published: publishedDate($),
+    ogLocale: first("og:locale"),
   };
+}
+
+/** Caps for the expert rules' facts: enough to judge a page, never a page's worth of storage. */
+export const EXPERT_CAPS = { strong: 200, boldQuestions: 50, navBlocks: 20, contacts: 30 } as const;
+const NAV_SELECTOR = 'nav, [role="navigation"], [class*="mobile-menu"], [class*="mobile-nav"], [id*="mobile-menu"], [id*="mobile-nav"]';
+
+function navFacts($: Doc, base: string): Pick<PageFacts, "navBlocks" | "navLinks"> {
+  const all = new Set<string>();
+  const navBlocks: NonNullable<PageFacts["navBlocks"]> = [];
+  $(NAV_SELECTOR).each((_, el) => {
+    if ($(el).parents(NAV_SELECTOR).length) return;
+    const hrefs = new Set<string>();
+    $(el).find("a[href]").each((__, a) => {
+      const r = resolve($(a).attr("href"), base);
+      if (r) hrefs.add(r.split("#")[0]);
+    });
+    for (const h of hrefs) all.add(h);
+    if (hrefs.size && navBlocks.length < EXPERT_CAPS.navBlocks) navBlocks.push({ links: hrefs.size, sig: createHash("sha1").update([...hrefs].sort().join("\n")).digest("hex").slice(0, 16) });
+  });
+  return { navBlocks, navLinks: all.size };
+}
+
+const LOGO = /logo/i;
+function logoAlt($: Doc): string | null {
+  const img = $("header img, [class*=header] img, [class*=logo] img, img[class*=logo], img[src*=logo]")
+    .toArray()
+    .find((el) => {
+      const n = $(el);
+      return LOGO.test(`${n.attr("class") ?? ""} ${n.attr("src") ?? ""} ${n.attr("alt") ?? ""} ${n.parent().attr("class") ?? ""}`);
+    });
+  return img ? collapse($(img).attr("alt") ?? "").slice(0, 200) || null : null;
+}
+
+const PHONE = /(?<![\d.\-/])(?:(?:\+|00)\d[\d\s().\-]{6,18}\d|\(?0\d{1,3}\)?[\s.\-]\d[\d\s.\-]{4,12}\d)(?![\d/])/g;
+// Bounded on purpose: an unbounded local part is quadratic on a long run of letters with no "@".
+const EMAIL = /[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,6}\.[A-Za-z]{2,24}/g;
+export function contactsIn(text: string): { phones: string[]; emails: string[] } {
+  const phones = new Set<string>();
+  for (const m of text.match(PHONE) ?? []) {
+    const digits = m.replace(/\D/g, "").length;
+    if (digits >= 8 && digits <= 15) phones.add(collapse(m));
+    if (phones.size >= EXPERT_CAPS.contacts) break;
+  }
+  return { phones: [...phones], emails: [...new Set(text.match(EMAIL) ?? [])].slice(0, EXPERT_CAPS.contacts) };
+}
+
+const ARTICLE_TYPE = /^(Article|BlogPosting|NewsArticle|TechArticle|Report)$/;
+function publishedDate($: Doc): string | null {
+  const dates: string[] = [];
+  const tag = $('meta[property="article:published_time"]').attr("content");
+  if (tag) dates.push(tag.trim());
+  $('script[type="application/ld+json"]').each((_, el) => {
+    try {
+      const walk = (v: unknown) => {
+        if (Array.isArray(v)) return v.forEach(walk);
+        if (!v || typeof v !== "object") return;
+        const o = v as Record<string, unknown>;
+        const t = o["@type"];
+        if ((Array.isArray(t) ? t : [t]).some((x) => typeof x === "string" && ARTICLE_TYPE.test(x)) && typeof o.datePublished === "string") dates.push(o.datePublished);
+        walk(o["@graph"]);
+      };
+      walk(JSON.parse($(el).text()));
+    } catch {
+      // a malformed block is SD-001's finding
+    }
+  });
+  const valid = dates.filter((d) => Number.isFinite(Date.parse(d)));
+  return valid.sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null;
+}
+
+/** Headings with nothing but markup between them and the one before: no text, image, link or control. */
+function adjacentHeadings($: Doc): Set<unknown> {
+  const adjacent = new Set<unknown>();
+  let last = false;
+  const walk = (node: { type?: string; name?: string; data?: string; children?: unknown[] }) => {
+    if (node.type === "text") {
+      if ((node.data ?? "").trim()) last = false;
+      return;
+    }
+    if (node.type !== "tag" && node.type !== "root") return;
+    const name = node.name ?? "";
+    if (/^(script|style|noscript|template|svg|head)$/.test(name)) return;
+    if (/^(img|picture|video|iframe|a|button|input|select|textarea|hr)$/.test(name)) {
+      last = false;
+      return;
+    }
+    if (/^h[1-6]$/.test(name)) {
+      if (last) adjacent.add(node);
+      last = true;
+      return;
+    }
+    for (const c of node.children ?? []) walk(c as typeof node);
+  };
+  const root = $("body")[0] as unknown as Parameters<typeof walk>[0] | undefined;
+  if (root) for (const c of root.children ?? []) walk(c as Parameters<typeof walk>[0]);
+  return adjacent;
 }
 
 /** Sentences, joined until each chunk has at least LANGUAGE_CHUNK_CHARS characters. */
@@ -237,17 +351,19 @@ export function extractHtml({ $, html, pageUrl, headers, bytes, outlinks }: Extr
     .filter((el) => ($(el).attr("name") ?? "").trim().toLowerCase() === "description")
     .map((el) => collapse($(el).attr("content") ?? ""));
 
+  const adjacent = adjacentHeadings($);
   const outline: HeadingEntry[] = [];
   $("h1, h2, h3, h4, h5, h6").each((_, el) => {
     if (outline.length >= SNAPSHOT_CAPS.headings) return false;
     const level = Number((el as { tagName: string }).tagName.slice(1)) as HeadingEntry["level"];
     // Block boundaries and <br> read as spaces: "Ask AI<br>Who" is "Ask AI Who", not "AIWho".
-    outline.push({ level, text: blockText($(el).clone()).slice(0, 300) });
+    outline.push({ level, text: blockText($(el).clone()).slice(0, 300), ...(adjacent.has(el) ? { adjacent: true as const } : {}) });
   });
 
-  const main = mainContentText($).text.slice(0, SNAPSHOT_CAPS.mainTextChars);
+  // Without page furniture: menus and link lists inside <main> (a sidebar mega menu) are not the page's content.
+  const main = mainText($).slice(0, SNAPSHOT_CAPS.mainTextChars);
 
-  // An image is in the main content when it sits inside the element mainContentText reads and outside boilerplate.
+  // An image is in the main content when it sits inside the element main text is read from and outside boilerplate.
   const source = mainContentSource($);
   const mainRoot = $(source === "main" ? "main, [role=main]" : source).first()[0];
   const fillsParent = (style: string | undefined) => {

@@ -41,6 +41,8 @@ export const crawls = pgTable(
     maxDepth: integer("max_depth"),
     /** Fetches committed against the budget (incremented in the commit-to-send transaction). */
     fetchesCommitted: integer("fetches_committed").notNull().default(0),
+    /** Non-HTML answers, moved here from fetches_committed: they have their own budget (frontier.ts NON_HTML_BUDGET). */
+    nonHtmlFetches: integer("non_html_fetches").notNull().default(0),
     /** robots.txt as fetched: { url, status, outcome, body, sitemaps, crawlDelay }. */
     robots: jsonb("robots"),
     /** One record per sitemap document read, failed or skipped. */
@@ -662,4 +664,24 @@ export const alertDeliveries = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex("alert_deliveries_schedule_crawl_uq").on(t.scheduleId, t.crawlId), check("alert_deliveries_status_ck", sql`${t.status} in (${list(ALERT_STATUSES)})`)],
+);
+
+/** One AI analysis per audit (src/lib/ai). A `done` row is the cache: the job never calls the model for that audit again. */
+export const aiAnalyses = pgTable(
+  "ai_analyses",
+  {
+    auditId: text("audit_id").primaryKey(),
+    crawlId: uuid("crawl_id")
+      .notNull()
+      .references(() => crawls.id, { onDelete: "cascade" }),
+    status: text("status").notNull(),
+    model: text("model"),
+    analysis: jsonb("analysis"),
+    /** What the grounding validator removed (DroppedCounts). */
+    dropped: jsonb("dropped"),
+    usage: jsonb("usage"),
+    detail: text("detail"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("ai_analyses_crawl_idx").on(t.crawlId), check("ai_analyses_status_ck", sql`${t.status} in ('queued', 'done', 'failed', 'not_configured', 'over_budget')`)],
 );

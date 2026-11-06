@@ -54,6 +54,10 @@ export interface CrawlView {
   robotsAllows(url: string, agent: string): boolean | null;
   sitemaps: SitemapDocRecord[];
   probes: ProbeRecord[];
+  /** The brand name from the project's settings; null when unset (rules then read the page's own signals). */
+  brand: string | null;
+  /** Words the project's spell check accepts (crawl setting spellingAllow, lower-cased); empty when unset (CNT-023). */
+  spellingAllow: ReadonlySet<string>;
   /** Pages the user marked as high-value (crawl setting keyPages, normalised); null when unset. */
   keyPages: string[] | null;
   /** True when no URL of the crawled host was left unfetched (budget, depth, failure, cancellation). */
@@ -147,9 +151,16 @@ export interface UrlFacts {
     ogImage: string | null;
     icons: string[];
     hreflang: Hreflang[];
+    // Absent on snapshots from before the expert rules.
+    language?: LanguageSnapshot | null;
+    ogLocale?: string | null;
+    published?: string | null;
+    bodyClass?: string | null;
   } | null;
   /** Distinct crawled pages with an <a href> to this URL (self-links excluded). */
   inbound: number;
+  /** Pages linking to this exact URL. `inbound` credits a link to a redirecting URL to its target, so it cannot say this. */
+  directLinks?: number;
   /** Clicks from the start URL over <a href> links and redirects; null when unreachable. */
   linkDepth: number | null;
   /** Internal PageRank, 0–100 log-scaled (graph.ts); null for URLs outside the link graph. */

@@ -47,7 +47,12 @@ export const MEMORY_LIMIT_MB = 700;
 /** V8 heap cap for the worker (the gate gets the same from its npm script), so a leak fails fast with a clear error. */
 const HEAP_CAP_FLAGS = ["--max-old-space-size=768", "--heapsnapshot-near-heap-limit=1"];
 /** Rules whose positive case cannot be served by the local fixture; covered by their unit test only. */
-const UNIT_ONLY: Record<string, string> = {};
+const UNIT_ONLY: Record<string, string> = {
+  "CNT-019": "judges the whole site's newest article: a stale date would change the fixture home page's findings",
+  "CNT-020": "judges the home page: a brand conflict would change the fixture home page's findings",
+  "I18N-007": "judges the whole site's languages: a second language would change the fixture home page's findings",
+  "I18N-008": "needs an encoded slug in a section, which would change that section index's findings",
+};
 const TARGET_MS = { perRule: 5, total: 50 };
 
 const results: { name: string; pass: boolean; detail: string }[] = [];

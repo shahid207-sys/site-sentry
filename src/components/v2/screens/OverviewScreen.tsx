@@ -12,6 +12,7 @@ import type { Priority } from "@/lib/results/priority";
 import { AuditFrame, useAudit } from "../AuditFrame";
 import { categoryLabel, PRIORITIES, PriorityBadge, PriorityIcon, priorityLabel, priorityText, stateLabel, urlStateLabel } from "../badges";
 import { ruleTitle } from "../hooks";
+import { AiPanel } from "../AiPanel";
 import { useApi, type Resource } from "../../lib/api";
 import { fmtDateTime, plural } from "../../lib/format";
 import { Button, EmptyState, ErrorState, LinkButton, Mono, Notice, Panel, ScoreRing, Skeleton, StatStrip, cx, scoreColor } from "../../ui";
@@ -67,6 +68,7 @@ function AnalysedOverview() {
 
   return (
     <div className="flex flex-col gap-6">
+      <CoverageBanner v={o.verdict} />
       <StatStrip
         items={[
           { label: "Issue groups", value: o.issueGroups.toLocaleString("en-GB"), hint: `${plural(o.rulesRan, "rule")} ran`, href: `${auditBase}/issues` },
@@ -84,7 +86,23 @@ function AnalysedOverview() {
         <ChangePanel compare={compare} />
       </div>
       <Scorecards o={o} groups={groups.data} />
+      <AiPanel />
     </div>
+  );
+}
+
+// ---------- complete or partial ----------
+
+/** The audit's coverage verdict, in the crawl's own terms: every reason names its count. */
+function CoverageBanner({ v }: { v: CrawlOverview["verdict"] }) {
+  if (v.verdict === "running") return null;
+  const lines = [...v.reasons.map((r) => r.message), ...v.notes];
+  const complete = v.verdict === "complete";
+  return (
+    <Notice tone={complete ? "ok" : "warn"} title={complete ? "Complete" : "Partial"}>
+      {complete ? <p>Every in-scope URL reached a final state, and no budget cut applied.</p> : null}
+      {lines.length ? <ul className="mt-1 list-disc space-y-0.5 pl-5 marker:text-fg-3">{lines.map((l) => <li key={l}>{l}</li>)}</ul> : null}
+    </Notice>
   );
 }
 

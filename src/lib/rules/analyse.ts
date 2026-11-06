@@ -25,6 +25,8 @@ import { fingerprintOf } from "./fingerprint";
 import { TemplateGroups } from "./group";
 import { RULES } from "./registry";
 import { keepSmallest } from "./site";
+import { isMachineEndpoint } from "./util";
+import { siteLanguages } from "./expert";
 
 export const ANALYSIS_BATCH = 500;
 
@@ -55,7 +57,7 @@ export interface CrawlRow {
   site_origin: string;
   status: string;
   kind?: CrawlKind;
-  config: { aiCrawlers?: "allow" | "block"; keyPages?: string[]; verify?: VerifyConfig; render?: RenderMode };
+  config: { aiCrawlers?: "allow" | "block"; keyPages?: string[]; verify?: VerifyConfig; render?: RenderMode; brand?: string; spellingAllow?: string[] };
   robots: RobotsRecord | null;
   sitemaps: (SitemapDocRecord | { started: string })[];
   probes: ProbeRecord[];
@@ -95,6 +97,8 @@ export function crawlView(row: CrawlRow, extra: Partial<Pick<CrawlView, "complet
     robotsAllows: (url, agent) => (parsed ? isAllowed(parsed, agent, url).allowed : outcome === "allow_all" ? true : outcome === "disallow_all" ? false : null),
     sitemaps: (row.sitemaps ?? []).filter((d): d is SitemapDocRecord => "url" in d),
     probes: row.probes ?? [],
+    brand: row.config?.brand?.trim() || null,
+    spellingAllow: new Set((row.config?.spellingAllow ?? []).map((w) => w.trim().toLowerCase()).filter(Boolean)),
     keyPages: row.config?.keyPages?.length ? row.config.keyPages.map(normalised) : null,
     complete: extra.complete ?? row.status === "completed",
     resources: extra.resources ?? { links: new Map(), images: new Map() },
@@ -222,6 +226,8 @@ async function templates(db: Exec, crawlId: string, batch: number): Promise<void
   }
 }
 
+type UrlLanguage = NonNullable<NonNullable<UrlFacts["page"]>["language"]>;
+
 async function loadSiteView(db: Exec, crawlId: string, batch: number): Promise<SiteView> {
   const urls: UrlFacts[] = [];
   for (let after = 0; ; ) {
@@ -229,8 +235,10 @@ async function loadSiteView(db: Exec, crawlId: string, batch: number): Promise<S
       select u.id, u.normalised_url, u.state, u.status_code, u.redirect_target, u.discovered_via, u.inbound, u.link_depth, u.pagerank,
         s.facts is not null as html,
         (select coalesce(jsonb_agg(jsonb_build_object('lang', l->>'hreflang', 'href', l->>'href')), '[]'::jsonb) from jsonb_array_elements(s.links) l where l->>'via' = 'hreflang') as hreflang, s.robots, s.canonicals, s.title, s.description, s.text_hash, s.simhash, coalesce(u.template_id, s.template_fingerprint) as template_fingerprint, s.word_count,
-        s.facts->'og'->>'image' as og_image, s.facts->'icons' as icons,
-        (select e->>'text' from jsonb_array_elements(s.outline) e where e->>'level' = '1' limit 1) as h1
+        s.facts->'og'->>'image' as og_image, s.facts->'icons' as icons, s.language,
+        s.facts->>'ogLocale' as og_locale, s.facts->>'published' as published, s.facts->>'bodyClass' as body_class,
+        (select e->>'text' from jsonb_array_elements(s.outline) e where e->>'level' = '1' limit 1) as h1,
+        (select count(distinct e.from_url)::int from url_edges e where e.crawl_id = u.crawl_id and e.to_url = u.normalised_url and e.via = 'link' and e.from_url <> u.normalised_url) as direct_links
       from crawl_urls u left join page_snapshots s on s.url_id = u.id
       where u.crawl_id = ${crawlId}::uuid and u.id > ${after} order by u.id limit ${batch}`);
     for (const x of r.rows as Record<string, unknown>[]) {
@@ -256,9 +264,14 @@ async function loadSiteView(db: Exec, crawlId: string, batch: number): Promise<S
               ogImage: (x.og_image as string | null) ?? null,
               icons: (x.icons as string[] | null) ?? [],
               hreflang: (x.hreflang as Hreflang[] | null) ?? [],
+              language: (x.language as UrlLanguage | null) ?? null,
+              ogLocale: (x.og_locale as string | null) ?? null,
+              published: (x.published as string | null) ?? null,
+              bodyClass: (x.body_class as string | null) ?? null,
             }
           : null,
         inbound: (x.inbound as number | null) ?? 0,
+        directLinks: (x.direct_links as number | null) ?? 0,
         linkDepth: (x.link_depth as number | null) ?? null,
         pagerank: (x.pagerank as number | null) ?? null,
       });
@@ -458,6 +471,16 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
         if (renderMode === "off") stats.mark(r.id, "needs_config", "Rendering is off for this audit: choose a profile that renders pages (sampled or full) to run this check.");
         else if (row.render?.status === "failed") stats.mark(r.id, "error", `The render phase failed: ${row.render.error ?? "unknown error"}`);
       }
+      // API and feed URLs (wp-json, oEmbed, feeds) are noindex by design: the indexability rules do not judge them.
+      const machineOnly = (r: Rule) => r.category === "indexability";
+      const endpoints = site.urls.filter((u) => isMachineEndpoint(u.url));
+      const apiEndpoints = { found: endpoints.length, fetched: endpoints.filter((u) => u.statusCode !== null).length };
+      const readerSite: SiteView = { urls: site.urls.filter((u) => !isMachineEndpoint(u.url)), byUrl: site.byUrl };
+      // For the report's hreflang row: Pass needs hreflang to exist, and a one-language site has nothing to annotate.
+      const languages = {
+        detected: siteLanguages(readerSite.urls).map(([language, us]) => ({ language, pages: us.length })),
+        hreflangPages: readerSite.urls.filter((u) => (u.page?.hreflang.length ?? 0) > 0).length,
+      };
       const pageRules = rules.filter((r): r is PageRule => r.scope === "page");
       const siteRules = rules.filter((r): r is SiteRule => r.scope === "site");
       const resourceRules = rules.filter((r): r is ResourceRule => r.scope === "resource");
@@ -477,9 +500,11 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
         const occurrences: Occurrence[] = [];
         for (const x of r.rows as Record<string, unknown>[]) {
           const page = pageView(x);
-          pages++;
+          // Pages are HTML documents: feeds, JSON and files are snapshots, not pages.
+          if (page.html) pages++;
           for (const rule of pageRules) {
             if (renderedRule(rule) && page.render?.status !== "rendered") continue;
+            if (machineOnly(rule) && isMachineEndpoint(page.url)) continue;
             const own: Finding[] = [];
             stats.run(rule, { page, crawl, site }, own);
             for (const f of own) occurrences.push(occurrenceOf(rule, f, basis));
@@ -505,7 +530,7 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
       const siteFound: Finding[] = grouped.findings();
       const groupedCount = siteFound.length; // their occurrences are the pages', stored above
       for (const f of siteFound) stats.adjust(f.ruleId, 1);
-      for (const rule of siteRules) stats.run(rule, { site, crawl, pageIssues }, siteFound);
+      for (const rule of siteRules) stats.run(rule, { site: machineOnly(rule) ? readerSite : site, crawl, pageIssues }, siteFound);
       for (const rule of resourceRules) {
         for (const resource of (rule.kind === "image" ? crawl.resources.images : crawl.resources.links).values()) stats.run(rule, { resource, crawl }, siteFound);
       }
@@ -537,7 +562,7 @@ export async function analyseCrawl(db: Db, crawlId: string, opts: { rules?: Rule
       // fetched → analysed: every snapshot was read by the page rules above.
       await tx.execute(sql`update crawl_urls set state = 'analysed', updated_at = now() where crawl_id = ${crawlId}::uuid and state = 'fetched'`);
       const msPerPage = pages ? Math.round((list.reduce((n, s) => n + s.totalMs, 0) / pages) * 1000) / 1000 : 0;
-      await tx.execute(sql`update crawls set analysis = ${JSON.stringify({ status: "completed", startedAt, finishedAt: new Date().toISOString(), pages, findings: total, msPerPage, issueGroups, indexablePages: basis.indexable, duplicateFingerprints: duplicates, states, health: health?.score ?? null, partialCoverage: health?.partialCoverage ?? null })}::jsonb where id = ${crawlId}::uuid`);
+      await tx.execute(sql`update crawls set analysis = ${JSON.stringify({ status: "completed", startedAt, finishedAt: new Date().toISOString(), pages, findings: total, msPerPage, issueGroups, indexablePages: basis.indexable, apiEndpoints, languages, duplicateFingerprints: duplicates, states, health: health?.score ?? null, partialCoverage: health?.partialCoverage ?? null })}::jsonb where id = ${crawlId}::uuid`);
       // Later audits of the project read this one's states: recompute them, oldest first.
       for (const later of await laterAudits(tx, crawlId)) {
         if (later.kind === "verify" && later.config.verify) await writeVerifyStates(tx, later.id, later.config.verify);

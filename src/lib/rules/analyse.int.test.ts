@@ -61,7 +61,7 @@ describe("analyseCrawl", () => {
     const o = srv.origin;
     const res = await analyseCrawl(db, c);
     expect(res.outcome).toBe("analysed");
-    expect(res.pages).toBe(5); // /, /a, /b, /new, /missing (the redirect has no snapshot of its own)
+    expect(res.pages).toBe(4); // /, /a, /b, /new: HTML pages (the empty 404 and the redirect are not)
 
     const f = await findingRows(c);
     const has = (rule: string, url: string) => f.some((x) => x.rule_id === rule && x.url === url);
@@ -98,7 +98,7 @@ describe("analyseCrawl", () => {
     expect(states.find((s) => s.state === "analysed")?.n).toBe(5);
 
     const crawl = (await db.execute(sql`select analysis from crawls where id = ${c}::uuid`)).rows[0] as { analysis: Record<string, unknown> };
-    expect(crawl.analysis).toMatchObject({ status: "completed", pages: 5, findings: f.length });
+    expect(crawl.analysis).toMatchObject({ status: "completed", pages: 4, findings: f.length });
     expect(typeof crawl.analysis.msPerPage).toBe("number");
     expect(crawl.analysis).toMatchObject({ duplicateFingerprints: 0 });
 
@@ -159,6 +159,22 @@ describe("analyseCrawl", () => {
     expect(health.coveragePercent).toBe(Math.round((1000 * answered) / eligible) / 10);
     expect(health.partialCoverage).toBe(answered / eligible < 0.5);
     expect(crawl.analysis).toMatchObject({ health: health.score, partialCoverage: health.partialCoverage });
+  });
+
+  it("skips API and feed endpoints in the indexability rules, and counts them", async () => {
+    const o = srv.origin;
+    srv.routes.set("/robots.txt", send("User-agent: *\nAllow: /\n", "text/plain"));
+    srv.routes.set("/", doc("Home page of the endpoint test", `<h1>Home</h1><a href="/hidden">h</a><a href="/wp-json/wp/v2/pages/1">api</a><a href="/blog/feed/">feed</a>`));
+    srv.routes.set("/hidden", send(`<!doctype html><html lang="en"><head><title>Hidden page</title></head><body><main><h1>Hidden</h1></main></body></html>`, "text/html; charset=utf-8", 200, { "x-robots-tag": "noindex" }));
+    srv.routes.set("/wp-json/wp/v2/pages/1", send(`{"id":1}`, "application/json", 200, { "x-robots-tag": "noindex" }));
+    srv.routes.set("/blog/feed/", send(`<?xml version="1.0"?><rss version="2.0"><channel><title>t</title></channel></rss>`, "application/rss+xml", 200, { "x-robots-tag": "noindex" }));
+    const c = await newCrawl(db, { siteOrigin: o, status: "queued", maxDepth: 5 });
+    expect(await runCrawl(opts(), c)).toBe("completed");
+    await analyseCrawl(db, c);
+    const f = (await findingRows(c)).filter((x) => x.rule_id === "IDX-009").map((x) => new URL(x.url).pathname);
+    expect(f).toEqual(["/hidden"]); // a reader's page with noindex is reported; the API and the feed are not
+    const crawl = (await db.execute(sql`select analysis from crawls where id = ${c}::uuid`)).rows[0] as { analysis: Record<string, unknown> };
+    expect(crawl.analysis.apiEndpoints).toEqual({ found: 2, fetched: 2 });
   });
 
   it("is idempotent and gives the same result whatever the batch size", async () => {
