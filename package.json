@@ -9,6 +9,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "sample:v2": "tsx scripts/sample-v2.ts",
     "typecheck": "next typegen && node --max-old-space-size=1280 node_modules/typescript/bin/tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

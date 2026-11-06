@@ -1,0 +1,2224 @@
+{
+  "generator": "scripts/sample-v2.ts",
+  "generatedAt": "2026-11-06T19:18:12.662Z",
+  "siteName": "Northwind Outdoor",
+  "origin": "https://www.northwind-outdoor.example",
+  "overview": {
+    "crawlId": "d8634421-e7b3-49fa-bdb0-e7b03a732581",
+    "workspace": "sample",
+    "project": "https://www.northwind-outdoor.example/",
+    "siteOrigin": "https://www.northwind-outdoor.example/",
+    "profile": "standard",
+    "budget": 1000,
+    "maxDepth": 10,
+    "status": "completed",
+    "createdAt": "2026-11-06T19:18:12.662Z",
+    "analysed": true,
+    "coverage": {
+      "states": {
+        "analysed": 356
+      },
+      "total": 356,
+      "answered": 356,
+      "eligible": 356,
+      "percent": 100
+    },
+    "verdict": {
+      "verdict": "complete",
+      "reasons": [],
+      "notes": []
+    },
+    "health": {
+      "score": 92.8,
+      "categories": {
+        "site": {
+          "score": 61.5,
+          "weight": 4,
+          "maximum": 7.8,
+          "rulesRan": 3,
+          "deduction": 3
+        },
+        "links": {
+          "score": 97.5,
+          "weight": 12,
+          "maximum": 22.5,
+          "rulesRan": 15,
+          "deduction": 0.566
+        },
+        "images": {
+          "score": 83,
+          "weight": 8,
+          "maximum": 11.4,
+          "rulesRan": 10,
+          "deduction": 1.933
+        },
+        "content": {
+          "score": 92.9,
+          "weight": 15,
+          "maximum": 31.3,
+          "rulesRan": 20,
+          "deduction": 2.2072
+        },
+        "metadata": {
+          "score": 98.4,
+          "weight": 12,
+          "maximum": 37.3,
+          "rulesRan": 23,
+          "deduction": 0.6115
+        },
+        "security": {
+          "score": 100,
+          "weight": 6,
+          "maximum": 17.9,
+          "rulesRan": 6,
+          "deduction": 0
+        },
+        "ai_search": {
+          "score": 84.6,
+          "weight": 4,
+          "maximum": 3.9,
+          "rulesRan": 3,
+          "deduction": 0.6
+        },
+        "indexability": {
+          "score": 100,
+          "weight": 25,
+          "maximum": 95,
+          "rulesRan": 33,
+          "deduction": 0
+        },
+        "international": {
+          "score": 100,
+          "weight": 6,
+          "maximum": 17.3,
+          "rulesRan": 8,
+          "deduction": 0
+        },
+        "structured_data": {
+          "score": 73.4,
+          "weight": 8,
+          "maximum": 17.3,
+          "rulesRan": 11,
+          "deduction": 4.6089
+        }
+      },
+      "coveragePercent": 100,
+      "partialCoverage": false
+    },
+    "states": {
+      "new": 10,
+      "persistent": 874,
+      "resolved": 51,
+      "regressed": 0,
+      "not_rechecked": 2,
+      "inconclusive": 0
+    },
+    "verifiedResolved": 0,
+    "priorities": {
+      "critical": 0,
+      "high": 1,
+      "medium": 2,
+      "low": 6,
+      "info": 7
+    },
+    "issueGroups": 16,
+    "rulesRan": 139
+  },
+  "crawl": {
+    "budget": 1000,
+    "maxDepth": 10,
+    "fetchesCommitted": 356
+  },
+  "groups": [
+    {
+      "ruleId": "SITE-001",
+      "category": "site",
+      "impact": 3,
+      "confidence": "verified",
+      "confidenceWeight": 1,
+      "affectedPages": 356,
+      "indexablePages": 356,
+      "reach": 1,
+      "score": 3,
+      "priority": "high",
+      "affectedUrls": 2,
+      "inconclusiveUrls": 0,
+      "templateCount": 2,
+      "sampleUrls": [
+        "https://www.northwind-outdoor.example/backpacks/alpine-classic",
+        "https://www.northwind-outdoor.example/journal/a-beginner-guide-to-hut-trips"
+      ],
+      "templates": [
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/journal/a-beginner-guide-to-hut-trips"
+          ],
+          "templateId": "00d305d4ca0d9f1f",
+          "affectedUrls": 1
+        },
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/backpacks/alpine-classic"
+          ],
+          "templateId": "1d48747969bb180c",
+          "affectedUrls": 1
+        }
+      ],
+      "states": {
+        "persistent": 3
+      },
+      "title": "Issue shared by 90%+ of a template group (one fix)",
+      "why": "A defect on nearly every page of a template comes from the template itself; one fix resolves them all.",
+      "fix": "Fix the shared template (layout, component or CMS field), not each page.",
+      "acceptance": "Fewer than 90% of the template's pages have the issue.",
+      "evidence": [
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/alpine-classic",
+          "message": "SD-004 affects 300 of 306 pages built from one template: fix it once in the template.",
+          "evidence": {
+            "pages": 300,
+            "share": 0.98,
+            "ruleId": "SD-004",
+            "sample": [
+              "https://www.northwind-outdoor.example/backpacks/alpine-classic",
+              "https://www.northwind-outdoor.example/backpacks/alpine-light",
+              "https://www.northwind-outdoor.example/backpacks/birch-classic",
+              "https://www.northwind-outdoor.example/backpacks/birch-light",
+              "https://www.northwind-outdoor.example/backpacks/canyon-classic"
+            ],
+            "template": "1d48747969bb180c",
+            "groupSize": 306
+          },
+          "outcome": "issue"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/a-beginner-guide-to-hut-trips",
+          "message": "SD-004 affects 36 of 36 pages built from one template: fix it once in the template.",
+          "evidence": {
+            "pages": 36,
+            "share": 1,
+            "ruleId": "SD-004",
+            "sample": [
+              "https://www.northwind-outdoor.example/journal/a-beginner-guide-to-hut-trips",
+              "https://www.northwind-outdoor.example/journal/a-guide-to-tent-footprints",
+              "https://www.northwind-outdoor.example/journal/breakfast-ideas-for-camping-trips",
+              "https://www.northwind-outdoor.example/journal/breaking-in-new-walking-boots",
+              "https://www.northwind-outdoor.example/journal/buying-second-hand-outdoor-kit"
+            ],
+            "template": "00d305d4ca0d9f1f",
+            "groupSize": 36
+          },
+          "outcome": "issue"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/a-beginner-guide-to-hut-trips",
+          "message": "IMG-001 affects 36 of 36 pages built from one template: fix it once in the template.",
+          "evidence": {
+            "pages": 36,
+            "share": 1,
+            "ruleId": "IMG-001",
+            "sample": [
+              "https://www.northwind-outdoor.example/journal/a-beginner-guide-to-hut-trips",
+              "https://www.northwind-outdoor.example/journal/a-guide-to-tent-footprints",
+              "https://www.northwind-outdoor.example/journal/breakfast-ideas-for-camping-trips",
+              "https://www.northwind-outdoor.example/journal/breaking-in-new-walking-boots",
+              "https://www.northwind-outdoor.example/journal/buying-second-hand-outdoor-kit"
+            ],
+            "template": "00d305d4ca0d9f1f",
+            "groupSize": 36
+          },
+          "outcome": "issue"
+        }
+      ],
+      "urls": [
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/alpine-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/a-beginner-guide-to-hut-trips",
+          "state": "persistent"
+        }
+      ],
+      "verifiable": false
+    },
+    {
+      "ruleId": "SD-003",
+      "category": "structured_data",
+      "impact": 3,
+      "confidence": "verified",
+      "confidenceWeight": 1,
+      "affectedPages": 50,
+      "indexablePages": 356,
+      "reach": 0.6689,
+      "score": 2.0068,
+      "priority": "medium",
+      "affectedUrls": 50,
+      "inconclusiveUrls": 0,
+      "templateCount": 1,
+      "sampleUrls": [
+        "https://www.northwind-outdoor.example/footwear/alpine-classic",
+        "https://www.northwind-outdoor.example/footwear/alpine-light",
+        "https://www.northwind-outdoor.example/footwear/birch-classic",
+        "https://www.northwind-outdoor.example/footwear/birch-light",
+        "https://www.northwind-outdoor.example/footwear/canyon-classic"
+      ],
+      "templates": [
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/footwear/alpine-classic",
+            "https://www.northwind-outdoor.example/footwear/alpine-light",
+            "https://www.northwind-outdoor.example/footwear/birch-classic",
+            "https://www.northwind-outdoor.example/footwear/birch-light",
+            "https://www.northwind-outdoor.example/footwear/canyon-classic"
+          ],
+          "templateId": "1d48747969bb180c",
+          "affectedUrls": 50
+        }
+      ],
+      "states": {
+        "persistent": 50
+      },
+      "title": "Required property missing for Google-supported type",
+      "why": "Google does not use markup for a feature when a required property is missing.",
+      "fix": "Add the missing properties with values that match the visible content.",
+      "acceptance": "Every Google-documented type on the page has all its required properties.",
+      "docs": "https://developers.google.com/search/docs/appearance/structured-data/search-gallery",
+      "evidence": [
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/alpine-classic",
+          "message": "Product (block 1) lacks review or aggregateRating or offers. Google lists these as required.",
+          "evidence": {
+            "gaps": [
+              {
+                "at": "block 1",
+                "type": "Product",
+                "source": "https://developers.google.com/search/docs/appearance/structured-data/product-snippet",
+                "missing": [
+                  "review or aggregateRating or offers"
+                ]
+              }
+            ],
+            "note": "Meeting Google's required properties does not by itself make a page eligible for a rich result."
+          },
+          "outcome": "issue"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/alpine-light",
+          "message": "Product (block 1) lacks review or aggregateRating or offers. Google lists these as required.",
+          "evidence": {
+            "gaps": [
+              {
+                "at": "block 1",
+                "type": "Product",
+                "source": "https://developers.google.com/search/docs/appearance/structured-data/product-snippet",
+                "missing": [
+                  "review or aggregateRating or offers"
+                ]
+              }
+            ],
+            "note": "Meeting Google's required properties does not by itself make a page eligible for a rich result."
+          },
+          "outcome": "issue"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/birch-classic",
+          "message": "Product (block 1) lacks review or aggregateRating or offers. Google lists these as required.",
+          "evidence": {
+            "gaps": [
+              {
+                "at": "block 1",
+                "type": "Product",
+                "source": "https://developers.google.com/search/docs/appearance/structured-data/product-snippet",
+                "missing": [
+                  "review or aggregateRating or offers"
+                ]
+              }
+            ],
+            "note": "Meeting Google's required properties does not by itself make a page eligible for a rich result."
+          },
+          "outcome": "issue"
+        }
+      ],
+      "urls": [
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/alpine-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/alpine-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/birch-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/birch-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/canyon-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/canyon-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/cascade-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/cascade-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/cedar-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/cedar-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/fjord-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/fjord-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/glacier-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/glacier-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/granite-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/granite-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/harbor-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/harbor-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/heather-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/heather-light",
+          "state": "persistent"
+        }
+      ],
+      "verifiable": true
+    },
+    {
+      "ruleId": "SD-009",
+      "category": "structured_data",
+      "impact": 3,
+      "confidence": "verified",
+      "confidenceWeight": 1,
+      "affectedPages": 50,
+      "indexablePages": 356,
+      "reach": 0.6689,
+      "score": 2.0068,
+      "priority": "medium",
+      "affectedUrls": 50,
+      "inconclusiveUrls": 0,
+      "templateCount": 1,
+      "sampleUrls": [
+        "https://www.northwind-outdoor.example/footwear/alpine-classic",
+        "https://www.northwind-outdoor.example/footwear/alpine-light",
+        "https://www.northwind-outdoor.example/footwear/birch-classic",
+        "https://www.northwind-outdoor.example/footwear/birch-light",
+        "https://www.northwind-outdoor.example/footwear/canyon-classic"
+      ],
+      "templates": [
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/footwear/alpine-classic",
+            "https://www.northwind-outdoor.example/footwear/alpine-light",
+            "https://www.northwind-outdoor.example/footwear/birch-classic",
+            "https://www.northwind-outdoor.example/footwear/birch-light",
+            "https://www.northwind-outdoor.example/footwear/canyon-classic"
+          ],
+          "templateId": "1d48747969bb180c",
+          "affectedUrls": 50
+        }
+      ],
+      "states": {
+        "persistent": 50
+      },
+      "title": "Product without offers/price",
+      "why": "Product results show price and availability from offers; without them a product snippet has little to show.",
+      "fix": "Add offers with price, priceCurrency and availability (or AggregateOffer with lowPrice).",
+      "acceptance": "Every Product has offers with a price.",
+      "docs": "https://developers.google.com/search/docs/appearance/structured-data/product-snippet",
+      "evidence": [
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/alpine-classic",
+          "message": "Product markup (block 1) has no offers.",
+          "evidence": {
+            "products": [
+              {
+                "at": "block 1",
+                "problem": "no offers"
+              }
+            ]
+          },
+          "outcome": "issue"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/alpine-light",
+          "message": "Product markup (block 1) has no offers.",
+          "evidence": {
+            "products": [
+              {
+                "at": "block 1",
+                "problem": "no offers"
+              }
+            ]
+          },
+          "outcome": "issue"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/birch-classic",
+          "message": "Product markup (block 1) has no offers.",
+          "evidence": {
+            "products": [
+              {
+                "at": "block 1",
+                "problem": "no offers"
+              }
+            ]
+          },
+          "outcome": "issue"
+        }
+      ],
+      "urls": [
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/alpine-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/alpine-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/birch-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/birch-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/canyon-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/canyon-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/cascade-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/cascade-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/cedar-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/cedar-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/fjord-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/fjord-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/glacier-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/glacier-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/granite-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/granite-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/harbor-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/harbor-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/heather-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/heather-light",
+          "state": "persistent"
+        }
+      ],
+      "verifiable": true
+    },
+    {
+      "ruleId": "CNT-007",
+      "category": "content",
+      "impact": 3,
+      "confidence": "heuristic",
+      "confidenceWeight": 0.6,
+      "affectedPages": 62,
+      "indexablePages": 356,
+      "reach": 0.7049,
+      "score": 1.2688,
+      "priority": "low",
+      "affectedUrls": 62,
+      "inconclusiveUrls": 0,
+      "templateCount": 2,
+      "sampleUrls": [
+        "https://www.northwind-outdoor.example/backpacks/cedar-light",
+        "https://www.northwind-outdoor.example/backpacks/moraine-classic",
+        "https://www.northwind-outdoor.example/backpacks/redwood-classic",
+        "https://www.northwind-outdoor.example/backpacks/ridge-light",
+        "https://www.northwind-outdoor.example/backpacks/sierra-classic"
+      ],
+      "templates": [
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/backpacks/cedar-light",
+            "https://www.northwind-outdoor.example/backpacks/moraine-classic",
+            "https://www.northwind-outdoor.example/backpacks/redwood-classic",
+            "https://www.northwind-outdoor.example/backpacks/ridge-light",
+            "https://www.northwind-outdoor.example/backpacks/sierra-classic"
+          ],
+          "templateId": "1d48747969bb180c",
+          "affectedUrls": 58
+        },
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/journal/looking-after-down-gear",
+            "https://www.northwind-outdoor.example/journal/our-favourite-coastal-walks-this-autumn",
+            "https://www.northwind-outdoor.example/journal/pitching-a-tent-in-strong-wind",
+            "https://www.northwind-outdoor.example/journal/repairing-a-waterproof-jacket-at-home"
+          ],
+          "templateId": "00d305d4ca0d9f1f",
+          "affectedUrls": 4
+        }
+      ],
+      "states": {
+        "new": 2,
+        "persistent": 60
+      },
+      "title": "Near-duplicate content (SimHash ≥ 90%)",
+      "why": "Near-identical pages compete with each other and dilute ranking signals.",
+      "fix": "Differentiate the pages or consolidate them with a canonical or redirect.",
+      "acceptance": "No other indexable page with 100+ main-content words is 92% or more similar.",
+      "evidence": [
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/cedar-light",
+          "message": "Main content is at least 92% similar to 1 other indexable page(s) (main content, boilerplate excluded).",
+          "evidence": {
+            "count": 1,
+            "matches": [
+              {
+                "url": "https://www.northwind-outdoor.example/backpacks/ridge-light",
+                "similarity": 0.922
+              }
+            ]
+          },
+          "outcome": "issue"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/moraine-classic",
+          "message": "Main content is at least 92% similar to 1 other indexable page(s) (main content, boilerplate excluded).",
+          "evidence": {
+            "count": 1,
+            "matches": [
+              {
+                "url": "https://www.northwind-outdoor.example/tents/willow-light",
+                "similarity": 0.938
+              }
+            ]
+          },
+          "outcome": "issue"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/redwood-classic",
+          "message": "Main content is at least 92% similar to 1 other indexable page(s) (main content, boilerplate excluded).",
+          "evidence": {
+            "count": 1,
+            "matches": [
+              {
+                "url": "https://www.northwind-outdoor.example/backpacks/sierra-classic",
+                "similarity": 0.938
+              }
+            ]
+          },
+          "outcome": "issue"
+        }
+      ],
+      "urls": [
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/cedar-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/moraine-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/redwood-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/ridge-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/sierra-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/clothing/alpine-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/clothing/alpine-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/clothing/birch-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/clothing/canyon-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/clothing/canyon-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/clothing/fjord-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/clothing/granite-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/clothing/meadow-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/clothing/pinnacle-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/clothing/pinnacle-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/cooking/birch-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/cooking/canyon-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/cooking/cascade-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/cooking/granite-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/cooking/ridge-light",
+          "state": "persistent"
+        }
+      ],
+      "verifiable": false
+    },
+    {
+      "ruleId": "IMG-001",
+      "category": "images",
+      "impact": 2,
+      "confidence": "verified",
+      "confidenceWeight": 1,
+      "affectedPages": 36,
+      "indexablePages": 356,
+      "reach": 0.6143,
+      "score": 1.2287,
+      "priority": "low",
+      "affectedUrls": 36,
+      "inconclusiveUrls": 0,
+      "templateCount": 1,
+      "sampleUrls": [
+        "https://www.northwind-outdoor.example/journal/a-beginner-guide-to-hut-trips",
+        "https://www.northwind-outdoor.example/journal/a-guide-to-tent-footprints",
+        "https://www.northwind-outdoor.example/journal/breakfast-ideas-for-camping-trips",
+        "https://www.northwind-outdoor.example/journal/breaking-in-new-walking-boots",
+        "https://www.northwind-outdoor.example/journal/buying-second-hand-outdoor-kit"
+      ],
+      "templates": [
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/journal/a-beginner-guide-to-hut-trips",
+            "https://www.northwind-outdoor.example/journal/a-guide-to-tent-footprints",
+            "https://www.northwind-outdoor.example/journal/breakfast-ideas-for-camping-trips",
+            "https://www.northwind-outdoor.example/journal/breaking-in-new-walking-boots",
+            "https://www.northwind-outdoor.example/journal/buying-second-hand-outdoor-kit"
+          ],
+          "templateId": "00d305d4ca0d9f1f",
+          "affectedUrls": 36
+        }
+      ],
+      "states": {
+        "persistent": 36
+      },
+      "title": "Missing alt attribute",
+      "why": "Screen readers announce an image without alt by its file name, and search engines get no text for it.",
+      "fix": "Add alt text that describes the image, or alt=\"\" if it is purely decorative.",
+      "acceptance": "Every <img> has an alt attribute.",
+      "evidence": [
+        {
+          "url": "https://www.northwind-outdoor.example/journal/a-beginner-guide-to-hut-trips",
+          "message": "1 image(s) have no alt attribute.",
+          "evidence": {
+            "count": 1,
+            "images": [
+              "https://www.northwind-outdoor.example/images/journal/a-beginner-guide-to-hut-trips.png"
+            ]
+          },
+          "outcome": "issue"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/a-guide-to-tent-footprints",
+          "message": "1 image(s) have no alt attribute.",
+          "evidence": {
+            "count": 1,
+            "images": [
+              "https://www.northwind-outdoor.example/images/journal/a-guide-to-tent-footprints.png"
+            ]
+          },
+          "outcome": "issue"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/breakfast-ideas-for-camping-trips",
+          "message": "1 image(s) have no alt attribute.",
+          "evidence": {
+            "count": 1,
+            "images": [
+              "https://www.northwind-outdoor.example/images/journal/breakfast-ideas-for-camping-trips.png"
+            ]
+          },
+          "outcome": "issue"
+        }
+      ],
+      "urls": [
+        {
+          "url": "https://www.northwind-outdoor.example/journal/a-beginner-guide-to-hut-trips",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/a-guide-to-tent-footprints",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/breakfast-ideas-for-camping-trips",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/breaking-in-new-walking-boots",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/buying-second-hand-outdoor-kit",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/camping-in-the-rain-without-misery",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/carrying-a-camera-on-the-hill",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/choosing-a-sleeping-mat",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/choosing-a-stove-for-cold-weather",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/choosing-socks-for-long-walks",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/cooking-real-food-on-a-small-stove",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/family-camping-checklist",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/fitting-a-rucksack-properly",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/getting-started-with-backpacking",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/how-to-choose-a-tent-for-wild-camping",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/how-to-read-a-weather-forecast-for-the-mountains",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/how-we-test-waterproof-fabrics",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/insulated-jackets-compared",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/keeping-warm-at-night-in-a-tent",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/layering-for-winter-walks",
+          "state": "persistent"
+        }
+      ],
+      "verifiable": true
+    },
+    {
+      "ruleId": "CNT-005",
+      "category": "content",
+      "impact": 3,
+      "confidence": "heuristic",
+      "confidenceWeight": 0.6,
+      "affectedPages": 16,
+      "indexablePages": 356,
+      "reach": 0.482,
+      "score": 0.8676,
+      "priority": "low",
+      "affectedUrls": 16,
+      "inconclusiveUrls": 0,
+      "templateCount": 5,
+      "sampleUrls": [
+        "https://www.northwind-outdoor.example/",
+        "https://www.northwind-outdoor.example/backpacks/",
+        "https://www.northwind-outdoor.example/backpacks/ridge-2022",
+        "https://www.northwind-outdoor.example/clothing/",
+        "https://www.northwind-outdoor.example/cooking/"
+      ],
+      "templates": [
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/backpacks/",
+            "https://www.northwind-outdoor.example/clothing/",
+            "https://www.northwind-outdoor.example/cooking/",
+            "https://www.northwind-outdoor.example/cooking/alpine-classic",
+            "https://www.northwind-outdoor.example/cooking/cascade-classic"
+          ],
+          "templateId": "1d48747969bb180c",
+          "affectedUrls": 10
+        },
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/backpacks/ridge-2022",
+            "https://www.northwind-outdoor.example/footwear/summit-2022",
+            "https://www.northwind-outdoor.example/tents/alpine-2022"
+          ],
+          "templateId": "79db81d78b8620d1",
+          "affectedUrls": 3
+        },
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/tents/glacier-expedition"
+          ],
+          "templateId": "77aff8a345593af4",
+          "affectedUrls": 1
+        },
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/"
+          ],
+          "templateId": "8d7e102c2732bbd3",
+          "affectedUrls": 1
+        },
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/journal/"
+          ],
+          "templateId": "e5e08e799911e793",
+          "affectedUrls": 1
+        }
+      ],
+      "states": {
+        "new": 2,
+        "persistent": 14
+      },
+      "title": "Thin content (under 200 main-content words, configurable)",
+      "why": "Pages with little unique content rarely rank and can lower the perceived quality of the site.",
+      "fix": "Expand the page with useful, specific content, or noindex / consolidate it.",
+      "acceptance": "At least 200 words of main content, or the page is noindexed.",
+      "evidence": [
+        {
+          "url": "https://www.northwind-outdoor.example/",
+          "message": "198 words of main content (threshold 200).",
+          "evidence": {
+            "words": 198,
+            "threshold": 200
+          },
+          "outcome": "issue"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/",
+          "message": "190 words of main content (threshold 200).",
+          "evidence": {
+            "words": 190,
+            "threshold": 200
+          },
+          "outcome": "issue"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/ridge-2022",
+          "message": "86 words of main content (threshold 200).",
+          "evidence": {
+            "words": 86,
+            "threshold": 200
+          },
+          "outcome": "issue"
+        }
+      ],
+      "urls": [
+        {
+          "url": "https://www.northwind-outdoor.example/",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/ridge-2022",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/clothing/",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/cooking/",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/cooking/alpine-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/cooking/cascade-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/cooking/ridge-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/cooking/tundra-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/summit-2022",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/valley-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/sleeping-bags/",
+          "state": "new"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/tents/alpine-2022",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/tents/glacier-expedition",
+          "state": "new"
+        }
+      ],
+      "verifiable": true
+    },
+    {
+      "ruleId": "IMG-007",
+      "category": "images",
+      "impact": 1,
+      "confidence": "verified",
+      "confidenceWeight": 1,
+      "affectedPages": 50,
+      "indexablePages": 356,
+      "reach": 0.6689,
+      "score": 0.6689,
+      "priority": "low",
+      "affectedUrls": 50,
+      "inconclusiveUrls": 0,
+      "templateCount": 1,
+      "sampleUrls": [
+        "https://www.northwind-outdoor.example/backpacks/alpine-classic",
+        "https://www.northwind-outdoor.example/backpacks/alpine-light",
+        "https://www.northwind-outdoor.example/backpacks/birch-classic",
+        "https://www.northwind-outdoor.example/backpacks/birch-light",
+        "https://www.northwind-outdoor.example/backpacks/canyon-classic"
+      ],
+      "templates": [
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/backpacks/alpine-classic",
+            "https://www.northwind-outdoor.example/backpacks/alpine-light",
+            "https://www.northwind-outdoor.example/backpacks/birch-classic",
+            "https://www.northwind-outdoor.example/backpacks/birch-light",
+            "https://www.northwind-outdoor.example/backpacks/canyon-classic"
+          ],
+          "templateId": "1d48747969bb180c",
+          "affectedUrls": 50
+        }
+      ],
+      "states": {
+        "persistent": 50
+      },
+      "title": "Missing width/height (CLS risk) — grouped per template",
+      "why": "Without dimensions the browser cannot reserve space, so content jumps when the image loads (CLS).",
+      "fix": "Add width and height attributes matching the image's aspect ratio (CSS can still scale it).",
+      "acceptance": "Every <img> has width and height.",
+      "evidence": [
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/alpine-classic",
+          "message": "1 image(s) without both width and height attributes (layout shift risk).",
+          "evidence": {
+            "count": 1,
+            "images": [
+              {
+                "src": "https://www.northwind-outdoor.example/images/products/alpine-classic.png",
+                "width": null,
+                "height": null
+              }
+            ]
+          },
+          "outcome": "issue"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/alpine-light",
+          "message": "1 image(s) without both width and height attributes (layout shift risk).",
+          "evidence": {
+            "count": 1,
+            "images": [
+              {
+                "src": "https://www.northwind-outdoor.example/images/products/alpine-light.png",
+                "width": null,
+                "height": null
+              }
+            ]
+          },
+          "outcome": "issue"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/birch-classic",
+          "message": "1 image(s) without both width and height attributes (layout shift risk).",
+          "evidence": {
+            "count": 1,
+            "images": [
+              {
+                "src": "https://www.northwind-outdoor.example/images/products/birch-classic.png",
+                "width": null,
+                "height": null
+              }
+            ]
+          },
+          "outcome": "issue"
+        }
+      ],
+      "urls": [
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/alpine-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/alpine-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/birch-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/birch-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/canyon-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/canyon-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/cascade-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/cascade-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/cedar-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/cedar-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/fjord-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/fjord-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/glacier-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/glacier-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/granite-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/granite-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/harbor-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/harbor-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/heather-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/heather-light",
+          "state": "persistent"
+        }
+      ],
+      "verifiable": true
+    },
+    {
+      "ruleId": "AIS-001",
+      "category": "ai_search",
+      "impact": 2,
+      "confidence": "advisory",
+      "confidenceWeight": 0.3,
+      "affectedPages": 356,
+      "indexablePages": 356,
+      "reach": 1,
+      "score": 0.6,
+      "priority": "low",
+      "affectedUrls": 1,
+      "inconclusiveUrls": 0,
+      "templateCount": 0,
+      "sampleUrls": [
+        "https://www.northwind-outdoor.example/robots.txt"
+      ],
+      "templates": [
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/robots.txt"
+          ],
+          "templateId": "",
+          "affectedUrls": 1
+        }
+      ],
+      "states": {
+        "persistent": 1
+      },
+      "title": "robots.txt status for GPTBot, OAI-SearchBot, ChatGPT-User, ClaudeBot, PerplexityBot, Google-Extended, Applebot-Extended (report, not judge)",
+      "why": "AI search tools only cite pages their crawlers may fetch; this reports what robots.txt currently says.",
+      "fix": "Decide which AI crawlers you want and set robots.txt to match.",
+      "acceptance": "The report matches your intent for each AI crawler.",
+      "evidence": [
+        {
+          "url": "https://www.northwind-outdoor.example/robots.txt",
+          "message": "robots.txt allows every listed AI crawler on the home page.",
+          "evidence": {
+            "bots": [
+              {
+                "bot": "GPTBot",
+                "allowed": true
+              },
+              {
+                "bot": "OAI-SearchBot",
+                "allowed": true
+              },
+              {
+                "bot": "ChatGPT-User",
+                "allowed": true
+              },
+              {
+                "bot": "ClaudeBot",
+                "allowed": true
+              },
+              {
+                "bot": "PerplexityBot",
+                "allowed": true
+              },
+              {
+                "bot": "Google-Extended",
+                "allowed": true
+              },
+              {
+                "bot": "Applebot-Extended",
+                "allowed": true
+              }
+            ],
+            "outcome": "parsed"
+          },
+          "outcome": "issue"
+        }
+      ],
+      "urls": [
+        {
+          "url": "https://www.northwind-outdoor.example/robots.txt",
+          "state": "persistent"
+        }
+      ],
+      "verifiable": false
+    },
+    {
+      "ruleId": "SD-004",
+      "category": "structured_data",
+      "impact": 1,
+      "confidence": "heuristic",
+      "confidenceWeight": 0.6,
+      "affectedPages": 340,
+      "indexablePages": 356,
+      "reach": 0.9922,
+      "score": 0.5953,
+      "priority": "low",
+      "affectedUrls": 340,
+      "inconclusiveUrls": 0,
+      "templateCount": 4,
+      "sampleUrls": [
+        "https://www.northwind-outdoor.example/",
+        "https://www.northwind-outdoor.example/backpacks/alpine-classic",
+        "https://www.northwind-outdoor.example/backpacks/alpine-light",
+        "https://www.northwind-outdoor.example/backpacks/birch-classic",
+        "https://www.northwind-outdoor.example/backpacks/birch-light"
+      ],
+      "templates": [
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/backpacks/alpine-classic",
+            "https://www.northwind-outdoor.example/backpacks/alpine-light",
+            "https://www.northwind-outdoor.example/backpacks/birch-classic",
+            "https://www.northwind-outdoor.example/backpacks/birch-light",
+            "https://www.northwind-outdoor.example/backpacks/canyon-classic"
+          ],
+          "templateId": "1d48747969bb180c",
+          "affectedUrls": 300
+        },
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/journal/a-beginner-guide-to-hut-trips",
+            "https://www.northwind-outdoor.example/journal/a-guide-to-tent-footprints",
+            "https://www.northwind-outdoor.example/journal/breakfast-ideas-for-camping-trips",
+            "https://www.northwind-outdoor.example/journal/breaking-in-new-walking-boots",
+            "https://www.northwind-outdoor.example/journal/buying-second-hand-outdoor-kit"
+          ],
+          "templateId": "00d305d4ca0d9f1f",
+          "affectedUrls": 36
+        },
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/contact",
+            "https://www.northwind-outdoor.example/stores",
+            "https://www.northwind-outdoor.example/tents/glacier-expedition"
+          ],
+          "templateId": "77aff8a345593af4",
+          "affectedUrls": 3
+        },
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/"
+          ],
+          "templateId": "8d7e102c2732bbd3",
+          "affectedUrls": 1
+        }
+      ],
+      "states": {
+        "new": 2,
+        "persistent": 589
+      },
+      "title": "Recommended property missing",
+      "why": "Recommended properties give search engines more to show and understand; they are optional.",
+      "fix": "Add the recommended properties the page has real values for.",
+      "acceptance": "Every Google-documented type on the pages of the template has its recommended properties, or the pages have no value for them.",
+      "docs": "https://developers.google.com/search/docs/appearance/structured-data/search-gallery",
+      "evidence": [
+        {
+          "url": "https://www.northwind-outdoor.example/",
+          "message": "Organization (block 1) lacks recommended contactPoint, legalName, sameAs.",
+          "evidence": {
+            "at": [
+              "block 1"
+            ],
+            "note": "Meeting Google's required properties does not by itself make a page eligible for a rich result.",
+            "type": "Organization",
+            "pages": 1,
+            "sample": [
+              "https://www.northwind-outdoor.example/"
+            ],
+            "source": "https://developers.google.com/search/docs/appearance/structured-data/organization",
+            "missing": [
+              "contactPoint",
+              "legalName",
+              "sameAs"
+            ],
+            "groupKey": "Organization"
+          },
+          "outcome": "issue"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/alpine-classic",
+          "message": "Product (block 1) lacks recommended aggregateRating, review. The same holds on 299 other page(s) built from this template.",
+          "evidence": {
+            "at": [
+              "block 1"
+            ],
+            "note": "Meeting Google's required properties does not by itself make a page eligible for a rich result.",
+            "type": "Product",
+            "pages": 300,
+            "sample": [
+              "https://www.northwind-outdoor.example/backpacks/alpine-classic",
+              "https://www.northwind-outdoor.example/backpacks/alpine-light",
+              "https://www.northwind-outdoor.example/backpacks/birch-classic",
+              "https://www.northwind-outdoor.example/backpacks/birch-light",
+              "https://www.northwind-outdoor.example/backpacks/canyon-classic"
+            ],
+            "source": "https://developers.google.com/search/docs/appearance/structured-data/product-snippet",
+            "missing": [
+              "aggregateRating",
+              "offers",
+              "review"
+            ],
+            "groupKey": "Product"
+          },
+          "outcome": "issue"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/alpine-classic",
+          "message": "Offer (offers of block 1) lacks recommended priceValidUntil. The same holds on 249 other page(s) built from this template.",
+          "evidence": {
+            "at": [
+              "offers of block 1"
+            ],
+            "note": "Meeting Google's required properties does not by itself make a page eligible for a rich result.",
+            "type": "Offer",
+            "pages": 250,
+            "sample": [
+              "https://www.northwind-outdoor.example/backpacks/alpine-classic",
+              "https://www.northwind-outdoor.example/backpacks/alpine-light",
+              "https://www.northwind-outdoor.example/backpacks/birch-classic",
+              "https://www.northwind-outdoor.example/backpacks/birch-light",
+              "https://www.northwind-outdoor.example/backpacks/canyon-classic"
+            ],
+            "source": "https://developers.google.com/search/docs/appearance/structured-data/product-snippet",
+            "missing": [
+              "priceValidUntil"
+            ],
+            "groupKey": "Offer"
+          },
+          "outcome": "issue"
+        }
+      ],
+      "urls": [
+        {
+          "url": "https://www.northwind-outdoor.example/",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/alpine-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/alpine-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/birch-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/birch-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/canyon-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/canyon-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/cascade-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/cascade-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/cedar-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/cedar-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/fjord-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/fjord-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/glacier-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/glacier-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/granite-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/granite-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/harbor-classic",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/harbor-light",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/heather-classic",
+          "state": "persistent"
+        }
+      ],
+      "verifiable": true
+    },
+    {
+      "ruleId": "LNK-003",
+      "category": "links",
+      "impact": 3,
+      "confidence": "heuristic",
+      "confidenceWeight": 0.6,
+      "affectedPages": 3,
+      "indexablePages": 356,
+      "reach": 0.2359,
+      "score": 0.4245,
+      "priority": "info",
+      "affectedUrls": 3,
+      "inconclusiveUrls": 0,
+      "templateCount": 1,
+      "sampleUrls": [
+        "https://www.northwind-outdoor.example/backpacks/ridge-2022",
+        "https://www.northwind-outdoor.example/footwear/summit-2022",
+        "https://www.northwind-outdoor.example/tents/alpine-2022"
+      ],
+      "templates": [
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/backpacks/ridge-2022",
+            "https://www.northwind-outdoor.example/footwear/summit-2022",
+            "https://www.northwind-outdoor.example/tents/alpine-2022"
+          ],
+          "templateId": "79db81d78b8620d1",
+          "affectedUrls": 3
+        }
+      ],
+      "states": {
+        "persistent": 3
+      },
+      "title": "Orphan candidate (in sitemap, zero inbound in crawl)",
+      "why": "Pages with no internal links are hard for search engines to discover and rank, and get no link equity.",
+      "fix": "Link to the page from a relevant section or hub page, or remove it from the sitemap if it should not exist.",
+      "acceptance": "At least one crawlable internal link points to the page.",
+      "evidence": [
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/ridge-2022",
+          "message": "In the sitemap, but no crawled page links to it.",
+          "evidence": {
+            "inbound": 0
+          },
+          "outcome": "issue"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/summit-2022",
+          "message": "In the sitemap, but no crawled page links to it.",
+          "evidence": {
+            "inbound": 0
+          },
+          "outcome": "issue"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/tents/alpine-2022",
+          "message": "In the sitemap, but no crawled page links to it.",
+          "evidence": {
+            "inbound": 0
+          },
+          "outcome": "issue"
+        }
+      ],
+      "urls": [
+        {
+          "url": "https://www.northwind-outdoor.example/backpacks/ridge-2022",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/footwear/summit-2022",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/tents/alpine-2022",
+          "state": "persistent"
+        }
+      ],
+      "verifiable": false
+    },
+    {
+      "ruleId": "META-005",
+      "category": "metadata",
+      "impact": 1,
+      "confidence": "heuristic",
+      "confidenceWeight": 0.6,
+      "affectedPages": 9,
+      "indexablePages": 356,
+      "reach": 0.3917,
+      "score": 0.235,
+      "priority": "info",
+      "affectedUrls": 9,
+      "inconclusiveUrls": 0,
+      "templateCount": 1,
+      "sampleUrls": [
+        "https://www.northwind-outdoor.example/journal/how-to-choose-a-tent-for-wild-camping",
+        "https://www.northwind-outdoor.example/journal/how-to-read-a-weather-forecast-for-the-mountains",
+        "https://www.northwind-outdoor.example/journal/navigation-basics-with-map-and-compass",
+        "https://www.northwind-outdoor.example/journal/our-favourite-coastal-walks-this-autumn",
+        "https://www.northwind-outdoor.example/journal/our-lifetime-repair-promise-explained"
+      ],
+      "templates": [
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/journal/how-to-choose-a-tent-for-wild-camping",
+            "https://www.northwind-outdoor.example/journal/how-to-read-a-weather-forecast-for-the-mountains",
+            "https://www.northwind-outdoor.example/journal/navigation-basics-with-map-and-compass",
+            "https://www.northwind-outdoor.example/journal/our-favourite-coastal-walks-this-autumn",
+            "https://www.northwind-outdoor.example/journal/our-lifetime-repair-promise-explained"
+          ],
+          "templateId": "00d305d4ca0d9f1f",
+          "affectedUrls": 9
+        }
+      ],
+      "states": {
+        "persistent": 9
+      },
+      "title": "Title over ~580 px width (pixel, not characters)",
+      "why": "Long titles are cut off in results (by pixel width, not characters).",
+      "fix": "Shorten the title and put the important words first.",
+      "acceptance": "Estimated width at most 580 px.",
+      "evidence": [
+        {
+          "url": "https://www.northwind-outdoor.example/journal/how-to-choose-a-tent-for-wild-camping",
+          "message": "Title is about 593 px wide; results truncate around 580 px.",
+          "evidence": {
+            "px": 593,
+            "title": "How to choose a tent for wild camping | Northwind Outdoor Journal"
+          },
+          "outcome": "issue"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/how-to-read-a-weather-forecast-for-the-mountains",
+          "message": "Title is about 693 px wide; results truncate around 580 px.",
+          "evidence": {
+            "px": 693,
+            "title": "How to read a weather forecast for the mountains | Northwind Outdoor Journal"
+          },
+          "outcome": "issue"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/navigation-basics-with-map-and-compass",
+          "message": "Title is about 622 px wide; results truncate around 580 px.",
+          "evidence": {
+            "px": 622,
+            "title": "Navigation basics with map and compass | Northwind Outdoor Journal"
+          },
+          "outcome": "issue"
+        }
+      ],
+      "urls": [
+        {
+          "url": "https://www.northwind-outdoor.example/journal/how-to-choose-a-tent-for-wild-camping",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/how-to-read-a-weather-forecast-for-the-mountains",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/navigation-basics-with-map-and-compass",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/our-favourite-coastal-walks-this-autumn",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/our-lifetime-repair-promise-explained",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/packing-a-rucksack-for-a-three-day-trip",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/repairing-a-waterproof-jacket-at-home",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/washing-and-reproofing-outdoor-clothing",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/what-sleeping-bag-temperature-ratings-mean",
+          "state": "persistent"
+        }
+      ],
+      "verifiable": true
+    },
+    {
+      "ruleId": "META-010",
+      "category": "metadata",
+      "impact": 1,
+      "confidence": "heuristic",
+      "confidenceWeight": 0.6,
+      "affectedPages": 9,
+      "indexablePages": 356,
+      "reach": 0.3917,
+      "score": 0.235,
+      "priority": "info",
+      "affectedUrls": 9,
+      "inconclusiveUrls": 0,
+      "templateCount": 1,
+      "sampleUrls": [
+        "https://www.northwind-outdoor.example/journal/how-to-choose-a-tent-for-wild-camping",
+        "https://www.northwind-outdoor.example/journal/how-to-read-a-weather-forecast-for-the-mountains",
+        "https://www.northwind-outdoor.example/journal/navigation-basics-with-map-and-compass",
+        "https://www.northwind-outdoor.example/journal/our-favourite-coastal-walks-this-autumn",
+        "https://www.northwind-outdoor.example/journal/our-lifetime-repair-promise-explained"
+      ],
+      "templates": [
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/journal/how-to-choose-a-tent-for-wild-camping",
+            "https://www.northwind-outdoor.example/journal/how-to-read-a-weather-forecast-for-the-mountains",
+            "https://www.northwind-outdoor.example/journal/navigation-basics-with-map-and-compass",
+            "https://www.northwind-outdoor.example/journal/our-favourite-coastal-walks-this-autumn",
+            "https://www.northwind-outdoor.example/journal/our-lifetime-repair-promise-explained"
+          ],
+          "templateId": "00d305d4ca0d9f1f",
+          "affectedUrls": 9
+        }
+      ],
+      "states": {
+        "persistent": 9
+      },
+      "title": "Description over ~920 px or under 70 characters",
+      "why": "Long descriptions are cut off; very short ones say too little to earn the click.",
+      "fix": "Aim for one or two sentences that fit the snippet.",
+      "acceptance": "70+ characters and at most 920 px.",
+      "evidence": [
+        {
+          "url": "https://www.northwind-outdoor.example/journal/how-to-choose-a-tent-for-wild-camping",
+          "message": "Description is about 933 px wide; results truncate around 920 px.",
+          "evidence": {
+            "px": 933,
+            "reason": "long",
+            "description": "How to choose a tent for wild camping: practical advice from the Northwind Outdoor team, tested on real trips. Read the guide and plan your next walk."
+          },
+          "outcome": "issue"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/how-to-read-a-weather-forecast-for-the-mountains",
+          "message": "Description is about 1003 px wide; results truncate around 920 px.",
+          "evidence": {
+            "px": 1003,
+            "reason": "long",
+            "description": "How to read a weather forecast for the mountains: practical advice from the Northwind Outdoor team, tested on real trips. Read the guide and plan your next walk."
+          },
+          "outcome": "issue"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/navigation-basics-with-map-and-compass",
+          "message": "Description is about 953 px wide; results truncate around 920 px.",
+          "evidence": {
+            "px": 953,
+            "reason": "long",
+            "description": "Navigation basics with map and compass: practical advice from the Northwind Outdoor team, tested on real trips. Read the guide and plan your next walk."
+          },
+          "outcome": "issue"
+        }
+      ],
+      "urls": [
+        {
+          "url": "https://www.northwind-outdoor.example/journal/how-to-choose-a-tent-for-wild-camping",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/how-to-read-a-weather-forecast-for-the-mountains",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/navigation-basics-with-map-and-compass",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/our-favourite-coastal-walks-this-autumn",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/our-lifetime-repair-promise-explained",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/packing-a-rucksack-for-a-three-day-trip",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/repairing-a-waterproof-jacket-at-home",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/washing-and-reproofing-outdoor-clothing",
+          "state": "persistent"
+        },
+        {
+          "url": "https://www.northwind-outdoor.example/journal/what-sleeping-bag-temperature-ratings-mean",
+          "state": "persistent"
+        }
+      ],
+      "verifiable": true
+    },
+    {
+      "ruleId": "LNK-005",
+      "category": "links",
+      "impact": 2,
+      "confidence": "heuristic",
+      "confidenceWeight": 0.6,
+      "affectedPages": 1,
+      "indexablePages": 356,
+      "reach": 0.1179,
+      "score": 0.1415,
+      "priority": "info",
+      "affectedUrls": 1,
+      "inconclusiveUrls": 0,
+      "templateCount": 1,
+      "sampleUrls": [
+        "https://www.northwind-outdoor.example/tents/glacier-expedition"
+      ],
+      "templates": [
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/tents/glacier-expedition"
+          ],
+          "templateId": "77aff8a345593af4",
+          "affectedUrls": 1
+        }
+      ],
+      "states": {
+        "new": 1
+      },
+      "title": "Only one inbound internal link",
+      "why": "A single inbound link makes a page fragile to discover and signals low importance.",
+      "fix": "Add contextual links from related pages.",
+      "acceptance": "At least two crawled pages link to it.",
+      "evidence": [
+        {
+          "url": "https://www.northwind-outdoor.example/tents/glacier-expedition",
+          "message": "Only one crawled page links to it.",
+          "evidence": {
+            "inbound": 1
+          },
+          "outcome": "issue"
+        }
+      ],
+      "urls": [
+        {
+          "url": "https://www.northwind-outdoor.example/tents/glacier-expedition",
+          "state": "new"
+        }
+      ],
+      "verifiable": false
+    },
+    {
+      "ruleId": "META-008",
+      "category": "metadata",
+      "impact": 2,
+      "confidence": "heuristic",
+      "confidenceWeight": 0.6,
+      "affectedPages": 1,
+      "indexablePages": 356,
+      "reach": 0.1179,
+      "score": 0.1415,
+      "priority": "info",
+      "affectedUrls": 1,
+      "inconclusiveUrls": 0,
+      "templateCount": 1,
+      "sampleUrls": [
+        "https://www.northwind-outdoor.example/tents/glacier-expedition"
+      ],
+      "templates": [
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/tents/glacier-expedition"
+          ],
+          "templateId": "77aff8a345593af4",
+          "affectedUrls": 1
+        }
+      ],
+      "states": {
+        "new": 1,
+        "resolved": 18
+      },
+      "title": "Missing meta description",
+      "why": "Without a description, search engines pick a snippet from the page, often a poor one.",
+      "fix": "Add a meta description summarising the page in one or two sentences.",
+      "acceptance": "A non-empty meta description.",
+      "evidence": [
+        {
+          "url": "https://www.northwind-outdoor.example/tents/glacier-expedition",
+          "message": "No meta description.",
+          "evidence": {},
+          "outcome": "issue"
+        }
+      ],
+      "urls": [
+        {
+          "url": "https://www.northwind-outdoor.example/tents/glacier-expedition",
+          "state": "new"
+        }
+      ],
+      "verifiable": true
+    },
+    {
+      "ruleId": "CNT-002",
+      "category": "content",
+      "impact": 1,
+      "confidence": "heuristic",
+      "confidenceWeight": 0.6,
+      "affectedPages": 1,
+      "indexablePages": 356,
+      "reach": 0.1179,
+      "score": 0.0708,
+      "priority": "info",
+      "affectedUrls": 1,
+      "inconclusiveUrls": 0,
+      "templateCount": 1,
+      "sampleUrls": [
+        "https://www.northwind-outdoor.example/tents/glacier-expedition"
+      ],
+      "templates": [
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/tents/glacier-expedition"
+          ],
+          "templateId": "77aff8a345593af4",
+          "affectedUrls": 1
+        }
+      ],
+      "states": {
+        "new": 1
+      },
+      "title": "Multiple H1",
+      "why": "Several H1s blur which topic is the page's main one.",
+      "fix": "Keep one <h1>; demote the others to <h2>.",
+      "acceptance": "Exactly one <h1>.",
+      "evidence": [
+        {
+          "url": "https://www.northwind-outdoor.example/tents/glacier-expedition",
+          "message": "2 <h1> elements.",
+          "evidence": {
+            "h1": [
+              "Glacier Expedition Tent",
+              "New for winter"
+            ]
+          },
+          "outcome": "issue"
+        }
+      ],
+      "urls": [
+        {
+          "url": "https://www.northwind-outdoor.example/tents/glacier-expedition",
+          "state": "new"
+        }
+      ],
+      "verifiable": true
+    },
+    {
+      "ruleId": "IMG-010",
+      "category": "images",
+      "impact": 1,
+      "confidence": "advisory",
+      "confidenceWeight": 0.3,
+      "affectedPages": 1,
+      "indexablePages": 356,
+      "reach": 0.1179,
+      "score": 0.0354,
+      "priority": "info",
+      "affectedUrls": 1,
+      "inconclusiveUrls": 0,
+      "templateCount": 1,
+      "sampleUrls": [
+        "https://www.northwind-outdoor.example/tents/glacier-expedition"
+      ],
+      "templates": [
+        {
+          "sampleUrls": [
+            "https://www.northwind-outdoor.example/tents/glacier-expedition"
+          ],
+          "templateId": "77aff8a345593af4",
+          "affectedUrls": 1
+        }
+      ],
+      "states": {
+        "new": 1
+      },
+      "title": "No srcset on large responsive images",
+      "why": "Without srcset, phones download the full desktop image.",
+      "fix": "Add srcset (and sizes) with smaller renditions, or use <picture>.",
+      "acceptance": "Images 800px or wider have srcset or are inside <picture>.",
+      "evidence": [
+        {
+          "url": "https://www.northwind-outdoor.example/tents/glacier-expedition",
+          "message": "1 large image(s) (800px or wider) without srcset.",
+          "evidence": {
+            "count": 1,
+            "images": [
+              {
+                "src": "https://www.northwind-outdoor.example/images/products/glacier-expedition.png",
+                "width": 800
+              }
+            ]
+          },
+          "outcome": "issue"
+        }
+      ],
+      "urls": [
+        {
+          "url": "https://www.northwind-outdoor.example/tents/glacier-expedition",
+          "state": "new"
+        }
+      ],
+      "verifiable": true
+    }
+  ],
+  "rulesRan": 139,
+  "comparison": {
+    "totals": {
+      "new": 4,
+      "persistent": 12,
+      "resolved": 7,
+      "regressed": 0,
+      "not_rechecked": 2
+    },
+    "groups": [
+      {
+        "ruleId": "AIS-001",
+        "change": "persistent"
+      },
+      {
+        "ruleId": "CNT-002",
+        "change": "new"
+      },
+      {
+        "ruleId": "CNT-005",
+        "change": "persistent"
+      },
+      {
+        "ruleId": "CNT-007",
+        "change": "persistent"
+      },
+      {
+        "ruleId": "CNT-009",
+        "change": "resolved"
+      },
+      {
+        "ruleId": "IDX-001",
+        "change": "not_rechecked"
+      },
+      {
+        "ruleId": "IDX-003",
+        "change": "not_rechecked"
+      },
+      {
+        "ruleId": "IDX-008",
+        "change": "resolved"
+      },
+      {
+        "ruleId": "IDX-029",
+        "change": "resolved"
+      },
+      {
+        "ruleId": "IMG-001",
+        "change": "persistent"
+      },
+      {
+        "ruleId": "IMG-007",
+        "change": "persistent"
+      },
+      {
+        "ruleId": "IMG-010",
+        "change": "new"
+      },
+      {
+        "ruleId": "LNK-001",
+        "change": "resolved"
+      },
+      {
+        "ruleId": "LNK-002",
+        "change": "resolved"
+      },
+      {
+        "ruleId": "LNK-003",
+        "change": "persistent"
+      },
+      {
+        "ruleId": "LNK-005",
+        "change": "new"
+      },
+      {
+        "ruleId": "META-004",
+        "change": "resolved"
+      },
+      {
+        "ruleId": "META-005",
+        "change": "persistent"
+      },
+      {
+        "ruleId": "META-008",
+        "change": "new"
+      },
+      {
+        "ruleId": "META-010",
+        "change": "persistent"
+      },
+      {
+        "ruleId": "SD-003",
+        "change": "persistent"
+      },
+      {
+        "ruleId": "SD-004",
+        "change": "persistent"
+      },
+      {
+        "ruleId": "SD-009",
+        "change": "persistent"
+      },
+      {
+        "ruleId": "SITE-001",
+        "change": "persistent"
+      },
+      {
+        "ruleId": "SITE-002",
+        "change": "resolved"
+      }
+    ]
+  },
+  "history": [
+    {
+      "at": "2026-10-09T19:18:12.662Z",
+      "health": 89.5
+    },
+    {
+      "at": "2026-11-06T19:18:12.662Z",
+      "health": 92.8
+    }
+  ]
+}
