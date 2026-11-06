@@ -39,10 +39,32 @@ Compose reads a `.env` file next to `docker-compose.yml` (not `.env.local`). The
 | `CRAWLER_BOT_URL` | unset | A page saying who runs this crawler, shown in the user-agent. **Set it before auditing sites you do not own.** |
 | `CRAWLER_SECRET_KEY` | unset | 32 random bytes, base64 (`openssl rand -base64 32`). Encrypts basic-auth credentials for custom crawls and webhook signing secrets. Without it those features are refused. Keep it: losing it makes stored secrets unreadable. |
 | `APP_URL` | `http://localhost:3000` | Public address of the app, used in alert links. |
-| `TRUSTED_PROXY_HEADER` | unset | Header your reverse proxy sets to the client IP (for example `x-forwarded-for`; with it the rightmost entry is used, so the proxy must append to or overwrite it). **Until it is set, the homepage quick-audit form answers 503** (`PROXY_NOT_CONFIGURED`) in this production image, and elsewhere all clients share one rate-limit bucket. The workspace at `/live` works either way. Only set it behind a proxy you control: clients can forge the header otherwise. |
+| `TRUSTED_PROXY_HEADER` | unset | Header your reverse proxy or CDN sets to the client IP; see [Deployment checklist](#deployment-checklist) for the value per host. With `x-forwarded-for` the rightmost entry is used, so the proxy must append to or overwrite it. **Until it is set, the homepage quick-audit form is unavailable on a public host** (visitors see "Free audits are temporarily unavailable"; the log and the admin view of `/api/health` give the reason). Requests to `localhost` still work, sharing one rate-limit bucket. The workspace at `/live` works either way. Only set it behind a proxy you control: clients can forge the header otherwise. |
+| `ADMIN_TOKEN` | unset | Bearer token for the admin view of `/api/health` (`curl -H "Authorization: Bearer $ADMIN_TOKEN" …/api/health`), which adds configuration problems such as a missing `TRUSTED_PROXY_HEADER`. Unset: nobody gets the admin view. |
 
 More settings (worker concurrency, per-host politeness, rendering) are in [`.env.example`](../.env.example); to use one, add it to
 the `environment:` block of the relevant service.
+
+## Deployment checklist
+
+Before serving the app on a public hostname:
+
+1. `POSTGRES_PASSWORD` changed before the first start, and `CRAWLER_SECRET_KEY` set and backed up.
+2. `CRAWLER_BOT_URL` and `APP_URL` set to your public addresses.
+3. **`TRUSTED_PROXY_HEADER` set to the header your host writes the visitor's IP to.** Without it the homepage free audit is
+   unavailable to visitors.
+
+   | Host | `TRUSTED_PROXY_HEADER` |
+   | --- | --- |
+   | Vercel | `x-forwarded-for` (Vercel overwrites it with the client IP; `x-real-ip` holds the same value) |
+   | Cloudflare (proxied, orange cloud) | `cf-connecting-ip` |
+   | nginx / Caddy / Traefik you run | `x-forwarded-for`, with the proxy appending the client address (nginx: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`) |
+
+   Behind Cloudflare, make sure the origin only accepts traffic from Cloudflare, or clients can send their own
+   `cf-connecting-ip`.
+4. `ADMIN_TOKEN` set, then check `curl -H "Authorization: Bearer $ADMIN_TOKEN" https://your-host/api/health`:
+   `admin.quickAudit.clientAddress` should be `"configured"`.
+5. An authenticating proxy in front of the app (see the next section).
 
 ## Security: read this before exposing it
 
@@ -99,5 +121,5 @@ docker compose down -v     # also deletes the volumes (all audits)
 - `migrate` exits non-zero: `docker compose logs migrate`; usually Postgres has a different password from `POSTGRES_PASSWORD` (it was set on first start).
 - Audits stay "queued": check `docker compose ps` and `docker compose logs crawl-worker`; the worker needs Redis.
 - Pages never get rendered: the render phase runs inside `crawl-worker`; Quick audits do not render at all.
-- The homepage quick-audit returns 503 `PROXY_NOT_CONFIGURED`: expected until `TRUSTED_PROXY_HEADER` is set (see Configuration); start audits from `/live` instead.
+- The homepage says "Free audits are temporarily unavailable" (503 `PROXY_NOT_CONFIGURED`): on a public host this is expected until `TRUSTED_PROXY_HEADER` is set (see [Deployment checklist](#deployment-checklist)); the app log and the admin view of `/api/health` say why. Start audits from `/live` meanwhile. On `localhost` the form works without it.
 - Port 5433 or 6379 already in use: edit the `ports:` entries as described above.
